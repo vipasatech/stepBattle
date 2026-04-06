@@ -1,0 +1,18 @@
+include: package:flutter_lints/flutter.yaml
+
+analyzer:
+  errors:
+    missing_return: error
+    dead_code: warning
+  exclude:
+    - "**/*.g.dart"
+    - "**/*.freezed.dart"
+
+linter:
+  rules:
+    avoid_print: true
+    prefer_is_empty: true
+    prefer_is_not_empty: true
+    sized_box_for_whitespace: true
+    avoid_unnecessary_containers: true
+    use_key_in_widget_constructors: true

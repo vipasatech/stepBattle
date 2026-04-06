@@ -1,0 +1,47 @@
+{
+  "project_info": {
+    "project_number": "83248241496",
+    "project_id": "stepbattle-cce26",
+    "storage_bucket": "stepbattle-cce26.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:83248241496:android:8b7a387cac96a81edc632d",
+        "android_client_info": {
+          "package_name": "com.stepbattle.stepbattle"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "83248241496-1vcvj46b3h4o7op4d5uo4ru1fgr88vhi.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.stepbattle.stepbattle",
+            "certificate_hash": "f36f7257e6ace1c16e6a375a80400b82c49c64f4"
+          }
+        },
+        {
+          "client_id": "83248241496-4n9qridmt2ao0p8iohaagoprs3v2dt74.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBMM4rm3VgNY6iYIqmSWAQMYtROAxoFMDk"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "83248241496-4n9qridmt2ao0p8iohaagoprs3v2dt74.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

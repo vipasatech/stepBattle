@@ -1,0 +1,244 @@
+<!DOCTYPE html>
+
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>StepBattle - Mission Detail</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&amp;family=Manrope:wght@300;400;500;600;700;800&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    "colors": {
+                        "on-secondary": "#00185d",
+                        "on-tertiary": "#6b1f77",
+                        "on-secondary-container": "#c4ceff",
+                        "surface-container": "#19191c",
+                        "tertiary-fixed-dim": "#e48fed",
+                        "surface-tint": "#84adff",
+                        "secondary-dim": "#7e98ff",
+                        "on-error": "#490006",
+                        "surface-container-low": "#131315",
+                        "on-tertiary-container": "#60136d",
+                        "secondary-fixed": "#c6cfff",
+                        "error-container": "#9f0519",
+                        "inverse-surface": "#fcf8fb",
+                        "on-background": "#fefbfe",
+                        "surface-variant": "#252528",
+                        "on-secondary-fixed": "#00298c",
+                        "surface": "#0e0e10",
+                        "primary-dim": "#679dff",
+                        "on-secondary-fixed-variant": "#2b48ac",
+                        "inverse-on-surface": "#555557",
+                        "outline-variant": "#48474a",
+                        "primary-container": "#6c9fff",
+                        "on-tertiary-fixed-variant": "#6a1f77",
+                        "background": "#0e0e10",
+                        "on-tertiary-fixed": "#41004d",
+                        "surface-container-lowest": "#000000",
+                        "surface-container-highest": "#252528",
+                        "on-primary-fixed-variant": "#002a60",
+                        "surface-container-high": "#1f1f22",
+                        "surface-dim": "#0e0e10",
+                        "tertiary": "#fab0ff",
+                        "error": "#ff716c",
+                        "tertiary-dim": "#e48fed",
+                        "on-primary": "#002c65",
+                        "inverse-primary": "#005bc1",
+                        "error-dim": "#d7383b",
+                        "primary": "#84adff",
+                        "secondary": "#7e98ff",
+                        "primary-fixed": "#6c9fff",
+                        "on-primary-container": "#00214e",
+                        "primary-fixed-dim": "#5091ff",
+                        "tertiary-fixed": "#f39cfb",
+                        "secondary-container": "#1e3da1",
+                        "on-surface-variant": "#acaaad",
+                        "surface-bright": "#2c2c2f",
+                        "on-surface": "#fefbfe",
+                        "on-primary-fixed": "#000000",
+                        "tertiary-container": "#f39cfb",
+                        "on-error-container": "#ffa8a3",
+                        "outline": "#767577",
+                        "secondary-fixed-dim": "#b3c1ff"
+                    },
+                    "borderRadius": {
+                        "DEFAULT": "0.25rem",
+                        "lg": "0.5rem",
+                        "xl": "0.75rem",
+                        "2xl": "1.5rem",
+                        "3xl": "1.75rem",
+                        "full": "9999px"
+                    },
+                    "fontFamily": {
+                        "headline": ["Space Grotesk"],
+                        "body": ["Manrope"],
+                        "label": ["Manrope"]
+                    }
+                },
+            },
+        }
+    </script>
+<style>
+        .material-symbols-outlined {
+            font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+        }
+        .bg-glass {
+            background: rgba(37, 37, 40, 0.6);
+            backdrop-filter: blur(20px);
+        }
+        .progress-spark {
+            box-shadow: 0 0 12px 2px #fff;
+        }
+    </style>
+<style>
+    body {
+      min-height: max(884px, 100dvh);
+    }
+  </style>
+  </head>
+<body class="bg-background text-on-surface font-body selection:bg-primary selection:text-on-primary">
+<!-- BACKGROUND: MOCKED MISSIONS TAB -->
+<div class="fixed inset-0 z-0 overflow-hidden opacity-40 blur-md grayscale">
+<header class="flex justify-between items-center px-6 h-16 w-full bg-[#1c1c1e] shadow-[0_0_20px_rgba(26,115,232,0.15)]">
+<span class="text-2xl font-bold italic tracking-tighter text-[#84adff] font-headline">STEPBATTLE</span>
+<div class="w-8 h-8 rounded-full bg-surface-container-highest"></div>
+</header>
+<main class="p-6 space-y-6">
+<div class="h-32 w-full bg-surface-container rounded-2xl"></div>
+<div class="grid grid-cols-2 gap-4">
+<div class="h-40 bg-surface-container rounded-2xl"></div>
+<div class="h-40 bg-surface-container rounded-2xl"></div>
+</div>
+<div class="h-24 w-full bg-surface-container rounded-2xl"></div>
+<div class="h-24 w-full bg-surface-container rounded-2xl"></div>
+</main>
+</div>
+<!-- OVERLAY SCRIM -->
+<div class="fixed inset-0 z-40 bg-black/60 backdrop-blur-sm"></div>
+<!-- BOTTOM SHEET CONTAINER -->
+<div class="fixed inset-x-0 bottom-0 z-50 flex flex-col max-h-[813px] bg-surface-container rounded-t-[28px] shadow-[0_-10px_40px_rgba(0,0,0,0.8)] border-t border-white/5">
+<!-- DRAG HANDLE -->
+<div class="flex justify-center py-3">
+<div class="w-12 h-1.5 rounded-full bg-outline-variant/30"></div>
+</div>
+<!-- SCROLLABLE CONTENT -->
+<div class="flex-1 overflow-y-auto px-6 pb-24 space-y-8">
+<!-- HERO SECTION -->
+<section class="flex flex-col items-center text-center space-y-4 pt-4">
+<div class="relative">
+<div class="w-[60px] h-[60px] rounded-full bg-primary/20 flex items-center justify-center border border-primary/30 shadow-[0_0_25px_rgba(132,173,255,0.4)]">
+<span class="material-symbols-outlined text-primary text-3xl" data-icon="footprint">footprint</span>
+</div>
+</div>
+<div class="space-y-1">
+<h1 class="text-3xl font-bold font-headline tracking-tight text-on-surface">Walk 5,000 Steps</h1>
+<div class="inline-flex items-center px-3 py-1 rounded-full bg-yellow-500/10 border border-yellow-500/20">
+<span class="text-[10px] font-extrabold tracking-widest text-yellow-500 uppercase">IN PROGRESS</span>
+</div>
+</div>
+</section>
+<!-- PROGRESS SECTION -->
+<section class="bg-glass border border-primary/10 p-5 rounded-2xl shadow-[inset_0_0_20px_rgba(132,173,255,0.05)] space-y-4">
+<div class="flex justify-between items-end">
+<div class="space-y-0.5">
+<span class="text-xs font-medium text-on-surface-variant uppercase tracking-wider">Current Progress</span>
+<p class="text-xl font-headline font-bold text-on-surface">3,200 <span class="text-on-surface-variant font-medium text-sm">/ 5,000 steps</span></p>
+</div>
+<span class="text-primary font-headline font-bold text-lg">64%</span>
+</div>
+<div class="relative h-3 w-full bg-surface-container-highest rounded-full overflow-hidden">
+<div class="absolute top-0 left-0 h-full w-[64%] bg-gradient-to-r from-primary to-primary-fixed rounded-full relative">
+<!-- PROGRESS SPARK -->
+<div class="absolute right-0 top-1/2 -translate-y-1/2 w-2 h-2 bg-white rounded-full progress-spark"></div>
+</div>
+</div>
+</section>
+<!-- DETAILS SECTION (2x2 GRID) -->
+<section class="grid grid-cols-2 gap-y-6 gap-x-4">
+<div class="space-y-1">
+<span class="text-[10px] uppercase tracking-widest text-on-surface-variant font-bold">XP Reward</span>
+<div class="flex items-center gap-2">
+<span class="material-symbols-outlined text-green-400 text-lg" data-icon="military_tech">military_tech</span>
+<span class="text-green-400 font-bold font-headline">+100 XP</span>
+</div>
+</div>
+<div class="space-y-1">
+<span class="text-[10px] uppercase tracking-widest text-on-surface-variant font-bold">Resets In</span>
+<div class="flex items-center gap-2">
+<span class="material-symbols-outlined text-yellow-500 text-lg" data-icon="schedule">schedule</span>
+<span class="text-yellow-500 font-bold font-headline">4h 22m</span>
+</div>
+</div>
+<div class="space-y-1">
+<span class="text-[10px] uppercase tracking-widest text-on-surface-variant font-bold">Category</span>
+<div class="flex items-center gap-2">
+<span class="material-symbols-outlined text-primary text-lg" data-icon="calendar_today">calendar_today</span>
+<span class="text-on-surface font-medium">Daily Mission</span>
+</div>
+</div>
+<div class="space-y-1">
+<span class="text-[10px] uppercase tracking-widest text-on-surface-variant font-bold">Difficulty</span>
+<div class="flex items-center gap-2">
+<span class="material-symbols-outlined text-primary text-lg" data-icon="grade">grade</span>
+<span class="text-on-surface font-medium">Easy</span>
+</div>
+</div>
+</section>
+<!-- DESCRIPTION CARD -->
+<section class="space-y-3">
+<h3 class="font-headline font-bold text-lg text-on-surface">How it works</h3>
+<div class="bg-surface-container-high/50 p-4 rounded-xl">
+<p class="text-sm text-on-surface-variant leading-relaxed">
+                        StepBattle automatically tracks your movement using your device's pedometer. You can also sync data from Apple Health or Google Fit to ensure every step in your daily routine contributes to your competitive standing. Remember: consistency is the key to climbing the leaderboards.
+                    </p>
+</div>
+</section>
+<!-- IMAGE DECORATIVE (Asymmetric breakout) -->
+<div class="relative h-40 w-full overflow-hidden rounded-2xl group">
+<img alt="Athletic action" class="w-full h-full object-cover grayscale brightness-50 group-hover:grayscale-0 transition-all duration-700" data-alt="Close up shot of a runner's athletic shoes hitting the pavement during sunset with vibrant blue and orange lighting and motion blur" src="https://lh3.googleusercontent.com/aida-public/AB6AXuDmH0e0AeKtBZ0F_N7W1ArfI-vqvTUjXGfE7s4TPsmozl0IrmubAk5-2SEV22bZ0RSEMusfi7W7NgJteAiUeSPqfJ-7ajvwL2JvAkA6q-Q6DT9-XygWLQkWJqAHbcBs4MVQqxLSVC_QEyzcRmQgLfmuTMVVXIxSt-Ow3VOf2r_DSxyYAQK70CMe9xHWAHOH9VgZnzuzAAr9LqO2bL1WbG1FAdQ2VKjd70UsRvtWXOvCOEknh0RBSc4El1vmNzTGXuV-iXZnmL5LzvMi"/>
+<div class="absolute inset-0 bg-gradient-to-t from-surface-container via-transparent to-transparent"></div>
+<div class="absolute bottom-4 left-4">
+<span class="text-xs font-bold font-headline tracking-tighter text-primary bg-primary/10 px-2 py-1 rounded">ARENA AUTHENTICATED</span>
+</div>
+</div>
+</div>
+<!-- ACTION BUTTON CONTAINER -->
+<div class="absolute bottom-0 w-full p-6 bg-gradient-to-t from-surface-container via-surface-container to-transparent">
+<button class="w-full h-14 bg-gradient-to-r from-primary to-primary-container rounded-full flex items-center justify-center gap-3 shadow-[0_4px_20px_rgba(26,115,232,0.4)] active:scale-95 transition-transform">
+<span class="material-symbols-outlined text-on-primary" data-icon="directions_walk">directions_walk</span>
+<span class="font-headline font-bold text-on-primary text-lg">Go Walk Now</span>
+</button>
+</div>
+</div>
+<!-- PERSISTENT NAV (As defined in JSON - Contextually visible as background element) -->
+<nav class="hidden md:flex fixed top-0 w-full z-50 flex justify-between items-center px-6 h-16 w-full bg-[#0e0e10] shadow-[0_0_20px_rgba(26,115,232,0.15)] opacity-20 pointer-events-none">
+<span class="text-2xl font-bold italic tracking-tighter text-[#84adff] font-['Space_Grotesk'] tracking-tight">STEPBATTLE</span>
+<div class="flex items-center gap-4">
+<span class="material-symbols-outlined text-gray-500" data-icon="menu">menu</span>
+<div class="w-8 h-8 rounded-full bg-surface-container-highest"></div>
+</div>
+</nav>
+<nav class="fixed bottom-0 w-full z-10 rounded-t-3xl border-t border-white/5 flex justify-around items-center h-20 px-4 w-full bg-[#0e0e10]/90 backdrop-blur-xl shadow-[0_-8px_30px_rgba(0,0,0,0.5)] opacity-20 pointer-events-none">
+<div class="flex flex-col items-center justify-center text-gray-500">
+<span class="material-symbols-outlined" data-icon="sports_score">sports_score</span>
+<span class="font-['Manrope'] text-[10px] uppercase font-bold tracking-widest">Arena</span>
+</div>
+<div class="flex flex-col items-center justify-center text-[#84adff] bg-blue-500/10 rounded-xl px-4 py-1">
+<span class="material-symbols-outlined" data-icon="Flag">flag</span>
+<span class="font-['Manrope'] text-[10px] uppercase font-bold tracking-widest">Missions</span>
+</div>
+<div class="flex flex-col items-center justify-center text-gray-500">
+<span class="material-symbols-outlined" data-icon="group">group</span>
+<span class="font-['Manrope'] text-[10px] uppercase font-bold tracking-widest">Social</span>
+</div>
+<div class="flex flex-col items-center justify-center text-gray-500">
+<span class="material-symbols-outlined" data-icon="person">person</span>
+<span class="font-['Manrope'] text-[10px] uppercase font-bold tracking-widest">Profile</span>
+</div>
+</nav>
+</body></html>

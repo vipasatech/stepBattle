@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>StepBattle — Add Friends</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&amp;family=Manrope:wght@300;400;500;600;700&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+      tailwind.config = {
+        darkMode: "class",
+        theme: {
+          extend: {
+            "colors": {
+                    "on-background": "#fefbfe",
+                    "on-secondary": "#00185d",
+                    "tertiary-dim": "#e48fed",
+                    "on-surface-variant": "#acaaad",
+                    "on-primary": "#002c65",
+                    "inverse-surface": "#fcf8fb",
+                    "primary": "#84adff",
+                    "tertiary": "#fab0ff",
+                    "surface-variant": "#252528",
+                    "error": "#ff716c",
+                    "surface-container-lowest": "#000000",
+                    "on-tertiary-fixed-variant": "#6a1f77",
+                    "on-primary-fixed": "#000000",
+                    "surface-container": "#19191c",
+                    "on-error": "#490006",
+                    "surface": "#0e0e10",
+                    "outline-variant": "#48474a",
+                    "surface-dim": "#0e0e10",
+                    "primary-dim": "#679dff",
+                    "primary-fixed": "#6c9fff",
+                    "outline": "#767577",
+                    "on-secondary-container": "#c4ceff",
+                    "secondary-fixed": "#c6cfff",
+                    "primary-container": "#6c9fff",
+                    "secondary": "#7e98ff",
+                    "on-tertiary": "#6b1f77",
+                    "surface-tint": "#84adff",
+                    "on-tertiary-container": "#60136d",
+                    "on-primary-fixed-variant": "#002a60",
+                    "on-surface": "#fefbfe",
+                    "on-secondary-fixed": "#00298c",
+                    "surface-container-low": "#131315",
+                    "surface-container-high": "#1f1f22",
+                    "surface-container-highest": "#252528",
+                    "on-secondary-fixed-variant": "#2b48ac",
+                    "tertiary-fixed": "#f39cfb",
+                    "tertiary-container": "#f39cfb",
+                    "background": "#0e0e10",
+                    "secondary-dim": "#7e98ff",
+                    "on-primary-container": "#00214e",
+                    "inverse-on-surface": "#555557",
+                    "inverse-primary": "#005bc1",
+                    "surface-bright": "#2c2c2f",
+                    "secondary-container": "#1e3da1",
+                    "secondary-fixed-dim": "#b3c1ff",
+                    "error-container": "#9f0519",
+                    "tertiary-fixed-dim": "#e48fed",
+                    "primary-fixed-dim": "#5091ff",
+                    "on-error-container": "#ffa8a3",
+                    "error-dim": "#d7383b",
+                    "on-tertiary-fixed": "#41004d"
+            },
+            "borderRadius": {
+                    "DEFAULT": "0.25rem",
+                    "lg": "0.5rem",
+                    "xl": "0.75rem",
+                    "full": "9999px"
+            },
+            "fontFamily": {
+                    "headline": ["Space Grotesk"],
+                    "body": ["Manrope"],
+                    "label": ["Manrope"]
+            }
+          },
+        },
+      }
+    </script>
+<style>
+        .material-symbols-outlined {
+            font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+        }
+        .sheet-blur {
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+        }
+    </style>
+<style>
+    body {
+      min-height: max(884px, 100dvh);
+    }
+  </style>
+  </head>
+<body class="bg-surface font-body text-on-surface min-h-screen flex items-center justify-center p-0 m-0 overflow-hidden">
+<!-- Blurred Background Content (Simulated Parent Screen) -->
+<div class="fixed inset-0 z-0 flex flex-col p-6 opacity-40 blur-sm pointer-events-none">
+<header class="flex justify-between items-center mb-8">
+<h1 class="font-headline text-3xl font-bold tracking-tighter">TEAM UP</h1>
+<span class="material-symbols-outlined">more_vert</span>
+</header>
+<div class="grid grid-cols-2 gap-4">
+<div class="h-40 bg-surface-container rounded-2xl"></div>
+<div class="h-40 bg-surface-container rounded-2xl"></div>
+<div class="h-64 col-span-2 bg-surface-container rounded-2xl"></div>
+</div>
+</div>
+<!-- Bottom Sheet Overlay Container -->
+<div class="fixed inset-0 z-10 bg-black/60 flex flex-col justify-end">
+<!-- Bottom Sheet Wrapper -->
+<div class="bg-[#1a1a1c] w-full max-w-md mx-auto rounded-t-[28px] flex flex-col max-h-[813px] shadow-[0_-20px_50px_rgba(0,0,0,0.8)] relative overflow-hidden">
+<!-- Handle Bar -->
+<div class="flex justify-center pt-3 pb-6">
+<div class="w-12 h-1.5 bg-neutral-700 rounded-full"></div>
+</div>
+<!-- Content Header -->
+<div class="px-6 pb-6">
+<h2 class="font-headline text-3xl font-bold text-on-surface mb-6">Add Friends</h2>
+<!-- Segmented Control -->
+<div class="bg-surface-container-high p-1 rounded-full flex w-full relative overflow-hidden">
+<!-- Tab 1: Active -->
+<button class="flex-1 py-3 text-sm font-bold tracking-wide rounded-full transition-all duration-200 bg-primary text-on-primary shadow-lg">
+                        Friends List
+                    </button>
+<!-- Tab 2: Inactive -->
+<button class="flex-1 py-3 text-sm font-bold tracking-wide rounded-full transition-all duration-200 text-on-surface-variant hover:text-on-surface">
+                        Search / User ID
+                    </button>
+</div>
+</div>
+<!-- Tab Content (TAB 1 visible) -->
+<div class="flex-1 flex flex-col overflow-hidden px-6">
+<!-- Search Bar -->
+<div class="relative mb-6">
+<span class="material-symbols-outlined absolute left-4 top-1/2 -translate-y-1/2 text-on-surface-variant">search</span>
+<input class="w-full bg-surface-container-low border-none rounded-2xl py-4 pl-12 pr-4 text-on-surface placeholder:text-on-surface-variant focus:ring-2 focus:ring-primary/50 transition-all" placeholder="Search your friends..." type="text"/>
+</div>
+<!-- Scrollable List Area -->
+<div class="flex-1 overflow-y-auto space-y-4 pb-32">
+<!-- Friend Row 1 -->
+<div class="flex items-center gap-4 p-1">
+<div class="w-14 h-14 rounded-full overflow-hidden flex-shrink-0 ring-2 ring-primary/20 p-0.5">
+<img alt="Avatar" class="w-full h-full rounded-full object-cover" data-alt="close-up portrait of a young man with athletic features and a confident smile, clean studio lighting on dark background" src="https://lh3.googleusercontent.com/aida-public/AB6AXuCxnb89vHSjv-NgdlwirK-QpNag3kFLmqybkmVKVOe9GNnvTWoBtnf1d_AneYkiC2lTiLlFt_qSwzkfllB0_VbUdQPPwcFnYJiM9f9knWwMOhqgTHc1Sw0BInGOiTwvORMf5Uo_tc28LVq-gq096_osuxHjER7Ut-BUf12h-uaRo-lQahcVbxGJZ6TaYvYjLUXR3gT9RwHofnF98erZeI4BhWosbNYwQI3kyVWarTFD_llZF86qw5ZOXfrLvc6t7uJu8DhGhPpeQ5W9"/>
+</div>
+<div class="flex-1">
+<p class="font-bold text-on-surface">Marcus "Bolt" Runner</p>
+<p class="text-xs text-on-surface-variant">Level 8 · Rank #3 · 6.2k avg steps</p>
+</div>
+<button class="bg-primary hover:bg-primary-container text-on-primary px-4 py-2 rounded-full font-bold text-sm transition-transform active:scale-90">
+<span class="material-symbols-outlined text-[20px] leading-none">add</span>
+</button>
+</div>
+<!-- Friend Row 2 (Added State) -->
+<div class="flex items-center gap-4 p-1">
+<div class="w-14 h-14 rounded-full bg-surface-container-highest flex items-center justify-center font-headline font-bold text-lg text-primary ring-2 ring-primary/20">
+                            SR
+                        </div>
+<div class="flex-1">
+<p class="font-bold text-on-surface">Sarah Rogers</p>
+<p class="text-xs text-on-surface-variant">Level 12 · Rank #1 · 10.4k avg steps</p>
+</div>
+<div class="bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 px-4 py-2 rounded-full font-bold text-sm flex items-center gap-1">
+<span class="material-symbols-outlined text-[18px] leading-none" style="font-variation-settings: 'FILL' 1;">check_circle</span>
+                            Added
+                        </div>
+</div>
+<!-- Friend Row 3 -->
+<div class="flex items-center gap-4 p-1">
+<div class="w-14 h-14 rounded-full overflow-hidden flex-shrink-0 ring-2 ring-primary/20 p-0.5">
+<img alt="Avatar" class="w-full h-full rounded-full object-cover" data-alt="professional portrait of a woman with braided hair wearing activewear, soft natural lighting, high-end fitness magazine style" src="https://lh3.googleusercontent.com/aida-public/AB6AXuCWeL9qttzITllRelNEgdXqTOrXH988kLsKB8KOz4tsvK2A4IA3lcH8E69DUHwtMbV3O0GDftmjzjmjpvUAyTU7po61VAwx0d_TNjVaBV0P0yJf-5v_xI6ePaW9ebIekiZOFnvtqB-tW7UeAKlvkjJZlOILn85zFFUiFwTwIegFO97H279o70eB9GtZLcT18t04gzRamQXS09cHQLgO3wkKBHJurHAfRRtWTQWv77dAEeRAF2TGqXO1GqruzqGnJEwM_KDc7yn5BD53"/>
+</div>
+<div class="flex-1">
+<p class="font-bold text-on-surface">Elena Kozlova</p>
+<p class="text-xs text-on-surface-variant">Level 15 · Rank #2 · 12.8k avg steps</p>
+</div>
+<button class="bg-primary hover:bg-primary-container text-on-primary px-4 py-2 rounded-full font-bold text-sm transition-transform active:scale-90">
+<span class="material-symbols-outlined text-[20px] leading-none">add</span>
+</button>
+</div>
+<!-- Friend Row 4 -->
+<div class="flex items-center gap-4 p-1">
+<div class="w-14 h-14 rounded-full overflow-hidden flex-shrink-0 ring-2 ring-primary/20 p-0.5">
+<img alt="Avatar" class="w-full h-full rounded-full object-cover" data-alt="close-up of a young athletic man with glasses, neutral expression, crisp focus with blurred urban neon background" src="https://lh3.googleusercontent.com/aida-public/AB6AXuBocUK0ghV14kemHJF0-svfP94U0T1rvzAVJi8ThUwW1jrb1mwXfWhjpXc4XaQreumPAlh-u2VkL3DAdJeooXJ4o9ibOq1s9OgPNmSYSMJSpaC8Z-HRG_qx82uMMdxfkhCi7cdEdxmo19mLtAvfeJbaHENKtVsy3H71PXAq_qpLUPCYMScPpKExwFVWJ2pQPgNRxROa1EPwps4DDtM1NErwM-IwBto_GnVbVufnqPmVKJhLhrsF0OqO7IvpCH2Dqf_Lgq5vb0kmBkn5"/>
+</div>
+<div class="flex-1">
+<p class="font-bold text-on-surface">Jin Tanaka</p>
+<p class="text-xs text-on-surface-variant">Level 5 · Rank #18 · 4.1k avg steps</p>
+</div>
+<button class="bg-primary hover:bg-primary-container text-on-primary px-4 py-2 rounded-full font-bold text-sm transition-transform active:scale-90">
+<span class="material-symbols-outlined text-[20px] leading-none">add</span>
+</button>
+</div>
+<!-- Friend Row 5 (Partial Visibility) -->
+<div class="flex items-center gap-4 p-1 opacity-50">
+<div class="w-14 h-14 rounded-full bg-surface-container-highest flex items-center justify-center font-headline font-bold text-lg text-primary ring-2 ring-primary/20">
+                            AM
+                        </div>
+<div class="flex-1">
+<p class="font-bold text-on-surface">Alex Murphy</p>
+<p class="text-xs text-on-surface-variant">Level 9 · Rank #7 · 8.2k avg steps</p>
+</div>
+<button class="bg-primary hover:bg-primary-container text-on-primary px-4 py-2 rounded-full font-bold text-sm transition-transform active:scale-90">
+<span class="material-symbols-outlined text-[20px] leading-none">add</span>
+</button>
+</div>
+</div>
+</div>
+<!-- Bottom Action Area (Sticky) -->
+<div class="absolute bottom-0 left-0 w-full p-6 pt-10 bg-gradient-to-t from-[#1a1a1c] via-[#1a1a1c] to-transparent">
+<button class="w-full bg-primary hover:bg-primary-container text-on-primary font-bold py-4 rounded-full text-lg shadow-[0_8px_25px_rgba(132,173,255,0.3)] transition-all active:scale-[0.98]">
+                    Confirm Selection
+                </button>
+<p class="text-center text-xs text-on-surface-variant mt-4 font-medium uppercase tracking-widest opacity-80">
+                    They'll receive an invite notification
+                </p>
+</div>
+</div>
+</div>
+<!-- Navigation Shell Placeholder (Not rendered as per task being bottom sheet focused sub-page) -->
+</body></html>

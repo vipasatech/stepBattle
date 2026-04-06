@@ -1,0 +1,262 @@
+<!DOCTYPE html>
+
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>StepBattle - Battles</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&amp;family=Manrope:wght@300;400;500;600;700;800&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+        tailwind.config = {
+          darkMode: "class",
+          theme: {
+            extend: {
+              "colors": {
+                      "primary-dim": "#679dff",
+                      "secondary-fixed": "#c6cfff",
+                      "surface-container-lowest": "#000000",
+                      "on-secondary": "#00185d",
+                      "primary-fixed": "#6c9fff",
+                      "error-container": "#9f0519",
+                      "tertiary-dim": "#e48fed",
+                      "surface-tint": "#84adff",
+                      "outline-variant": "#48474a",
+                      "on-surface": "#fefbfe",
+                      "on-secondary-container": "#c4ceff",
+                      "tertiary-fixed-dim": "#e48fed",
+                      "on-surface-variant": "#acaaad",
+                      "surface-container": "#19191c",
+                      "error-dim": "#d7383b",
+                      "tertiary-fixed": "#f39cfb",
+                      "primary-fixed-dim": "#5091ff",
+                      "on-tertiary-container": "#60136d",
+                      "surface-dim": "#0e0e10",
+                      "surface": "#0e0e10",
+                      "on-error": "#490006",
+                      "on-primary-fixed": "#000000",
+                      "surface-bright": "#2c2c2f",
+                      "on-primary-container": "#00214e",
+                      "inverse-surface": "#fcf8fb",
+                      "on-tertiary": "#6b1f77",
+                      "on-error-container": "#ffa8a3",
+                      "surface-container-low": "#131315",
+                      "on-primary": "#002c65",
+                      "primary": "#84adff",
+                      "secondary-container": "#1e3da1",
+                      "on-background": "#fefbfe",
+                      "surface-container-highest": "#252528",
+                      "on-tertiary-fixed-variant": "#6a1f77",
+                      "surface-container-high": "#1f1f22",
+                      "outline": "#767577",
+                      "tertiary-container": "#f39cfb",
+                      "secondary-dim": "#7e98ff",
+                      "primary-container": "#6c9fff",
+                      "inverse-primary": "#005bc1",
+                      "error": "#ff716c",
+                      "surface-variant": "#252528",
+                      "on-secondary-fixed": "#00298c",
+                      "tertiary": "#fab0ff",
+                      "inverse-on-surface": "#555557",
+                      "on-secondary-fixed-variant": "#2b48ac",
+                      "on-primary-fixed-variant": "#002a60",
+                      "secondary-fixed-dim": "#b3c1ff",
+                      "secondary": "#7e98ff",
+                      "background": "#0e0e10",
+                      "on-tertiary-fixed": "#41004d"
+              },
+              "borderRadius": {
+                      "DEFAULT": "0.25rem",
+                      "lg": "0.5rem",
+                      "xl": "0.75rem",
+                      "full": "9999px"
+              },
+              "fontFamily": {
+                      "headline": ["Space Grotesk"],
+                      "body": ["Manrope"],
+                      "label": ["Manrope"]
+              }
+            },
+          },
+        }
+    </script>
+<style>
+        .glass-card {
+            background: rgba(37, 37, 40, 0.6);
+            backdrop-filter: blur(20px);
+            box-shadow: inset 0 0 4px rgba(132, 173, 255, 0.15);
+        }
+        .battle-gradient-blue {
+            background: linear-gradient(90deg, #1A73E8 0%, #84adff 100%);
+        }
+        .battle-gradient-amber {
+            background: linear-gradient(90deg, #f59e0b 0%, #fbbf24 100%);
+        }
+        .battle-spark {
+            filter: drop-shadow(0 0 4px rgba(255, 255, 255, 0.8));
+        }
+    </style>
+<style>
+    body {
+      min-height: max(884px, 100dvh);
+    }
+  </style>
+  </head>
+<body class="bg-surface text-on-surface font-body min-h-screen pb-32">
+<!-- TopAppBar -->
+<header class="bg-[#0e0e10] text-on-surface flex justify-between items-center w-full px-6 py-4 fixed top-0 z-50 bg-slate-900">
+<div class="flex items-center gap-3">
+<span class="material-symbols-outlined text-blue-600 dark:text-blue-500 text-2xl" data-icon="bolt">bolt</span>
+<h1 class="text-2xl font-black text-blue-600 dark:text-blue-500 tracking-tight font-headline">StepBattle</h1>
+</div>
+<button class="bg-primary text-on-primary font-bold px-5 py-2 rounded-full hover:opacity-80 transition-opacity active:scale-95 duration-150 font-label">
+            + New Battle
+        </button>
+</header>
+<main class="pt-24 px-6 max-w-2xl mx-auto space-y-10">
+<!-- Section 1: Active Battles -->
+<section class="space-y-6">
+<div class="flex justify-between items-end">
+<h2 class="text-3xl font-headline font-bold tracking-tight text-on-surface">Active Battles</h2>
+<span class="material-symbols-outlined text-primary mb-1 cursor-pointer" data-icon="chevron_right">chevron_right</span>
+</div>
+<!-- Card 1 -->
+<div class="glass-card rounded-xl p-6 relative overflow-hidden group">
+<div class="flex justify-between items-start mb-6">
+<div class="flex flex-col gap-1">
+<span class="text-on-surface-variant text-xs font-bold tracking-widest uppercase font-label">BATTLE ID #8402</span>
+<h3 class="text-xl font-headline font-semibold">⚔️ You vs Ananya</h3>
+</div>
+<span class="flex items-center gap-1.5 px-3 py-1 rounded-full bg-green-500/10 text-green-400 text-[10px] font-black uppercase tracking-tighter">
+<span class="w-1.5 h-1.5 rounded-full bg-green-500"></span>
+                        Live
+                    </span>
+</div>
+<div class="grid grid-cols-2 gap-4 mb-8">
+<div class="space-y-1">
+<p class="text-on-surface-variant text-xs font-medium font-label">You</p>
+<p class="text-3xl font-headline font-bold text-primary">6,820</p>
+</div>
+<div class="space-y-1 text-right">
+<p class="text-on-surface-variant text-xs font-medium font-label">Ananya</p>
+<p class="text-3xl font-headline font-bold text-amber-500">9,100</p>
+</div>
+</div>
+<!-- Battle Gauge -->
+<div class="relative h-4 w-full bg-surface-container-highest rounded-full overflow-hidden mb-4">
+<!-- Amber progress (Ananya) -->
+<div class="absolute inset-0 battle-gradient-amber rounded-full" style="width: 60%"></div>
+<!-- Blue progress (User) -->
+<div class="absolute inset-0 battle-gradient-blue rounded-full" style="width: 45%">
+<div class="absolute right-0 top-0 h-full w-1 bg-white battle-spark"></div>
+</div>
+</div>
+<div class="flex justify-between items-center mt-6 pt-4 border-t border-white/5">
+<div class="flex items-center gap-2">
+<span class="material-symbols-outlined text-sm text-on-surface-variant" data-icon="schedule">schedule</span>
+<span class="text-sm font-medium text-on-surface-variant">8h left</span>
+</div>
+<span class="text-sm font-bold text-tertiary">+200 XP on win</span>
+</div>
+</div>
+<!-- Card 2 -->
+<div class="glass-card rounded-xl p-6 relative overflow-hidden border-l-4 border-primary">
+<div class="flex justify-between items-start mb-6">
+<div class="flex flex-col gap-1">
+<span class="text-on-surface-variant text-xs font-bold tracking-widest uppercase font-label">LEADER STATE</span>
+<h3 class="text-xl font-headline font-semibold">⚔️ You vs Mark</h3>
+</div>
+<span class="flex items-center gap-1.5 px-3 py-1 rounded-full bg-green-500/10 text-green-400 text-[10px] font-black uppercase tracking-tighter">
+<span class="w-1.5 h-1.5 rounded-full bg-green-500"></span>
+                        Live
+                    </span>
+</div>
+<div class="grid grid-cols-2 gap-4 mb-8">
+<div class="space-y-1">
+<p class="text-on-surface-variant text-xs font-medium font-label">You</p>
+<p class="text-3xl font-headline font-bold text-primary">12,000</p>
+</div>
+<div class="space-y-1 text-right">
+<p class="text-on-surface-variant text-xs font-medium font-label">Mark</p>
+<p class="text-3xl font-headline font-bold text-amber-500">10,500</p>
+</div>
+</div>
+<div class="relative h-4 w-full bg-surface-container-highest rounded-full overflow-hidden mb-4">
+<div class="absolute inset-0 battle-gradient-amber rounded-full" style="width: 70%"></div>
+<div class="absolute inset-0 battle-gradient-blue rounded-full" style="width: 80%">
+<div class="absolute right-0 top-0 h-full w-1 bg-white battle-spark"></div>
+</div>
+</div>
+<div class="flex justify-between items-center mt-6 pt-4 border-t border-white/5">
+<div class="flex items-center gap-2">
+<span class="material-symbols-outlined text-sm text-on-surface-variant" data-icon="schedule">schedule</span>
+<span class="text-sm font-medium text-on-surface-variant">2h left</span>
+</div>
+<span class="text-sm font-bold text-tertiary">+200 XP on win</span>
+</div>
+</div>
+</section>
+<!-- Section 2: Scheduled Battles -->
+<section class="space-y-6">
+<h2 class="text-2xl font-headline font-bold tracking-tight text-on-surface">Scheduled Battles</h2>
+<div class="bg-surface-container-low rounded-xl p-6 border-l-4 border-amber-500/50">
+<div class="flex justify-between items-start">
+<div class="space-y-3">
+<h3 class="text-xl font-headline font-semibold">⚔️ You vs Rohan</h3>
+<div class="flex items-center gap-2 text-on-surface-variant">
+<span class="material-symbols-outlined text-sm" data-icon="calendar_today">calendar_today</span>
+<span class="text-sm font-medium font-label">Starts Saturday, 9:00 AM</span>
+</div>
+<p class="text-xs font-bold text-tertiary">+150 XP on win</p>
+</div>
+<span class="px-3 py-1 rounded-full bg-amber-500/10 text-amber-400 text-[10px] font-black uppercase tracking-tighter">
+                        Pending
+                    </span>
+</div>
+</div>
+</section>
+<!-- Section 3: Completed -->
+<section class="space-y-6">
+<h2 class="text-2xl font-headline font-bold tracking-tight text-on-surface">Completed</h2>
+<div class="bg-surface-container-low/40 rounded-xl p-6 grayscale-[0.5] opacity-80">
+<div class="flex justify-between items-start mb-6">
+<div class="space-y-1">
+<h3 class="text-xl font-headline font-semibold">⚔️ You vs Priya</h3>
+<p class="text-sm font-medium text-primary">Final steps: You: 15,000 · Priya: 11,200</p>
+</div>
+<span class="px-3 py-1 rounded-full bg-green-500/10 text-green-400 text-[10px] font-black uppercase tracking-tighter">
+                        Won
+                    </span>
+</div>
+<div class="relative h-2 w-full bg-surface-container-highest rounded-full overflow-hidden mb-6 opacity-50">
+<div class="absolute inset-0 bg-primary/40 rounded-full" style="width: 100%"></div>
+</div>
+<div class="flex justify-between items-center text-xs font-bold text-on-surface-variant uppercase tracking-widest font-label">
+<span>Completed yesterday</span>
+<span class="text-green-400">+200 XP EARNED</span>
+</div>
+</div>
+</section>
+</main>
+<!-- BottomNavBar -->
+<nav class="fixed bottom-0 left-0 w-full z-50 flex justify-around items-center px-4 pb-6 pt-3 bg-[#0e0e10]/80 backdrop-blur-xl rounded-t-3xl border-t border-white/5 shadow-[0_-8px_20px_rgba(26,115,232,0.15)]">
+<div class="flex flex-col items-center justify-center text-gray-500 hover:text-blue-400 cursor-pointer">
+<span class="material-symbols-outlined" data-icon="sports_score">sports_score</span>
+<span class="text-[10px] font-medium Manrope mt-1">Arena</span>
+</div>
+<!-- Active Tab: Battles -->
+<div class="flex flex-col items-center justify-center text-blue-600 dark:text-blue-500 scale-110 transform transition-transform duration-300">
+<span class="material-symbols-outlined font-bold" data-icon="swords" style="font-variation-settings: 'FILL' 1;">swords</span>
+<span class="text-[10px] font-bold Manrope mt-1">Battles</span>
+</div>
+<div class="flex flex-col items-center justify-center text-gray-500 hover:text-blue-400 cursor-pointer">
+<span class="material-symbols-outlined" data-icon="explore">explore</span>
+<span class="text-[10px] font-medium Manrope mt-1">Map</span>
+</div>
+<div class="flex flex-col items-center justify-center text-gray-500 hover:text-blue-400 cursor-pointer">
+<span class="material-symbols-outlined" data-icon="person">person</span>
+<span class="text-[10px] font-medium Manrope mt-1">Profile</span>
+</div>
+</nav>
+</body></html>

@@ -1,0 +1,254 @@
+<!DOCTYPE html>
+
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>Profile - StepBattle</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300..700&amp;family=Manrope:wght@200..800&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    "colors": {
+                        "error-container": "#9f0519",
+                        "surface-tint": "#84adff",
+                        "tertiary-dim": "#e48fed",
+                        "on-surface-variant": "#acaaad",
+                        "inverse-primary": "#005bc1",
+                        "tertiary": "#fab0ff",
+                        "outline": "#767577",
+                        "on-secondary-container": "#c4ceff",
+                        "secondary-container": "#1e3da1",
+                        "surface-bright": "#2c2c2f",
+                        "surface-container-low": "#131315",
+                        "surface": "#0e0e10",
+                        "on-secondary-fixed": "#00298c",
+                        "outline-variant": "#48474a",
+                        "on-primary-fixed-variant": "#002a60",
+                        "primary-fixed-dim": "#5091ff",
+                        "on-surface": "#fefbfe",
+                        "background": "#0e0e10",
+                        "secondary": "#7e98ff",
+                        "surface-variant": "#252528",
+                        "surface-container-lowest": "#000000",
+                        "primary-container": "#6c9fff",
+                        "tertiary-container": "#f39cfb",
+                        "inverse-surface": "#fcf8fb",
+                        "on-primary-container": "#00214e",
+                        "on-primary-fixed": "#000000",
+                        "on-primary": "#002c65",
+                        "primary-dim": "#679dff",
+                        "surface-container-highest": "#252528",
+                        "error": "#ff716c",
+                        "on-error": "#490006",
+                        "tertiary-fixed-dim": "#e48fed",
+                        "on-error-container": "#ffa8a3",
+                        "on-tertiary-container": "#60136d",
+                        "secondary-fixed-dim": "#b3c1ff",
+                        "surface-container": "#19191c",
+                        "on-secondary-fixed-variant": "#2b48ac",
+                        "primary": "#84adff",
+                        "tertiary-fixed": "#f39cfb",
+                        "secondary-dim": "#7e98ff",
+                        "on-secondary": "#00185d",
+                        "inverse-on-surface": "#555557",
+                        "on-tertiary-fixed": "#41004d",
+                        "surface-dim": "#0e0e10",
+                        "on-tertiary-fixed-variant": "#6a1f77",
+                        "surface-container-high": "#1f1f22",
+                        "secondary-fixed": "#c6cfff",
+                        "primary-fixed": "#6c9fff",
+                        "on-tertiary": "#6b1f77",
+                        "on-background": "#fefbfe",
+                        "error-dim": "#d7383b"
+                    },
+                    "borderRadius": {
+                        "DEFAULT": "0.25rem",
+                        "lg": "0.5rem",
+                        "xl": "0.75rem",
+                        "full": "9999px"
+                    },
+                    "fontFamily": {
+                        "headline": ["Space Grotesk"],
+                        "body": ["Manrope"],
+                        "label": ["Manrope"]
+                    }
+                },
+            },
+        }
+    </script>
+<style>
+        .material-symbols-outlined {
+            font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+        }
+        .glass-card {
+            background: rgba(37, 37, 40, 0.6);
+            backdrop-filter: blur(20px);
+            box-shadow: inset 0 0 4px 0 rgba(132, 173, 255, 0.2);
+        }
+    </style>
+<style>
+    body {
+      min-height: max(884px, 100dvh);
+    }
+  </style>
+  </head>
+<body class="bg-background text-on-background font-body selection:bg-primary selection:text-on-primary">
+<!-- TopAppBar -->
+<header class="fixed top-0 w-full z-50 bg-[#0e0e10] dark:bg-[#0e0e10] bg-gradient-to-b from-[#1a1a1e] to-transparent flex justify-between items-center px-6 py-4 w-full">
+<h1 class="text-xl font-bold text-white font-['Space_Grotesk'] uppercase tracking-tight">Profile</h1>
+<div class="flex items-center gap-2 bg-surface-container-high px-3 py-1 rounded-full border border-primary/20">
+<span class="material-symbols-outlined text-tertiary text-sm" style="font-variation-settings: 'FILL' 1;">local_fire_department</span>
+<span class="font-headline font-bold text-sm text-on-surface">9</span>
+</div>
+</header>
+<main class="pt-24 pb-32 px-6 space-y-10">
+<!-- Section 1: User Identity -->
+<section class="flex flex-col items-center">
+<div class="relative group">
+<div class="w-32 h-32 rounded-full ring-4 ring-primary/30 p-1 bg-gradient-to-tr from-primary to-tertiary">
+<img alt="Vikram S. profile photo" class="w-full h-full object-cover rounded-full" data-alt="portrait of a confident man with a short beard in a dark athletic shirt against a moody studio background" src="https://lh3.googleusercontent.com/aida-public/AB6AXuDXRnyaOeKB2-XIZ9FQgVlTZqByioQJLAxMEakwstY-9DnM8_ibe-LL5-wwRAYWeHCPAY9cY1-3wwW5zTSlsRrLkjDyLLZ7ubCmkbSfZ2qJh5jXFcCIbHw1FgEBt44xDALwT8yUbx5b54h58Wgryc13BOEhXUmPR8nFPsbhplxhmxSLdzdD4CRqMFB_jyw4rg6fO4fMARH3TAlA9RTfattj63vm_oBB14YgepuzrQWDhYCt_9eTH-M3LnREGc7mYI1RVnY5-eJrDOmn"/>
+</div>
+<button class="absolute bottom-1 right-1 bg-primary text-on-primary p-2 rounded-full shadow-lg hover:scale-105 transition-transform">
+<span class="material-symbols-outlined text-sm">edit</span>
+</button>
+</div>
+<div class="mt-4 flex items-center gap-2">
+<h2 class="text-3xl font-headline font-bold tracking-tight">Vikram S.</h2>
+<span class="material-symbols-outlined text-outline cursor-pointer hover:text-primary transition-colors">edit</span>
+</div>
+<!-- Stats Horizontal Row -->
+<div class="flex flex-wrap justify-center gap-3 mt-6">
+<div class="bg-surface-container-high px-4 py-2 rounded-full flex items-center gap-2 border border-primary/10">
+<span class="text-primary font-bold font-headline text-sm uppercase tracking-wider">Level 8</span>
+</div>
+<div class="bg-surface-container-high px-4 py-2 rounded-full flex items-center gap-2 border border-tertiary/10">
+<span class="text-tertiary font-bold font-headline text-sm uppercase tracking-wider">623 XP</span>
+</div>
+<div class="bg-surface-container-high px-4 py-2 rounded-full flex items-center gap-2 border border-primary/10">
+<span class="text-primary font-bold font-headline text-sm uppercase tracking-wider">7 Day Streak</span>
+</div>
+<div class="bg-surface-container-high px-4 py-2 rounded-full flex items-center gap-2 border border-secondary/10">
+<span class="text-secondary font-bold font-headline text-sm uppercase tracking-wider">Rank #3</span>
+</div>
+</div>
+</section>
+<!-- Section 2: Action Button -->
+<section>
+<button class="w-full py-4 rounded-xl border-2 border-primary/50 text-primary font-headline font-bold uppercase tracking-widest hover:bg-primary/10 transition-all flex justify-center items-center gap-2 group">
+                Set Goal 
+                <span class="material-symbols-outlined group-hover:translate-x-1 transition-transform">arrow_forward</span>
+</button>
+</section>
+<!-- Section 3: This Week -->
+<section class="space-y-4">
+<div class="flex justify-between items-end">
+<h3 class="text-xl font-headline font-bold text-white/90">This Week</h3>
+<span class="material-symbols-outlined text-primary">calendar_month</span>
+</div>
+<div class="glass-card rounded-2xl p-6 space-y-4">
+<div class="flex justify-between items-center py-2">
+<span class="text-on-surface-variant font-medium">Total Steps</span>
+<span class="font-headline text-xl text-primary font-bold">3,000</span>
+</div>
+<div class="h-px bg-white/5"></div>
+<div class="flex justify-between items-center py-2">
+<span class="text-on-surface-variant font-medium">XP Earned</span>
+<span class="font-headline text-xl text-tertiary font-bold">200 XP</span>
+</div>
+<div class="h-px bg-white/5"></div>
+<div class="flex justify-between items-center py-2">
+<span class="text-on-surface-variant font-medium">Battles Won</span>
+<span class="font-headline text-xl text-on-surface font-bold">2 / 3</span>
+</div>
+<div class="h-px bg-white/5"></div>
+<div class="flex justify-between items-center py-2">
+<span class="text-on-surface-variant font-medium">Missions Done</span>
+<span class="font-headline text-xl text-on-surface font-bold">7 / 10</span>
+</div>
+</div>
+</section>
+<!-- Section 4: All Time -->
+<section class="space-y-4">
+<h3 class="text-xl font-headline font-bold text-white/90">All Time</h3>
+<div class="grid grid-cols-2 gap-4">
+<div class="bg-surface-container-low border border-white/5 rounded-2xl p-4 flex flex-col items-center justify-center text-center">
+<span class="text-[10px] uppercase tracking-[0.2em] text-outline mb-1">Total XP</span>
+<span class="font-headline text-2xl text-tertiary font-bold">6,000</span>
+</div>
+<div class="bg-surface-container-low border border-white/5 rounded-2xl p-4 flex flex-col items-center justify-center text-center">
+<span class="text-[10px] uppercase tracking-[0.2em] text-outline mb-1">Battles</span>
+<span class="font-headline text-lg text-on-surface font-bold"><span class="text-primary">4W</span> / <span class="text-error-dim">3L</span></span>
+</div>
+<div class="bg-surface-container-low border border-white/5 rounded-2xl p-4 flex flex-col items-center justify-center text-center">
+<span class="text-[10px] uppercase tracking-[0.2em] text-outline mb-1">Best Streak</span>
+<span class="font-headline text-2xl text-primary font-bold">21 <span class="text-xs">DAYS</span></span>
+</div>
+<div class="bg-surface-container-low border border-white/5 rounded-2xl p-4 flex flex-col items-center justify-center text-center">
+<span class="text-[10px] uppercase tracking-[0.2em] text-outline mb-1">Total Steps</span>
+<span class="font-headline text-2xl text-on-surface font-bold">2,01,500</span>
+</div>
+</div>
+</section>
+<!-- Section 5: Account -->
+<section class="space-y-4">
+<h3 class="text-xl font-headline font-bold text-white/90">Account</h3>
+<div class="bg-surface-container-high rounded-2xl p-5 space-y-4">
+<div class="flex justify-between items-center">
+<div class="flex items-center gap-3">
+<span class="material-symbols-outlined text-outline">mail</span>
+<span class="text-on-surface-variant">Email</span>
+</div>
+<span class="font-medium">abc@gmail.com</span>
+</div>
+<div class="flex justify-between items-center">
+<div class="flex items-center gap-3">
+<span class="material-symbols-outlined text-outline">phone</span>
+<span class="text-on-surface-variant">Phone</span>
+</div>
+<span class="font-medium">+91 XXXXXXXXXX</span>
+</div>
+<div class="flex justify-between items-center pt-2">
+<div class="flex items-center gap-3">
+<span class="material-symbols-outlined text-outline">sync</span>
+<span class="text-on-surface-variant">Connected to</span>
+</div>
+<div class="bg-[#1e3da1]/20 text-[#84adff] px-3 py-1 rounded-full text-xs font-bold ring-1 ring-[#84adff]/30 flex items-center gap-1">
+<span class="material-symbols-outlined text-[14px]" style="font-variation-settings: 'FILL' 1;">health_and_safety</span>
+                        Apple Health
+                    </div>
+</div>
+</div>
+</section>
+<!-- Section 6: Log Out -->
+<section class="pb-8">
+<button class="w-full py-4 rounded-xl border-2 border-error/30 text-error font-headline font-bold uppercase tracking-widest hover:bg-error/10 transition-all flex justify-center items-center gap-2">
+                Sign Out
+                <span class="material-symbols-outlined">logout</span>
+</button>
+</section>
+</main>
+<!-- BottomNavBar -->
+<nav class="fixed bottom-0 left-0 w-full flex justify-around items-center px-4 pb-6 pt-3 bg-[#0e0e10]/80 backdrop-blur-xl z-50 rounded-t-3xl border-t border-white/5 shadow-[0_-8px_30px_rgb(26,115,232,0.1)]">
+<a class="flex flex-col items-center justify-center text-gray-500 px-4 py-2 hover:text-white transition-colors" href="#">
+<span class="material-symbols-outlined mb-1">leaderboard</span>
+<span class="font-['Manrope'] text-[10px] font-bold uppercase tracking-widest">Arena</span>
+</a>
+<a class="flex flex-col items-center justify-center text-gray-500 px-4 py-2 hover:text-white transition-colors" href="#">
+<span class="material-symbols-outlined mb-1">fitness_center</span>
+<span class="font-['Manrope'] text-[10px] font-bold uppercase tracking-widest">Training</span>
+</a>
+<a class="flex flex-col items-center justify-center text-gray-500 px-4 py-2 hover:text-white transition-colors" href="#">
+<span class="material-symbols-outlined mb-1">groups</span>
+<span class="font-['Manrope'] text-[10px] font-bold uppercase tracking-widest">Social</span>
+</a>
+<a class="flex flex-col items-center justify-center bg-[#1A73E8]/20 text-[#84adff] rounded-xl px-4 py-2 ring-1 ring-[#84adff]/30" href="#">
+<span class="material-symbols-outlined mb-1" style="font-variation-settings: 'FILL' 1;">person</span>
+<span class="font-['Manrope'] text-[10px] font-bold uppercase tracking-widest">Profile</span>
+</a>
+</nav>
+</body></html>

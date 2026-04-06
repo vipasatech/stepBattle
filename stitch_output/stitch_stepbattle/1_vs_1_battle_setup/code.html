@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&amp;family=Manrope:wght@300;400;500;600;700;800&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+      tailwind.config = {
+        darkMode: "class",
+        theme: {
+          extend: {
+            "colors": {
+                    "secondary-container": "#1e3da1",
+                    "on-primary-fixed-variant": "#002a60",
+                    "primary-container": "#6c9fff",
+                    "surface": "#0e0e10",
+                    "secondary": "#7e98ff",
+                    "surface-container-lowest": "#000000",
+                    "inverse-on-surface": "#555557",
+                    "on-background": "#fefbfe",
+                    "on-tertiary-fixed-variant": "#6a1f77",
+                    "on-tertiary": "#6b1f77",
+                    "primary-fixed-dim": "#5091ff",
+                    "on-tertiary-fixed": "#41004d",
+                    "on-primary-container": "#00214e",
+                    "tertiary-container": "#f39cfb",
+                    "primary": "#84adff",
+                    "on-error": "#490006",
+                    "outline": "#767577",
+                    "primary-fixed": "#6c9fff",
+                    "secondary-fixed": "#c6cfff",
+                    "on-secondary-fixed": "#00298c",
+                    "error-container": "#9f0519",
+                    "on-error-container": "#ffa8a3",
+                    "surface-container-highest": "#252528",
+                    "inverse-surface": "#fcf8fb",
+                    "surface-dim": "#0e0e10",
+                    "outline-variant": "#48474a",
+                    "on-surface-variant": "#acaaad",
+                    "error": "#ff716c",
+                    "on-tertiary-container": "#60136d",
+                    "tertiary-fixed-dim": "#e48fed",
+                    "surface-container-low": "#131315",
+                    "secondary-fixed-dim": "#b3c1ff",
+                    "on-secondary-container": "#c4ceff",
+                    "tertiary-fixed": "#f39cfb",
+                    "surface-bright": "#2c2c2f",
+                    "on-secondary": "#00185d",
+                    "surface-container-high": "#1f1f22",
+                    "on-primary": "#002c65",
+                    "on-surface": "#fefbfe",
+                    "tertiary": "#fab0ff",
+                    "inverse-primary": "#005bc1",
+                    "surface-container": "#19191c",
+                    "surface-variant": "#252528",
+                    "surface-tint": "#84adff",
+                    "secondary-dim": "#7e98ff",
+                    "tertiary-dim": "#e48fed",
+                    "primary-dim": "#679dff",
+                    "on-secondary-fixed-variant": "#2b48ac",
+                    "error-dim": "#d7383b",
+                    "background": "#0e0e10",
+                    "on-primary-fixed": "#000000"
+            },
+            "borderRadius": {
+                    "DEFAULT": "0.25rem",
+                    "lg": "0.5rem",
+                    "xl": "0.75rem",
+                    "full": "9999px"
+            },
+            "fontFamily": {
+                    "headline": ["Space Grotesk"],
+                    "body": ["Manrope"],
+                    "label": ["Manrope"]
+            }
+          },
+        },
+      }
+    </script>
+<style>
+        .material-symbols-outlined {
+            font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+        }
+        .tonal-transition {
+            background: linear-gradient(to bottom, #0e0e10, transparent);
+        }
+        .glass-card {
+            background: rgba(37, 37, 40, 0.6);
+            backdrop-filter: blur(20px);
+            box-shadow: inset 0 0 4px rgba(132, 173, 255, 0.2);
+        }
+        .battle-shadow {
+            box-shadow: 0 0 30px rgba(26, 115, 232, 0.15);
+        }
+    </style>
+<style>
+    body {
+      min-height: max(884px, 100dvh);
+    }
+  </style>
+  </head>
+<body class="bg-surface text-on-surface font-body min-h-screen">
+<!-- Top AppBar (From Shared JSON Logic) -->
+<header class="fixed top-0 w-full z-50 flex justify-between items-center px-6 h-16 w-full bg-[#0e0e10] tonal-transition">
+<button class="text-gray-500 hover:opacity-80 transition-opacity active:scale-95 duration-150">
+<span class="material-symbols-outlined">arrow_back</span>
+</button>
+<h1 class="font-['Space_Grotesk'] tracking-tight uppercase text-xl font-bold text-[#1A73E8] tracking-widest">BATTLE ARENA</h1>
+<button class="text-gray-500 hover:opacity-80 transition-opacity active:scale-95 duration-150">
+<span class="material-symbols-outlined">settings</span>
+</button>
+</header>
+<main class="pt-16 pb-32 px-4 max-w-md mx-auto h-full flex flex-col">
+<!-- Header Info -->
+<section class="mt-6 mb-8 text-center">
+<h2 class="font-headline text-4xl font-bold tracking-tighter">1 vs 1</h2>
+<div class="flex items-center justify-center gap-2 mt-1">
+<span class="text-on-surface-variant font-label text-sm uppercase tracking-widest">Battle ID: #A4X9</span>
+<button class="text-primary active:scale-90 transition-transform">
+<span class="material-symbols-outlined text-sm">content_copy</span>
+</button>
+</div>
+</section>
+<!-- Battle Setup Centerpiece -->
+<section class="flex items-center justify-between gap-4 mb-10">
+<!-- Left Card: You -->
+<div class="flex-1 glass-card rounded-[2rem] p-6 flex flex-col items-center border border-primary/20 relative battle-shadow">
+<div class="w-20 h-20 rounded-full overflow-hidden mb-3 border-2 border-primary p-1">
+<img alt="User Avatar" class="w-full h-full object-cover rounded-full" data-alt="Close-up portrait of a determined athlete with sweat on forehead, neon blue lighting highlights, cinematic sharp focus" src="https://lh3.googleusercontent.com/aida-public/AB6AXuALoB7mDmmtA5bfGFqCw3-XN0BtkgjOVKZoTOfZt5gVZYI-uKIOGVjLSI0pjK1RpjuK5achRqygp56Qft3oAVRfG_RnwzITFfAJvrbIrQWqUlKBeCCgnpc4XNU42ERTGkb3MWltg98PsoksYVU0GU8TJelXHQLmPXjYgfmQuOSPlHOlBKftejfBkhBVlXWiORr567GAD2N3ecJyOtf3xKqL0fVUMTaogcl6dUwt1NJMLFopatwslJEUUzyUsZizxeqL501AncAUHap7"/>
+</div>
+<span class="font-headline text-sm font-bold tracking-wide">YOU</span>
+<div class="absolute -bottom-2 bg-primary text-on-primary text-[10px] px-3 py-0.5 rounded-full font-extrabold uppercase">Ready</div>
+</div>
+<!-- VS Divider -->
+<div class="flex flex-col items-center">
+<span class="font-headline text-2xl font-black italic text-primary drop-shadow-[0_0_10px_rgba(26,115,232,0.5)]">VS</span>
+</div>
+<!-- Right Card: Placeholder -->
+<div class="flex-1 border-2 border-dashed border-outline-variant rounded-[2rem] p-6 flex flex-col items-center justify-center bg-surface-container-low hover:border-primary/40 transition-colors cursor-pointer group">
+<div class="w-20 h-20 rounded-full border-2 border-dashed border-outline-variant mb-3 flex items-center justify-center group-hover:border-primary/40">
+<span class="material-symbols-outlined text-outline-variant text-4xl group-hover:text-primary/60">person_add</span>
+</div>
+<span class="font-label text-[10px] font-bold text-outline-variant text-center leading-tight uppercase group-hover:text-primary/60">+ Select Friend</span>
+</div>
+</section>
+<!-- Search Section -->
+<section class="space-y-4">
+<div class="relative">
+<span class="material-symbols-outlined absolute left-4 top-1/2 -translate-y-1/2 text-outline">search</span>
+<input class="w-full bg-surface-container-low border-none rounded-2xl py-4 pl-12 pr-4 text-on-surface placeholder:text-on-surface-variant focus:ring-2 focus:ring-primary/20 font-label transition-all" placeholder="Search by name or username" type="text"/>
+</div>
+<!-- Friend List -->
+<div class="space-y-3 mt-4">
+<h3 class="font-label text-xs font-black text-on-surface-variant uppercase tracking-widest px-1">Suggested Rivals</h3>
+<!-- Friend Row 1 -->
+<div class="flex items-center justify-between p-3 rounded-2xl bg-surface-container-high/50 hover:bg-surface-container-high transition-colors group">
+<div class="flex items-center gap-4">
+<div class="w-12 h-12 rounded-full overflow-hidden">
+<img alt="Friend Avatar" class="w-full h-full object-cover" data-alt="Athletic young man in dark gym environment, moody contrast lighting, urban fitness style" src="https://lh3.googleusercontent.com/aida-public/AB6AXuAGtkJizBhIUGMpAkJM27F7hzsnVtjXqjgsBK2bTAuo4AP9yNbyYsEOncc13D1fwzHMRdWOjZ51Cf1XpSeeSySydXeEyIMTTLLbQkqoRC-QfcJq2Ok71jNiEAkfVX3zcxo-Xetiiw7cu4yfE-fiyLmg4LzNLb9_3j4vtkopp5ALPZGZuj3iNlAcE1Nq9DRauBvTveU7p9nb54dqf49ltynVBZwZsc0PJWMdwxGkepYNq5KnPJ4LWGWAaPa9yof3SSJjs2qRXkx_rTlO"/>
+</div>
+<div>
+<p class="font-headline text-base font-bold">Marcus_Bolt</p>
+<p class="font-label text-xs text-on-surface-variant">Rank #42 • 12.4k Avg Steps</p>
+</div>
+</div>
+<button class="w-10 h-10 rounded-xl bg-primary/10 text-primary flex items-center justify-center hover:bg-primary hover:text-on-primary transition-all active:scale-90">
+<span class="material-symbols-outlined">add</span>
+</button>
+</div>
+<!-- Friend Row 2 -->
+<div class="flex items-center justify-between p-3 rounded-2xl bg-surface-container-high/50 hover:bg-surface-container-high transition-colors group">
+<div class="flex items-center gap-4">
+<div class="w-12 h-12 rounded-full overflow-hidden">
+<img alt="Friend Avatar" class="w-full h-full object-cover" data-alt="Woman athlete in colorful activewear, energetic pose, sunlit outdoor track background" src="https://lh3.googleusercontent.com/aida-public/AB6AXuAf_ZLeMU1IDXq7OALb03S6C0nVvaSgf-EfjQjkAA5bAKpe1tnvvdMdVmm-MAQ-yCW1MtCSw_F-43ReRQHYJk4MslIBp9hdiKuX_Kn0pOVaDXWZa3uHOit09B2leV0euYd5KnbKC0UI2DgpdJCJVtGMWKdnKolinBmXYEnX2cslEuzepKJ4EUe-mXWCPYQnDdbD5TzKY147Nw4D4R0pVWM3KpQc75JO8IWJORCkPN6nABVN0fL_RdW2-kMmf1dnBg7W90UQHE58Uqtb"/>
+</div>
+<div>
+<p class="font-headline text-base font-bold">Sarah_Sprint</p>
+<p class="font-label text-xs text-on-surface-variant">Rank #15 • 15.1k Avg Steps</p>
+</div>
+</div>
+<button class="w-10 h-10 rounded-xl bg-primary/10 text-primary flex items-center justify-center hover:bg-primary hover:text-on-primary transition-all active:scale-90">
+<span class="material-symbols-outlined">add</span>
+</button>
+</div>
+<!-- Friend Row 3 -->
+<div class="flex items-center justify-between p-3 rounded-2xl bg-surface-container-high/50 hover:bg-surface-container-high transition-colors group">
+<div class="flex items-center gap-4">
+<div class="w-12 h-12 rounded-full overflow-hidden">
+<img alt="Friend Avatar" class="w-full h-full object-cover" data-alt="Professional athlete profile photo, dark studio background, intense expression, soft glow highlight" src="https://lh3.googleusercontent.com/aida-public/AB6AXuAs2tW76clCMZfSVpCdQ1qX1ms9uchQd6835-UFOoTntYSkmfOX5xTNvOVFUkaNrt64LD4MDW4vFxkLpnPmrimbsFrequmlVMZ-dS9moRJprjDezuLEsS693z6BUhW-EYx31i8Oc_cv-CowUvO4vq3EMTA7ex8V0av_z4FWgjzN1-aUOpvEI_EScqoEJf2ns9939F8nEEMU7ygjd9UtKohMlGNkDplQgR9Uut_IHnrni_vbKYw3wgtKIGc4vmG24O2bx-p4gva_aZqn"/>
+</div>
+<div>
+<p class="font-headline text-base font-bold">Leo.Steps</p>
+<p class="font-label text-xs text-on-surface-variant">Rank #108 • 9.8k Avg Steps</p>
+</div>
+</div>
+<button class="w-10 h-10 rounded-xl bg-primary/10 text-primary flex items-center justify-center hover:bg-primary hover:text-on-primary transition-all active:scale-90">
+<span class="material-symbols-outlined">add</span>
+</button>
+</div>
+</div>
+</section>
+</main>
+<!-- Bottom Action Sheet (Persistent UI) -->
+<div class="fixed bottom-0 left-0 w-full z-50 px-6 pt-6 pb-10 bg-[#0e0e10]/80 backdrop-blur-xl rounded-t-[32px] shadow-[0_-8px_32px_rgba(0,0,0,0.5)]">
+<div class="w-12 h-1.5 bg-outline-variant rounded-full mx-auto mb-6"></div>
+<button class="w-full py-5 rounded-full bg-outline-variant/30 text-on-surface-variant font-headline text-lg font-bold tracking-tight cursor-not-allowed opacity-50" disabled="">
+            Create Battle
+        </button>
+<p class="text-center mt-3 text-on-surface-variant font-label text-[11px] uppercase tracking-wide">
+            Battle starts immediately after opponent accepts
+        </p>
+</div>
+<!-- BottomNavBar (From Shared JSON Logic) -->
+<!-- Hidden on this screen as it is a focused setup task according to the Relevance Check rule -->
+</body></html>

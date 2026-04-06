@@ -1,0 +1,274 @@
+<!DOCTYPE html>
+
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&amp;family=Manrope:wght@300;400;500;600;700;800&amp;family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+      tailwind.config = {
+        darkMode: "class",
+        theme: {
+          extend: {
+            "colors": {
+                    "background": "#0e0e10",
+                    "surface-container-low": "#131315",
+                    "on-secondary-container": "#c4ceff",
+                    "secondary-dim": "#7e98ff",
+                    "on-primary-fixed": "#000000",
+                    "secondary-fixed": "#c6cfff",
+                    "primary-fixed": "#6c9fff",
+                    "error-dim": "#d7383b",
+                    "secondary-container": "#1e3da1",
+                    "tertiary-container": "#f39cfb",
+                    "inverse-on-surface": "#555557",
+                    "primary-fixed-dim": "#5091ff",
+                    "outline": "#767577",
+                    "tertiary-fixed": "#f39cfb",
+                    "on-background": "#fefbfe",
+                    "inverse-primary": "#005bc1",
+                    "on-primary-container": "#00214e",
+                    "surface-container-lowest": "#000000",
+                    "surface-dim": "#0e0e10",
+                    "on-primary": "#002c65",
+                    "on-surface": "#fefbfe",
+                    "on-primary-fixed-variant": "#002a60",
+                    "surface-container-high": "#1f1f22",
+                    "on-error-container": "#ffa8a3",
+                    "on-surface-variant": "#acaaad",
+                    "surface-variant": "#252528",
+                    "secondary": "#7e98ff",
+                    "tertiary-dim": "#e48fed",
+                    "on-tertiary-fixed": "#41004d",
+                    "on-tertiary-fixed-variant": "#6a1f77",
+                    "surface-container-highest": "#252528",
+                    "surface-bright": "#2c2c2f",
+                    "surface": "#0e0e10",
+                    "on-tertiary": "#6b1f77",
+                    "on-secondary": "#00185d",
+                    "primary-dim": "#679dff",
+                    "surface-container": "#19191c",
+                    "on-tertiary-container": "#60136d",
+                    "on-secondary-fixed": "#00298c",
+                    "outline-variant": "#48474a",
+                    "inverse-surface": "#fcf8fb",
+                    "secondary-fixed-dim": "#b3c1ff",
+                    "tertiary-fixed-dim": "#e48fed",
+                    "surface-tint": "#84adff",
+                    "primary-container": "#6c9fff",
+                    "primary": "#84adff",
+                    "error-container": "#9f0519",
+                    "tertiary": "#fab0ff",
+                    "on-secondary-fixed-variant": "#2b48ac",
+                    "error": "#ff716c",
+                    "on-error": "#490006"
+            },
+            "borderRadius": {
+                    "DEFAULT": "0.25rem",
+                    "lg": "0.5rem",
+                    "xl": "0.75rem",
+                    "full": "9999px"
+            },
+            "fontFamily": {
+                    "headline": ["Space Grotesk"],
+                    "body": ["Manrope"],
+                    "label": ["Manrope"]
+            }
+          },
+        },
+      }
+    </script>
+<style>
+        .material-symbols-outlined {
+            font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+        }
+        .glass-card {
+            background: rgba(37, 37, 40, 0.6);
+            backdrop-filter: blur(20px);
+            box-shadow: inset 0 0 4px rgba(132, 173, 255, 0.1);
+        }
+        .progress-spark::after {
+            content: '';
+            position: absolute;
+            right: 0;
+            top: 50%;
+            transform: translateY(-50%);
+            width: 8px;
+            height: 8px;
+            background: white;
+            border-radius: 50%;
+            box-shadow: 0 0 10px 2px rgba(255, 255, 255, 0.8);
+        }
+    </style>
+<style>
+    body {
+      min-height: max(884px, 100dvh);
+    }
+  </style>
+  </head>
+<body class="bg-background text-on-background font-body min-h-screen pb-32">
+<!-- TopAppBar -->
+<header class="fixed top-0 w-full z-50 bg-gradient-to-b from-[#0e0e10] to-transparent flex justify-between items-center px-6 h-16 w-full">
+<div class="flex items-center gap-3">
+<h1 class="text-xl font-bold text-[#84adff] font-headline tracking-tight">Missions</h1>
+</div>
+<div class="flex items-center gap-4">
+<div class="flex items-center gap-2 bg-[#1A73E8]/20 border border-[#1A73E8]/30 px-3 py-1 rounded-full">
+<span class="text-[10px] font-bold text-[#84adff] font-label uppercase tracking-wider">300 XP today</span>
+</div>
+<div class="flex items-center gap-1.5 bg-surface-container-high px-2 py-1 rounded-lg">
+<span class="material-symbols-outlined text-error-dim text-lg" style="font-variation-settings: 'FILL' 1;">local_fire_department</span>
+<span class="font-headline font-bold text-on-surface">9</span>
+</div>
+<img alt="User profile avatar" class="w-8 h-8 rounded-full border border-outline-variant" data-alt="close-up professional portrait of a modern athlete with sharp cinematic lighting and dark background" src="https://lh3.googleusercontent.com/aida-public/AB6AXuBtxfv2hdGfu3Vlcc4yd6AOks9YyG4BG4UkkP44PcLyIVfignLSbKi2tR0NWw4OA0C5zVgtUhxz4iflb3yxv989POA2iVAsxoH2a2-olRoJ6vJ3FxauXuvBTcu424hjAxi3UiOg1892u1wQT1lfBtdo9v0GYw68Up4FDESj6D4dB3o7jqNMRtItMwFFsX8TsiDKUgS9NULUK4FYjTtSEsB42ErRW1drPOx4nXaAy8isrdfQpskZtzWMYkW2Uzn7hjpMQXOVzTZMS4yB"/>
+</div>
+</header>
+<main class="mt-20 px-6">
+<!-- Sub-header -->
+<div class="mb-8">
+<p class="text-on-surface-variant font-label text-sm flex items-center gap-2">
+<span class="material-symbols-outlined text-sm">schedule</span>
+                Daily missions reset in 4h 22m
+            </p>
+</div>
+<!-- Section 1: Daily Missions -->
+<section class="mb-12">
+<div class="flex items-center justify-between mb-4">
+<h2 class="text-2xl font-headline font-bold tracking-tight">Daily</h2>
+</div>
+<div class="flex flex-col gap-4">
+<!-- Mission 1: In Progress -->
+<div class="glass-card rounded-xl p-5 border-l-4 border-primary shadow-[0_0_20px_rgba(132,173,255,0.05)] relative overflow-hidden group hover:opacity-80 transition-opacity">
+<div class="flex justify-between items-start mb-3">
+<div>
+<h3 class="font-headline font-bold text-lg">Walk 5,000 Steps</h3>
+<p class="text-on-surface-variant text-sm">Hit your daily step target</p>
+</div>
+<div class="text-right">
+<span class="text-primary font-headline font-bold">+100 XP</span>
+<div class="mt-1 flex items-center gap-1 text-[10px] uppercase tracking-widest text-secondary-dim font-bold">
+<span class="w-2 h-2 rounded-full bg-secondary-dim animate-pulse"></span>
+                                In Progress
+                            </div>
+</div>
+</div>
+<div class="mt-4">
+<div class="flex justify-between text-xs mb-1.5 font-medium">
+<span class="text-on-surface-variant">3,200 / 5,000 steps</span>
+<span class="text-primary">64%</span>
+</div>
+<div class="h-2 w-full bg-surface-container-highest rounded-full overflow-hidden">
+<div class="h-full bg-gradient-to-r from-primary to-secondary-dim w-[64%] rounded-full relative progress-spark"></div>
+</div>
+</div>
+</div>
+<!-- Mission 2: Locked -->
+<div class="bg-surface-container-low rounded-xl p-5 opacity-60 border border-outline-variant/10">
+<div class="flex justify-between items-start">
+<div>
+<h3 class="font-headline font-bold text-lg text-on-surface-variant">Win a Battle</h3>
+<p class="text-on-surface-variant/60 text-sm">Defeat an opponent</p>
+</div>
+<div class="text-right">
+<span class="text-on-surface-variant font-headline font-bold">+150 XP</span>
+<div class="mt-1 flex items-center gap-1 text-[10px] uppercase tracking-widest text-on-surface-variant font-bold">
+<span class="material-symbols-outlined text-[12px]">lock</span>
+                                Locked
+                            </div>
+</div>
+</div>
+<div class="mt-4">
+<div class="h-2 w-full bg-surface-container-highest rounded-full">
+<div class="h-full bg-outline-variant w-0 rounded-full"></div>
+</div>
+</div>
+</div>
+<!-- Mission 3: In Progress 2 -->
+<div class="glass-card rounded-xl p-5 border-l-4 border-primary shadow-[0_0_20px_rgba(132,173,255,0.05)] group hover:opacity-80 transition-opacity">
+<div class="flex justify-between items-start">
+<div>
+<h3 class="font-headline font-bold text-lg">Keep Streak Alive</h3>
+<p class="text-on-surface-variant text-sm">Log steps today</p>
+</div>
+<div class="text-right">
+<span class="text-primary font-headline font-bold">+50 XP</span>
+<div class="mt-1 flex items-center gap-1 text-[10px] uppercase tracking-widest text-secondary-dim font-bold">
+<span class="w-2 h-2 rounded-full bg-secondary-dim animate-pulse"></span>
+                                In Progress
+                            </div>
+</div>
+</div>
+</div>
+</div>
+</section>
+<!-- Section 2: Weekly Challenges -->
+<section>
+<div class="flex items-baseline gap-2 mb-6">
+<h2 class="text-2xl font-headline font-bold tracking-tight">Weekly</h2>
+<span class="text-xs text-on-surface-variant font-label font-medium">Resets Sunday</span>
+</div>
+<div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+<!-- Challenge 1 -->
+<div class="surface-variant rounded-2xl p-6 relative overflow-hidden flex flex-col justify-between min-h-[180px] border border-white/5">
+<div class="absolute top-0 right-0 p-4 opacity-10">
+<span class="material-symbols-outlined text-6xl" style="font-variation-settings: 'wght' 700;">footprint</span>
+</div>
+<div>
+<span class="bg-tertiary/10 text-tertiary text-[10px] font-bold uppercase tracking-tighter px-2 py-0.5 rounded-md mb-2 inline-block">Elite Challenge</span>
+<h3 class="text-xl font-headline font-bold leading-tight">Walk 50,000 Steps</h3>
+<p class="text-tertiary font-headline font-bold mt-1">+500 XP</p>
+</div>
+<div class="mt-8">
+<div class="flex justify-between text-xs mb-2">
+<span class="text-on-surface-variant font-medium">32,000 / 50,000</span>
+<span class="text-on-surface font-bold">64%</span>
+</div>
+<div class="h-3 w-full bg-surface-container-highest rounded-full overflow-hidden">
+<div class="h-full bg-gradient-to-r from-tertiary to-tertiary-container w-[64%] rounded-full"></div>
+</div>
+</div>
+</div>
+<!-- Challenge 2 -->
+<div class="surface-variant rounded-2xl p-6 relative overflow-hidden flex flex-col justify-between min-h-[180px] border border-white/5">
+<div class="absolute top-0 right-0 p-4 opacity-10">
+<span class="material-symbols-outlined text-6xl" style="font-variation-settings: 'wght' 700;">swords</span>
+</div>
+<div>
+<span class="bg-primary/10 text-primary text-[10px] font-bold uppercase tracking-tighter px-2 py-0.5 rounded-md mb-2 inline-block">Battle Master</span>
+<h3 class="text-xl font-headline font-bold leading-tight">Win 3 Battles</h3>
+<p class="text-primary font-headline font-bold mt-1">+400 XP</p>
+</div>
+<div class="mt-8">
+<div class="flex justify-between text-xs mb-2">
+<span class="text-on-surface-variant font-medium">1 / 3 battles</span>
+<span class="text-on-surface font-bold">33%</span>
+</div>
+<div class="h-3 w-full bg-surface-container-highest rounded-full overflow-hidden">
+<div class="h-full bg-gradient-to-r from-primary to-primary-container w-[33%] rounded-full"></div>
+</div>
+</div>
+</div>
+</div>
+</section>
+</main>
+<!-- BottomNavBar -->
+<nav class="fixed bottom-0 left-0 w-full flex justify-around items-center px-4 pb-6 pt-2 bg-[#0e0e10]/80 backdrop-blur-xl border-t border-white/5 shadow-[0_-4px_20px_rgba(26,115,232,0.1)] z-50 rounded-t-2xl">
+<a class="flex flex-col items-center justify-center text-gray-500 py-1 px-3 hover:text-white transition-colors active:scale-90 duration-200" href="#">
+<span class="material-symbols-outlined">sports_kabaddi</span>
+<span class="font-['Manrope'] text-[10px] uppercase tracking-widest mt-1">Arena</span>
+</a>
+<a class="flex flex-col items-center justify-center text-gray-500 py-1 px-3 hover:text-white transition-colors active:scale-90 duration-200" href="#">
+<span class="material-symbols-outlined">swords</span>
+<span class="font-['Manrope'] text-[10px] uppercase tracking-widest mt-1">Battles</span>
+</a>
+<a class="flex flex-col items-center justify-center text-[#84adff] bg-[#1A73E8]/10 rounded-xl py-1 px-3 shadow-[0_0_15px_rgba(132,173,255,0.3)] active:scale-90 duration-200" href="#">
+<span class="material-symbols-outlined" style="font-variation-settings: 'FILL' 1;">military_tech</span>
+<span class="font-['Manrope'] text-[10px] uppercase tracking-widest mt-1">Missions</span>
+</a>
+<a class="flex flex-col items-center justify-center text-gray-500 py-1 px-3 hover:text-white transition-colors active:scale-90 duration-200" href="#">
+<span class="material-symbols-outlined">person</span>
+<span class="font-['Manrope'] text-[10px] uppercase tracking-widest mt-1">Profile</span>
+</a>
+</nav>
+</body></html>

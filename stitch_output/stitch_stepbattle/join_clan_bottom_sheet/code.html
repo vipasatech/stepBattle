@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&amp;family=Manrope:wght@300;400;500;600;700&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<script id="tailwind-config">
+      tailwind.config = {
+        darkMode: "class",
+        theme: {
+          extend: {
+            "colors": {
+                    "inverse-on-surface": "#555557",
+                    "on-tertiary-fixed-variant": "#6a1f77",
+                    "on-secondary": "#00185d",
+                    "primary-fixed-dim": "#5091ff",
+                    "on-tertiary-fixed": "#41004d",
+                    "tertiary-fixed": "#f39cfb",
+                    "on-secondary-container": "#c4ceff",
+                    "surface-bright": "#2c2c2f",
+                    "secondary-container": "#1e3da1",
+                    "on-secondary-fixed-variant": "#2b48ac",
+                    "surface-container-lowest": "#000000",
+                    "on-surface-variant": "#acaaad",
+                    "on-primary-fixed-variant": "#002a60",
+                    "on-surface": "#fefbfe",
+                    "error": "#ff716c",
+                    "background": "#0e0e10",
+                    "error-dim": "#d7383b",
+                    "secondary": "#7e98ff",
+                    "surface-container": "#19191c",
+                    "secondary-fixed": "#c6cfff",
+                    "surface-container-high": "#1f1f22",
+                    "error-container": "#9f0519",
+                    "primary-dim": "#679dff",
+                    "secondary-fixed-dim": "#b3c1ff",
+                    "surface-container-highest": "#252528",
+                    "on-primary": "#002c65",
+                    "surface-variant": "#252528",
+                    "tertiary-fixed-dim": "#e48fed",
+                    "on-tertiary": "#6b1f77",
+                    "inverse-primary": "#005bc1",
+                    "surface-container-low": "#131315",
+                    "surface-tint": "#84adff",
+                    "on-primary-container": "#00214e",
+                    "primary-fixed": "#6c9fff",
+                    "surface-dim": "#0e0e10",
+                    "surface": "#0e0e10",
+                    "outline": "#767577",
+                    "tertiary-dim": "#e48fed",
+                    "secondary-dim": "#7e98ff",
+                    "on-error-container": "#ffa8a3",
+                    "tertiary-container": "#f39cfb",
+                    "primary-container": "#6c9fff",
+                    "tertiary": "#fab0ff",
+                    "on-tertiary-container": "#60136d",
+                    "primary": "#84adff",
+                    "on-background": "#fefbfe",
+                    "inverse-surface": "#fcf8fb",
+                    "on-secondary-fixed": "#00298c",
+                    "outline-variant": "#48474a",
+                    "on-error": "#490006",
+                    "on-primary-fixed": "#000000"
+            },
+            "borderRadius": {
+                    "DEFAULT": "0.25rem",
+                    "lg": "0.5rem",
+                    "xl": "0.75rem",
+                    "full": "9999px"
+            },
+            "fontFamily": {
+                    "headline": ["Space Grotesk"],
+                    "body": ["Manrope"],
+                    "label": ["Manrope"]
+            }
+          },
+        },
+      }
+    </script>
+<style>
+        .glass-card {
+            background: rgba(37, 37, 40, 0.6);
+            backdrop-filter: blur(20px);
+            box-shadow: inset 0 0 4px rgba(132, 173, 255, 0.2);
+        }
+        .material-symbols-outlined {
+            font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+        }
+        body { font-family: 'Manrope', sans-serif; background-color: #0e0e10; }
+        h1, h2, h3 { font-family: 'Space Grotesk', sans-serif; }
+    </style>
+<style>
+    body {
+      min-height: max(884px, 100dvh);
+    }
+  </style>
+  </head>
+<body class="text-on-surface antialiased overflow-hidden">
+<!-- Background Layer (Simulating SCREEN_18) -->
+<main class="fixed inset-0 z-0 brightness-50 blur-md grayscale-[20%] overflow-hidden">
+<header class="fixed top-0 w-full z-50 flex items-center justify-between px-6 h-16 w-full bg-[#0e0e10]">
+<div class="flex items-center gap-4">
+<span class="material-symbols-outlined text-[#84adff]">arrow_back</span>
+<span class="text-xl font-bold text-[#84adff] tracking-widest font-['Space_Grotesk']">FIND CLAN</span>
+</div>
+<span class="material-symbols-outlined text-[#84adff]">search</span>
+</header>
+<section class="p-6 mt-20 space-y-8">
+<div class="grid grid-cols-2 gap-4">
+<div class="h-40 rounded-xl bg-surface-container-high animate-pulse"></div>
+<div class="h-40 rounded-xl bg-surface-container-high animate-pulse"></div>
+</div>
+<div class="h-64 rounded-2xl bg-surface-container animate-pulse"></div>
+<div class="h-64 rounded-2xl bg-surface-container animate-pulse"></div>
+</section>
+<!-- Mock BottomNavBar -->
+<nav class="fixed bottom-0 left-0 w-full z-50 flex justify-around items-center px-4 py-3 pb-6 bg-[#0e0e10]/95 backdrop-blur-xl border-t border-white/5">
+<div class="flex flex-col items-center justify-center text-gray-500 p-3">
+<span class="material-symbols-outlined">sports_score</span>
+</div>
+<div class="flex flex-col items-center justify-center bg-[#1A73E8]/20 text-[#84adff] rounded-xl p-3 shadow-[inset_0_0_10px_rgba(132,173,255,0.2)]">
+<span class="material-symbols-outlined">groups</span>
+</div>
+<div class="flex flex-col items-center justify-center text-gray-500 p-3">
+<span class="material-symbols-outlined">leaderboard</span>
+</div>
+<div class="flex flex-col items-center justify-center text-gray-500 p-3">
+<span class="material-symbols-outlined">person</span>
+</div>
+</nav>
+</main>
+<!-- Overlay Dimmer -->
+<div class="fixed inset-0 bg-black/60 z-10 backdrop-blur-[2px]"></div>
+<!-- Bottom Sheet -->
+<div class="fixed bottom-0 left-0 right-0 z-20 bg-[#1a1a1c] rounded-t-[28px] max-h-[795px] flex flex-col shadow-2xl">
+<!-- Handle -->
+<div class="flex justify-center py-3">
+<div class="w-10 h-1.5 rounded-full bg-outline-variant/50"></div>
+</div>
+<div class="px-6 pb-8 space-y-6 overflow-y-auto">
+<!-- Header -->
+<div class="space-y-1">
+<h1 class="text-3xl font-bold tracking-tight text-on-surface">Join a Clan</h1>
+<p class="text-on-surface-variant font-medium">Enter a Clan ID or search by name</p>
+</div>
+<!-- Search Section -->
+<div class="relative group">
+<div class="flex items-center bg-surface-container-low rounded-xl p-1 pl-4 ring-1 ring-white/5 focus-within:ring-primary/40 transition-all duration-300">
+<span class="material-symbols-outlined text-outline">search</span>
+<input class="bg-transparent border-none text-on-surface focus:ring-0 w-full px-3 py-3 placeholder:text-outline font-body text-sm" placeholder="Enter Clan ID (e.g. #CL7X9) or clan name" type="text"/>
+<button class="bg-[#1A73E8] p-2.5 rounded-lg flex items-center justify-center text-white active:scale-95 transition-transform">
+<span class="material-symbols-outlined text-lg">arrow_forward</span>
+</button>
+</div>
+</div>
+<!-- Search Results List -->
+<div class="space-y-3">
+<!-- Result 1 -->
+<div class="group flex items-center justify-between p-4 bg-surface-container-low rounded-xl border-l-4 border-error hover:bg-surface-container-high transition-colors">
+<div class="flex items-center gap-4">
+<div class="w-12 h-12 flex items-center justify-center rounded-lg bg-error/10 text-error">
+<span class="material-symbols-outlined" style="font-variation-settings: 'FILL' 1;">shield</span>
+</div>
+<div class="flex flex-col">
+<span class="font-bold text-on-surface font-headline tracking-wide">Night Runners</span>
+<span class="text-xs text-on-surface-variant font-body uppercase tracking-wider">8 / 10 members | 12,400 XP</span>
+</div>
+</div>
+<button class="bg-[#1A73E8] text-on-primary-fixed font-bold text-xs px-5 py-2 rounded-full active:scale-95 transition-transform">Join</button>
+</div>
+<!-- Result 2 -->
+<div class="group flex items-center justify-between p-4 bg-surface-container-low rounded-xl border-l-4 border-emerald-500 hover:bg-surface-container-high transition-colors">
+<div class="flex items-center gap-4">
+<div class="w-12 h-12 flex items-center justify-center rounded-lg bg-emerald-500/10 text-emerald-500">
+<span class="material-symbols-outlined" style="font-variation-settings: 'FILL' 1;">shield</span>
+</div>
+<div class="flex flex-col">
+<span class="font-bold text-on-surface font-headline tracking-wide">Alpha Squad</span>
+<span class="text-xs text-on-surface-variant font-body uppercase tracking-wider">5 / 10 members | 8,200 XP</span>
+</div>
+</div>
+<button class="bg-[#1A73E8] text-on-primary-fixed font-bold text-xs px-5 py-2 rounded-full active:scale-95 transition-transform">Join</button>
+</div>
+<!-- Result 3 -->
+<div class="group flex items-center justify-between p-4 bg-surface-container-low rounded-xl border-l-4 border-tertiary hover:bg-surface-container-high transition-colors">
+<div class="flex items-center gap-4">
+<div class="w-12 h-12 flex items-center justify-center rounded-lg bg-tertiary/10 text-tertiary">
+<span class="material-symbols-outlined" style="font-variation-settings: 'FILL' 1;">shield</span>
+</div>
+<div class="flex flex-col">
+<span class="font-bold text-on-surface font-headline tracking-wide">Iron Walkers</span>
+<span class="text-xs text-on-surface-variant font-body uppercase tracking-wider">9 / 10 members | 15,100 XP</span>
+</div>
+</div>
+<button class="bg-[#1A73E8] text-on-primary-fixed font-bold text-xs px-5 py-2 rounded-full active:scale-95 transition-transform">Join</button>
+</div>
+</div>
+<!-- Footer Action -->
+<div class="pt-2 pb-4">
+<button class="w-full py-4 text-center border border-outline-variant/30 rounded-xl text-on-surface font-bold font-body uppercase tracking-widest hover:bg-white/5 active:scale-98 transition-all">
+                    Cancel
+                </button>
+</div>
+</div>
+</div>
+</body></html>

@@ -1,0 +1,284 @@
+<!DOCTYPE html>
+
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>StepBattle | The Digital Arena</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&amp;family=Manrope:wght@300;400;500;600;700;800&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+        tailwind.config = {
+          darkMode: "class",
+          theme: {
+            extend: {
+              "colors": {
+                      "on-tertiary-fixed": "#41004d",
+                      "on-secondary-container": "#c4ceff",
+                      "tertiary": "#fab0ff",
+                      "tertiary-fixed": "#f39cfb",
+                      "on-primary": "#002c65",
+                      "on-error-container": "#ffa8a3",
+                      "background": "#0e0e10",
+                      "surface-container-low": "#131315",
+                      "primary-fixed": "#6c9fff",
+                      "error-dim": "#d7383b",
+                      "on-secondary": "#00185d",
+                      "on-secondary-fixed": "#00298c",
+                      "primary-dim": "#679dff",
+                      "secondary-fixed": "#c6cfff",
+                      "on-surface-variant": "#acaaad",
+                      "surface-container-highest": "#252528",
+                      "on-error": "#490006",
+                      "on-tertiary-container": "#60136d",
+                      "primary": "#84adff",
+                      "on-tertiary-fixed-variant": "#6a1f77",
+                      "surface-container-high": "#1f1f22",
+                      "secondary-dim": "#7e98ff",
+                      "tertiary-fixed-dim": "#e48fed",
+                      "on-tertiary": "#6b1f77",
+                      "on-primary-container": "#00214e",
+                      "inverse-surface": "#fcf8fb",
+                      "primary-fixed-dim": "#5091ff",
+                      "on-secondary-fixed-variant": "#2b48ac",
+                      "secondary-container": "#1e3da1",
+                      "inverse-primary": "#005bc1",
+                      "surface-tint": "#84adff",
+                      "error-container": "#9f0519",
+                      "outline-variant": "#48474a",
+                      "on-primary-fixed-variant": "#002a60",
+                      "error": "#ff716c",
+                      "on-primary-fixed": "#000000",
+                      "outline": "#767577",
+                      "surface": "#0e0e10",
+                      "secondary-fixed-dim": "#b3c1ff",
+                      "secondary": "#7e98ff",
+                      "surface-container-lowest": "#000000",
+                      "surface-bright": "#2c2c2f",
+                      "surface-container": "#19191c",
+                      "surface-variant": "#252528",
+                      "on-background": "#fefbfe",
+                      "primary-container": "#6c9fff",
+                      "tertiary-dim": "#e48fed",
+                      "tertiary-container": "#f39cfb",
+                      "inverse-on-surface": "#555557",
+                      "on-surface": "#fefbfe",
+                      "surface-dim": "#0e0e10"
+              },
+              "borderRadius": {
+                      "DEFAULT": "0.25rem",
+                      "lg": "0.5rem",
+                      "xl": "0.75rem",
+                      "full": "9999px"
+              },
+              "fontFamily": {
+                      "headline": ["Space Grotesk"],
+                      "body": ["Manrope"],
+                      "label": ["Manrope"]
+              }
+            },
+          },
+        }
+      </script>
+<style>
+        .material-symbols-outlined {
+            font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+        }
+        .glass-card {
+            background: rgba(37, 37, 40, 0.6);
+            backdrop-filter: blur(20px);
+            box-shadow: inset 0 0 4px 0 rgba(132, 173, 255, 0.1);
+        }
+        .glow-primary {
+            box-shadow: 0 0 20px rgba(26, 115, 232, 0.2);
+        }
+      </style>
+<style>
+    body {
+      min-height: max(884px, 100dvh);
+    }
+  </style>
+  </head>
+<body class="bg-background text-on-surface font-body selection:bg-primary selection:text-on-primary-container">
+<!-- TopAppBar -->
+<header class="bg-[#0e0e10] text-[#1A73E8] docked full-width top-0 z-50 flex justify-between items-center w-full px-6 py-4">
+<div class="flex items-center gap-2">
+<span class="material-symbols-outlined text-[#1A73E8]" data-icon="bolt">bolt</span>
+<h1 class="text-2xl font-black text-[#1A73E8] tracking-tight font-headline">StepBattle</h1>
+</div>
+<div class="flex items-center gap-4">
+<div class="flex items-center gap-1.5 bg-surface-container-high px-3 py-1.5 rounded-full">
+<span class="material-symbols-outlined text-error" data-icon="local_fire_department" style="font-variation-settings: 'FILL' 1;">local_fire_department</span>
+<span class="text-on-surface font-bold font-headline">7</span>
+</div>
+<img alt="User profile avatar" class="w-10 h-10 rounded-full border-2 border-[#1A73E8] object-cover hover:opacity-80 transition-opacity" data-alt="Close-up portrait of a determined young male athlete with short hair and athletic wear in cool studio lighting" src="https://lh3.googleusercontent.com/aida-public/AB6AXuA6PkFkhOdnapQIyOjjRBdhuf--euj9A9eYk_-G8wgOcHT7v8ybGtpNVC4iJ5l09xcy9ceaFVN-WXk4T4Q0_Glmrfr4h0fRgIBu0l_5v6qaRcyMMez0y-LVmC8zDGRIPxr26m4SGBgAeqGoZnnXLu1s7R3DCKHT055iy8bWwaamKgLWCwYEdXZr5kR2VW5WxycaK0tppSRAMfIMyNGXwoPLksfuX2i9Cdf-hQM7rU9Y5VZueWKbwKCuw_FF8m0x1H0d1PCC5_xW5EtX"/>
+</div>
+</header>
+<main class="px-6 pt-4 pb-32 space-y-8 max-w-2xl mx-auto">
+<!-- Overview Card -->
+<section class="relative">
+<div class="glass-card rounded-[2rem] p-8 flex flex-col items-center overflow-hidden border border-white/5 glow-primary">
+<div class="absolute top-6 left-6 bg-primary-container/20 text-primary px-3 py-1 rounded-full text-xs font-bold font-label tracking-wider uppercase">
+                    Level 8
+                </div>
+<div class="mt-4 flex flex-col items-center">
+<span class="text-[5rem] font-bold font-headline leading-none text-on-surface tracking-tighter">6,000</span>
+<span class="text-on-surface-variant font-label font-semibold uppercase tracking-[0.2em] text-sm mt-2">Steps Today</span>
+</div>
+<div class="mt-4 flex items-center gap-1.5 text-secondary font-bold font-label">
+<span class="material-symbols-outlined text-sm" data-icon="trending_up">trending_up</span>
+<span>+340 XP from Yesterday</span>
+</div>
+<!-- Battle Gauge (Progress Bar) -->
+<div class="w-full mt-10 space-y-3">
+<div class="flex justify-between text-xs font-bold font-label text-on-surface-variant tracking-wide">
+<span>LVL 9</span>
+<span>LVL 10</span>
+</div>
+<div class="h-3 w-full bg-surface-container-highest rounded-full overflow-hidden flex items-center">
+<div class="h-full bg-gradient-to-r from-[#1A73E8] to-primary w-[65%] relative">
+<div class="absolute right-0 top-0 h-full w-2 bg-white blur-[4px] opacity-60"></div>
+</div>
+</div>
+<p class="text-center text-xs font-medium text-on-surface-variant italic">2,400 steps to go</p>
+</div>
+</div>
+</section>
+<!-- Stat Pills -->
+<section class="grid grid-cols-3 gap-3">
+<div class="bg-surface-container-low p-4 rounded-2xl flex flex-col items-center gap-1">
+<span class="text-primary font-black font-headline text-lg italic">400 kcal</span>
+<span class="text-[10px] uppercase font-bold text-on-surface-variant tracking-widest font-label">Burnt</span>
+</div>
+<div class="bg-surface-container-low p-4 rounded-2xl flex flex-col items-center gap-1 border-b-2 border-primary/30">
+<span class="text-primary font-black font-headline text-lg italic">#3</span>
+<span class="text-[10px] uppercase font-bold text-on-surface-variant tracking-widest font-label">Rank</span>
+</div>
+<div class="bg-surface-container-low p-4 rounded-2xl flex flex-col items-center gap-1">
+<span class="text-primary font-black font-headline text-lg italic">2/3</span>
+<span class="text-[10px] uppercase font-bold text-on-surface-variant tracking-widest font-label">Missions</span>
+</div>
+</section>
+<!-- Active Battle Section -->
+<section class="space-y-4">
+<div class="flex items-center justify-between">
+<h2 class="text-xl font-bold font-headline text-on-surface tracking-tight">Active Battle</h2>
+<span class="bg-secondary/10 text-secondary text-[10px] font-black px-2.5 py-1 rounded-full uppercase tracking-tighter flex items-center gap-1">
+<span class="w-1.5 h-1.5 bg-secondary rounded-full animate-pulse"></span>
+                    Live
+                </span>
+</div>
+<div class="bg-surface-container-high rounded-3xl p-6 border-l-4 border-primary">
+<div class="flex items-center justify-between mb-4">
+<div class="flex items-center gap-4">
+<div class="relative">
+<img alt="Opponent avatar" class="w-14 h-14 rounded-full border-2 border-surface-container-highest" data-alt="Portrait of a young smiling athletic woman with hair tied back in soft natural outdoor lighting" src="https://lh3.googleusercontent.com/aida-public/AB6AXuAQYQyPA7M8ZlapQhRfP2bri47Fgyp5XlIKJrDrCfA3Y7O29mFqAZSHWfifsnIxpJW4c6V8Udx4CfTsXMnsdlbfDlhSzPDCDvp9Ht257MiG6Vwfcxc7aOZK3AQWxL3wjblHYZnOKwMd0sKoDg14gpkdKThGHTbkEP-A-jbqOUrjXWyNMtagqj1ZYOEQvmqrqzGwooVUhyKNZTQto9dxO7BoezWFXkjAzWXAJ0HzeebRrHNIE9ACBOsA2xYfdUuG8LUlf_SMFgn227bs"/>
+<span class="absolute -bottom-1 -right-1 text-lg">⚔️</span>
+</div>
+<div>
+<h3 class="font-bold text-lg font-headline text-on-surface">You vs Ananya</h3>
+<p class="text-sm text-on-surface-variant font-medium">Day 1 of 3</p>
+</div>
+</div>
+</div>
+<div class="flex items-center justify-between">
+<p class="text-primary font-bold text-sm italic">You're leading by 1,200 steps</p>
+<button class="bg-primary text-on-primary px-4 py-1.5 rounded-full text-xs font-black uppercase tracking-wider hover:opacity-80 transition-opacity">View Arena</button>
+</div>
+</div>
+</section>
+<!-- Daily Missions Section -->
+<section class="space-y-4">
+<div class="flex items-center justify-between">
+<h2 class="text-xl font-bold font-headline text-on-surface tracking-tight">Daily Missions</h2>
+<span class="material-symbols-outlined text-on-surface-variant" data-icon="chevron_right">chevron_right</span>
+</div>
+<div class="space-y-3">
+<!-- Mission 1 -->
+<div class="bg-surface-container-low p-5 rounded-2xl flex items-center gap-4">
+<div class="w-12 h-12 rounded-xl bg-primary/10 flex items-center justify-center text-primary">
+<span class="material-symbols-outlined" data-icon="directions_walk">directions_walk</span>
+</div>
+<div class="flex-1 space-y-2">
+<div class="flex justify-between">
+<h4 class="font-bold text-on-surface text-sm">Walk 8,000 Steps</h4>
+<span class="text-secondary text-xs font-black italic">+100 XP</span>
+</div>
+<div class="h-1.5 w-full bg-surface-container-highest rounded-full overflow-hidden">
+<div class="h-full bg-primary w-[75%] rounded-full"></div>
+</div>
+</div>
+</div>
+<!-- Mission 2 -->
+<div class="bg-surface-container-low p-5 rounded-2xl flex items-center gap-4">
+<div class="w-12 h-12 rounded-xl bg-tertiary/10 flex items-center justify-center text-tertiary">
+<span class="material-symbols-outlined" data-icon="local_fire_department">local_fire_department</span>
+</div>
+<div class="flex-1 space-y-2">
+<div class="flex justify-between">
+<h4 class="font-bold text-on-surface text-sm">Burn 500 Calories</h4>
+<span class="text-secondary text-xs font-black italic">+75 XP</span>
+</div>
+<div class="h-1.5 w-full bg-surface-container-highest rounded-full overflow-hidden">
+<div class="h-full bg-tertiary w-[80%] rounded-full"></div>
+</div>
+</div>
+</div>
+<!-- Mission 3 (Locked) -->
+<div class="bg-surface-container-low p-5 rounded-2xl flex items-center gap-4 opacity-40">
+<div class="w-12 h-12 rounded-xl bg-on-surface-variant/10 flex items-center justify-center text-on-surface-variant">
+<span class="material-symbols-outlined" data-icon="lock">lock</span>
+</div>
+<div class="flex-1 space-y-2">
+<div class="flex justify-between">
+<h4 class="font-bold text-on-surface text-sm">Complete a Battle</h4>
+<span class="text-on-surface-variant text-xs font-black italic">+150 XP</span>
+</div>
+<div class="h-1.5 w-full bg-surface-container-highest rounded-full overflow-hidden">
+<div class="h-full bg-on-surface-variant w-0 rounded-full"></div>
+</div>
+</div>
+</div>
+</div>
+</section>
+<!-- Map Section -->
+<section class="space-y-4">
+<h2 class="text-xl font-bold font-headline text-on-surface tracking-tight">Who's Leading Near You</h2>
+<div class="relative group cursor-pointer h-48 w-full rounded-3xl overflow-hidden">
+<img class="w-full h-full object-cover grayscale opacity-50 transition-transform duration-700 group-hover:scale-110" data-alt="Abstract dark stylized map of a city with glowing blue neon lines for streets and pulsing data points" data-location="San Francisco" src="https://lh3.googleusercontent.com/aida-public/AB6AXuAuIIzpZfct8VIZnCyjyc_Mvwy5s9LWmH_PXxRRxkmxS_eeexGwh8bJQUCa0htuSqNbyIinLp8XSN0dlUcL3VnqzXE_BBUlrn5L-YqTjyVE-b2RcoqM4hVlqArDBmD2k45qJ8g2yBFLOfDr0MiDRrTY3l0ciLWd1I2hKwSgvbLNAQ7wilCRc_42Q_gUcG3I94YfRgwLL4vqJmiHjMJ-O5Ai4xJwb0xsYkowZ2wH4QIP_1w1T8dUAneCzazVjKvrbllHisXu4GoQpD9U"/>
+<!-- Map Overlays (Avatar Pins) -->
+<div class="absolute top-1/4 left-1/3 w-8 h-8 rounded-full border-2 border-primary overflow-hidden shadow-lg shadow-primary/40">
+<img alt="Nearby user" class="w-full h-full object-cover" data-alt="Portrait of a young man" src="https://lh3.googleusercontent.com/aida-public/AB6AXuCZELQR_uLSY-2yHmOrO7A9O2uJGDpE50rwNQcqgF4e7J0MManKK3UAiNKfnT6rY4CKOWQPOr-ZeQcEC0Hyub6mWHl-SqcNzzvtCYRj8kVbUxY05AvU-UwO3CNWJWYESTpHCF_fSFOupOkykJEcN1MLI3x86pJ7uD4wXpxbpXjJC3cwCOqxv__frbw5SBBIbF9V9jjpr8ApebOu346OQRkDQNP-xjVDgKOHApNV9O6fSxyUzCm6ILzFp35p0q98V_OPDYYLPL-XDVE6"/>
+</div>
+<div class="absolute bottom-1/3 right-1/4 w-8 h-8 rounded-full border-2 border-secondary overflow-hidden shadow-lg shadow-secondary/40">
+<img alt="Nearby user" class="w-full h-full object-cover" data-alt="Portrait of a woman" src="https://lh3.googleusercontent.com/aida-public/AB6AXuA_GQAuyz1Ggu5KsqA2n7kY0u-TxRXUm4ZfIBbt1X3uctVdBTdcIEUuRP6oZYp6171yUGbwqwzd9kxxpjwfQ9khyOIc8ymbfDXQ_4wK3mY46AzhkaSaZ4c83TTwh2zxzWxtroo4MM3AMgeIhb_lNyI-4lhudcn2viHZZJBHUv0_D-i1qUxt29YYE7WrbBrQNvndb7SSMfwoEaG2QKJvYmOZSpacerQ7J-TjGoqPrBJ3fBS7W8enmpBQKBBEoZ3CV8vgARxa4Z3_59rl"/>
+</div>
+<div class="absolute inset-0 bg-gradient-to-t from-background to-transparent pointer-events-none"></div>
+<div class="absolute bottom-4 left-6 flex items-center gap-2">
+<div class="w-2 h-2 bg-primary rounded-full animate-pulse"></div>
+<span class="text-sm font-bold text-on-surface">12 active walkers in your area</span>
+</div>
+</div>
+</section>
+</main>
+<!-- BottomNavBar -->
+<nav class="bg-[#0e0e10]/80 backdrop-blur-xl fixed bottom-0 left-0 w-full z-50 flex justify-around items-center px-4 pb-6 pt-3 rounded-t-3xl border-t border-white/5 shadow-[0_-8px_20px_rgba(26,115,232,0.15)]">
+<a class="flex flex-col items-center justify-center text-[#1A73E8] scale-110 transform transition-transform duration-300" href="#">
+<span class="material-symbols-outlined" data-icon="sports_score" style="font-variation-settings: 'FILL' 1;">sports_score</span>
+<span class="text-[10px] font-medium Manrope mt-1">Arena</span>
+</a>
+<a class="flex flex-col items-center justify-center text-gray-500 hover:text-[#84adff]" href="#">
+<span class="material-symbols-outlined" data-icon="leaderboard">leaderboard</span>
+<span class="text-[10px] font-medium Manrope mt-1">Rankings</span>
+</a>
+<a class="flex flex-col items-center justify-center text-gray-500 hover:text-[#84adff]" href="#">
+<span class="material-symbols-outlined" data-icon="explore">explore</span>
+<span class="text-[10px] font-medium Manrope mt-1">Map</span>
+</a>
+<a class="flex flex-col items-center justify-center text-gray-500 hover:text-[#84adff]" href="#">
+<span class="material-symbols-outlined" data-icon="person">person</span>
+<span class="text-[10px] font-medium Manrope mt-1">Profile</span>
+</a>
+</nav>
+</body></html>

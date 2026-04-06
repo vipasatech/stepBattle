@@ -1,0 +1,24 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(unzip -o stitch_stepbattle__1_.zip -d stitch_output)",
+      "Bash(unzip -o stitch_stepbattle.zip -d stitch_output)",
+      "Bash(flutter create:*)",
+      "Bash(flutter pub:*)",
+      "Bash(flutter analyze:*)",
+      "Bash(flutter test:*)",
+      "Bash(find lib:*)",
+      "Bash(dart pub:*)",
+      "Bash(export PATH=\"$PATH:$HOME/AppData/Local/Pub/Cache/bin\")",
+      "Bash(flutterfire configure:*)",
+      "Bash(npm install:*)",
+      "Bash(firebase --version)",
+      "Bash(npx firebase:*)",
+      "Bash(keytool -genkey -v -keystore android/app/upload-keystore.jks -storetype JKS -keyalg RSA -keysize 2048 -validity 10000 -alias upload -storepass stepbattle2025 -keypass stepbattle2025 -dname \"CN=StepBattle, OU=Mobile, O=StepBattle, L=Unknown, ST=Unknown, C=IN\")",
+      "Bash(\"/c/Program Files/Android/Android Studio/jbr/bin/keytool.exe\" -genkey -v -keystore android/app/upload-keystore.jks -storetype JKS -keyalg RSA -keysize 2048 -validity 10000 -alias upload -storepass stepbattle2025 -keypass stepbattle2025 -dname \"CN=StepBattle, OU=Mobile, O=StepBattle, L=Unknown, ST=Unknown, C=IN\")",
+      "Bash(flutter build:*)",
+      "Bash('/c/Program Files/Android/Android Studio/jbr/bin/keytool.exe' -list -v -keystore __TRACKED_VAR__/.android/debug.keystore -alias androiddebugkey -storepass android -keypass android)",
+      "Bash(flutter devices:*)"
+    ]
+  }
+}

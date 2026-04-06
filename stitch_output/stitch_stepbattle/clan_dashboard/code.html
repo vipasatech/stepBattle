@@ -1,0 +1,312 @@
+<!DOCTYPE html>
+
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>StepBattle - Clan Dashboard</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700;900&amp;family=Manrope:wght@200;300;400;500;600;700;800&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+        tailwind.config = {
+          darkMode: "class",
+          theme: {
+            extend: {
+              "colors": {
+                      "primary-fixed": "#6c9fff",
+                      "surface-variant": "#252528",
+                      "primary-container": "#6c9fff",
+                      "on-primary-fixed-variant": "#002a60",
+                      "inverse-primary": "#005bc1",
+                      "primary-fixed-dim": "#5091ff",
+                      "error": "#ff716c",
+                      "surface": "#0e0e10",
+                      "secondary-fixed": "#c6cfff",
+                      "primary-dim": "#679dff",
+                      "inverse-surface": "#fcf8fb",
+                      "primary": "#84adff",
+                      "tertiary-fixed": "#f39cfb",
+                      "on-tertiary": "#6b1f77",
+                      "outline-variant": "#48474a",
+                      "on-error-container": "#ffa8a3",
+                      "error-dim": "#d7383b",
+                      "on-secondary-container": "#c4ceff",
+                      "on-tertiary-fixed": "#41004d",
+                      "on-surface": "#fefbfe",
+                      "inverse-on-surface": "#555557",
+                      "surface-container-highest": "#252528",
+                      "tertiary-container": "#f39cfb",
+                      "surface-bright": "#2c2c2f",
+                      "on-background": "#fefbfe",
+                      "on-surface-variant": "#acaaad",
+                      "on-primary-container": "#00214e",
+                      "secondary-container": "#1e3da1",
+                      "tertiary": "#fab0ff",
+                      "on-secondary": "#00185d",
+                      "on-tertiary-container": "#60136d",
+                      "on-tertiary-fixed-variant": "#6a1f77",
+                      "tertiary-dim": "#e48fed",
+                      "secondary": "#7e98ff",
+                      "error-container": "#9f0519",
+                      "surface-container-lowest": "#000000",
+                      "background": "#0e0e10",
+                      "on-primary-fixed": "#000000",
+                      "outline": "#767577",
+                      "surface-container": "#19191c",
+                      "on-error": "#490006",
+                      "secondary-fixed-dim": "#b3c1ff",
+                      "tertiary-fixed-dim": "#e48fed",
+                      "on-secondary-fixed": "#00298c",
+                      "on-primary": "#002c65",
+                      "surface-dim": "#0e0e10",
+                      "surface-container-low": "#131315",
+                      "on-secondary-fixed-variant": "#2b48ac",
+                      "surface-container-high": "#1f1f22",
+                      "secondary-dim": "#7e98ff",
+                      "surface-tint": "#84adff"
+              },
+              "borderRadius": {
+                      "DEFAULT": "0.25rem",
+                      "lg": "0.5rem",
+                      "xl": "0.75rem",
+                      "full": "9999px"
+              },
+              "fontFamily": {
+                      "headline": ["Space Grotesk"],
+                      "body": ["Manrope"],
+                      "label": ["Manrope"]
+              }
+            },
+          },
+        }
+      </script>
+<style>
+        .material-symbols-outlined {
+            font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+            display: inline-block;
+            line-height: 1;
+        }
+        .glass-card {
+            background: rgba(37, 37, 40, 0.6);
+            backdrop-filter: blur(20px);
+            box-shadow: inset 0 0 4px 0 rgba(132, 173, 255, 0.1);
+        }
+        .glow-border {
+            box-shadow: 0 0 20px rgba(26, 115, 232, 0.15);
+        }
+      </style>
+<style>
+    body {
+      min-height: max(884px, 100dvh);
+    }
+  </style>
+  </head>
+<body class="bg-surface text-on-surface font-body selection:bg-primary selection:text-on-primary">
+<!-- TopAppBar -->
+<nav class="fixed top-0 w-full z-50 bg-[#0e0e10] flex justify-between items-center px-6 h-16 w-full">
+<div class="flex items-center gap-3">
+<div class="w-10 h-10 rounded-lg bg-primary-container flex items-center justify-center text-on-primary-container">
+<span class="material-symbols-outlined" style="font-variation-settings: 'FILL' 1;">shield</span>
+</div>
+<div class="flex flex-col">
+<span class="text-2xl font-black text-[#1A73E8] italic font-['Space_Grotesk'] tracking-tighter uppercase leading-none">TEAM ALPHA</span>
+<span class="font-['Manrope'] text-[10px] font-bold tracking-widest text-gray-400">5 / 10 members</span>
+</div>
+</div>
+<div class="flex items-center gap-4">
+<button class="active:scale-95 transition-transform text-gray-400 hover:text-white transition-colors duration-300">
+<span class="material-symbols-outlined">settings</span>
+</button>
+</div>
+<div class="absolute bottom-0 left-0 bg-gradient-to-b from-[#1A73E8]/10 to-transparent h-px w-full"></div>
+</nav>
+<main class="pt-20 pb-32 px-6">
+<!-- Soldiers Section -->
+<section class="mb-10">
+<div class="flex justify-between items-end mb-6">
+<h2 class="font-headline text-2xl font-bold tracking-tight text-white">Soldiers</h2>
+<div class="px-3 py-1 bg-surface-container-low rounded-full flex items-center gap-2 border border-white/5">
+<span class="font-label text-[10px] text-gray-400 uppercase tracking-widest">Clan ID: #CL7X9</span>
+<button class="text-[#1A73E8] flex items-center">
+<span class="material-symbols-outlined text-sm">content_copy</span>
+</button>
+</div>
+</div>
+<div class="space-y-3">
+<!-- Member Row 1 -->
+<div class="glass-card p-4 rounded-xl flex items-center justify-between group transition-all duration-300 hover:bg-surface-container-high">
+<div class="flex items-center gap-4">
+<div class="relative">
+<div class="w-12 h-12 rounded-full overflow-hidden border-2 border-primary/20">
+<img alt="VK" class="w-full h-full object-cover" data-alt="close-up portrait of a determined young man with short dark hair and a confident expression, sports apparel, sharp lighting" src="https://lh3.googleusercontent.com/aida-public/AB6AXuABA-M5JCKM6ofgSWaKjYpmwbZp9L2H9FIa22xD5GgrxI9sAptxTzbRbSRQDjPX58USfkgOjGcEU7ATSDfFZ27rqSaW-sDb-mAJCnrYlZcaaB2D1RWiUryBjozupu_vqO40qXyfHSrm353DUDZFJE58OzR5ZjbrKqvwkEOCjyEgKLAzRIC-xst_kjrpxifuKTWI95lqTQLhJW7SbtGcwiyxbCjZwkX1f0iCD-OP93BJkgHsYbBRc8nJgqBS2wNEmf1I_hYmClUn2MSK"/>
+</div>
+<div class="absolute -bottom-1 -right-1 bg-primary w-4 h-4 rounded-full border-2 border-surface flex items-center justify-center">
+<span class="material-symbols-outlined text-[8px] text-on-primary" style="font-variation-settings: 'FILL' 1;">star</span>
+</div>
+</div>
+<div>
+<div class="flex items-center gap-2">
+<span class="font-headline font-semibold text-sm">Vikram Singh</span>
+<span class="text-[10px] px-2 py-0.5 bg-yellow-500/10 text-yellow-500 rounded uppercase font-bold tracking-tighter">Captain</span>
+</div>
+<span class="text-xs text-gray-500 font-medium">Rank: Elite</span>
+</div>
+</div>
+<div class="text-right">
+<span class="block font-headline text-lg font-bold text-primary">4,200</span>
+<span class="text-[10px] text-gray-500 uppercase tracking-widest font-bold">Steps</span>
+</div>
+</div>
+<!-- Member Row 2 -->
+<div class="glass-card p-4 rounded-xl flex items-center justify-between transition-all duration-300">
+<div class="flex items-center gap-4">
+<div class="w-12 h-12 rounded-full overflow-hidden border-2 border-white/5">
+<img alt="AS" class="w-full h-full object-cover" data-alt="close-up portrait of a focused young woman with an athletic build, hair tied back, morning park light" src="https://lh3.googleusercontent.com/aida-public/AB6AXuAjhBTReJz5_u1Hztjji_ScjFEssLvGWEoQmMDskftxsKJB_t5qqoze6Q518dqwJGVSY5Zk8rHkQk2Bzt0NpGDCMVhtzv9KaRFnZBTM9uXH2qmJpm4K_xH9qJaNmb84xuehIT727dY3_V_GJOTVqRiTWLd24N0t1l_3mnAxZ7nggebqf4OskKJuNw_ZlHNppFhRcGCZ5n67ISzJ_ACFMvg6IgbO1GHInU24b4z0i5vZGtdby0lHTDHppJTyOq0dPQGVl8lRidxk3WSa"/>
+</div>
+<div>
+<div class="flex items-center gap-2">
+<span class="font-headline font-semibold text-sm">Ananya Singh</span>
+<span class="text-[10px] px-2 py-0.5 bg-gray-500/10 text-gray-400 rounded uppercase font-bold tracking-tighter">Soldier</span>
+</div>
+<span class="text-xs text-gray-500 font-medium">Rank: Gold</span>
+</div>
+</div>
+<div class="text-right">
+<span class="block font-headline text-lg font-bold text-white/80">3,800</span>
+<span class="text-[10px] text-gray-500 uppercase tracking-widest font-bold">Steps</span>
+</div>
+</div>
+<!-- Member Row 3 -->
+<div class="glass-card p-4 rounded-xl flex items-center justify-between transition-all duration-300">
+<div class="flex items-center gap-4">
+<div class="w-12 h-12 rounded-full overflow-hidden border-2 border-white/5">
+<img alt="RV" class="w-full h-full object-cover" data-alt="casual portrait of a young man with glasses and a friendly smile, outdoor urban setting, soft daylight" src="https://lh3.googleusercontent.com/aida-public/AB6AXuDwGhQP39c06RhoagWQXXHyFWEaKkYPTzBOn-anCDZzNq2weDm919J5egbjC1pWz4tUHEnByURLsYj0HzQG4gMihq7H6TOXyDUQUls9dwijYrEhIcUUprLivjN6aPnS1z5gDhARFQ6UonV0Zh6RtlEo0aaaMqCIZwaowpmSTp1Lwnjlf5g3pMnwYM8SdQ0gwnce_VDdy31IQRJ24nZ-qItLgncTNCKryFOf-nxhvsJUC07jnlYKXQ_iWmrcOjdsd2RxZ5yGKv0PVF31"/>
+</div>
+<div>
+<div class="flex items-center gap-2">
+<span class="font-headline font-semibold text-sm">Rohan Verma</span>
+<span class="text-[10px] px-2 py-0.5 bg-gray-500/10 text-gray-400 rounded uppercase font-bold tracking-tighter">Soldier</span>
+</div>
+<span class="text-xs text-gray-500 font-medium">Rank: Silver</span>
+</div>
+</div>
+<div class="text-right">
+<span class="block font-headline text-lg font-bold text-white/80">2,900</span>
+<span class="text-[10px] text-gray-500 uppercase tracking-widest font-bold">Steps</span>
+</div>
+</div>
+<!-- Member Row 4 -->
+<div class="glass-card p-4 rounded-xl flex items-center justify-between transition-all duration-300">
+<div class="flex items-center gap-4">
+<div class="w-12 h-12 rounded-full overflow-hidden border-2 border-white/5">
+<img alt="PD" class="w-full h-full object-cover" data-alt="portrait of a young woman with a joyful expression, wearing a gym headband, bright modern interior lighting" src="https://lh3.googleusercontent.com/aida-public/AB6AXuAFleo_hr8g6uukckaddeLAYwkGPBHvN783U-gKAzCekAeqODtaloBxp4x9wZgtb_ij5QHx7l9AlxZ3aHF7wC6ca-yMOenxqjmpH5kinwvMsa0-n5UWxESzYUZXAzZpQPV5fuSJlaKWl-ZRXU2xw7yXWPWVEQ2to9Hm3mu3ulpGP4xIGANhdErs63Oc12IYeUFr59fpazxvXOdyQm7bomqsaDSmrsY3-4FG4rSEO9Ou8A3A4j40eIHrsimu0QkZVnaCdkXJnbWcOOwH"/>
+</div>
+<div>
+<div class="flex items-center gap-2">
+<span class="font-headline font-semibold text-sm">Priya Das</span>
+<span class="text-[10px] px-2 py-0.5 bg-gray-500/10 text-gray-400 rounded uppercase font-bold tracking-tighter">Soldier</span>
+</div>
+<span class="text-xs text-gray-500 font-medium">Rank: Bronze</span>
+</div>
+</div>
+<div class="text-right">
+<span class="block font-headline text-lg font-bold text-white/80">1,500</span>
+<span class="text-[10px] text-gray-500 uppercase tracking-widest font-bold">Steps</span>
+</div>
+</div>
+<button class="w-full py-4 rounded-xl border border-dashed border-white/10 flex items-center justify-center gap-2 text-primary font-headline font-bold uppercase tracking-widest text-xs hover:bg-primary/5 transition-colors">
+<span class="material-symbols-outlined text-sm">group_add</span>
+                    + Add Members
+                </button>
+</div>
+</section>
+<!-- Clan Battles Section -->
+<section class="mb-10">
+<h2 class="font-headline text-2xl font-bold tracking-tight text-white mb-6">Clan Battles</h2>
+<!-- Battle Card -->
+<div class="relative rounded-2xl overflow-hidden glass-card p-6 border border-primary/20 shadow-2xl shadow-blue-900/10">
+<div class="flex justify-between items-start mb-6">
+<div class="flex items-center gap-2 px-2 py-1 bg-emerald-500/10 text-emerald-500 rounded-md">
+<span class="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
+<span class="text-[10px] font-black uppercase tracking-tighter">Live</span>
+</div>
+<div class="text-right">
+<span class="text-[10px] text-gray-400 uppercase font-bold tracking-widest">2 days left</span>
+</div>
+</div>
+<div class="flex justify-between items-center mb-8 gap-4">
+<div class="flex flex-col items-center flex-1">
+<div class="w-14 h-14 rounded-2xl bg-primary/20 flex items-center justify-center text-primary mb-2 border border-primary/30">
+<span class="material-symbols-outlined text-3xl" style="font-variation-settings: 'FILL' 1;">shield</span>
+</div>
+<span class="font-headline font-bold text-[10px] text-center text-white/80 uppercase">Team Alpha</span>
+</div>
+<div class="flex flex-col items-center">
+<span class="material-symbols-outlined text-2xl text-tertiary mb-1">swords</span>
+<span class="font-headline font-black text-sm italic text-gray-600">VS</span>
+</div>
+<div class="flex flex-col items-center flex-1">
+<div class="w-14 h-14 rounded-2xl bg-surface-container-high flex items-center justify-center text-gray-500 mb-2 border border-white/5">
+<span class="material-symbols-outlined text-3xl">dark_mode</span>
+</div>
+<span class="font-headline font-bold text-[10px] text-center text-white/80 uppercase">Night Runners</span>
+</div>
+</div>
+<div class="space-y-4">
+<div class="flex justify-between items-end">
+<div class="flex flex-col">
+<span class="text-[10px] text-gray-500 font-bold uppercase tracking-widest">Your Clan</span>
+<span class="font-headline text-2xl font-black text-primary">42,000</span>
+</div>
+<div class="flex flex-col text-right">
+<span class="text-[10px] text-gray-500 font-bold uppercase tracking-widest">Night Runners</span>
+<span class="font-headline text-2xl font-black text-white/60">38,500</span>
+</div>
+</div>
+<!-- Progress Bar -->
+<div class="h-3 w-full bg-surface-container-highest rounded-full overflow-hidden flex relative">
+<div class="h-full bg-gradient-to-r from-[#1A73E8] to-primary-fixed w-[55%] relative z-10">
+<div class="absolute right-0 top-0 h-full w-4 bg-white/30 blur-sm"></div>
+</div>
+<div class="h-full bg-surface-container-high w-[45%]"></div>
+</div>
+</div>
+<div class="mt-6 flex items-center justify-center gap-2 py-3 bg-tertiary/5 rounded-xl border border-tertiary/10">
+<span class="material-symbols-outlined text-tertiary text-sm" style="font-variation-settings: 'FILL' 1;">workspace_premium</span>
+<span class="font-headline text-[10px] font-bold text-tertiary uppercase tracking-wider">+300 XP per member on win</span>
+</div>
+</div>
+</section>
+<!-- Bottom Action Bar (Contextual) -->
+<div class="fixed bottom-24 left-6 right-6 flex gap-4 z-40">
+<button class="flex-1 h-14 bg-primary text-on-primary font-headline font-black uppercase tracking-widest rounded-xl shadow-lg shadow-primary/20 flex items-center justify-center gap-2 active:scale-95 transition-all">
+<span class="material-symbols-outlined text-xl">swords</span>
+                Create Battle
+            </button>
+<button class="flex-1 h-14 border-2 border-primary/40 bg-surface/50 backdrop-blur-md text-primary font-headline font-black uppercase tracking-widest rounded-xl flex items-center justify-center gap-2 active:scale-95 transition-all">
+<span class="material-symbols-outlined text-xl">search</span>
+                Join Battle
+            </button>
+</div>
+</main>
+<!-- BottomNavBar -->
+<nav class="fixed bottom-0 left-0 w-full z-50 flex justify-around items-center px-4 pt-3 pb-8 bg-[#0e0e10]/80 backdrop-blur-xl border-t border-white/5 shadow-[0_-8px_30px_rgba(26,115,232,0.15)] rounded-t-[2rem]">
+<div class="flex flex-col items-center justify-center text-[#1A73E8] scale-110 active:scale-90 transition-all duration-200">
+<span class="material-symbols-outlined" style="font-variation-settings: 'FILL' 1;">grid_view</span>
+<span class="font-['Manrope'] text-[10px] font-bold tracking-widest">HQ</span>
+</div>
+<div class="flex flex-col items-center justify-center text-gray-500 opacity-60 hover:opacity-100 transition-opacity active:scale-90 transition-all duration-200">
+<span class="material-symbols-outlined">swords</span>
+<span class="font-['Manrope'] text-[10px] font-bold tracking-widest">BATTLES</span>
+</div>
+<div class="flex flex-col items-center justify-center text-gray-500 opacity-60 hover:opacity-100 transition-opacity active:scale-90 transition-all duration-200">
+<span class="material-symbols-outlined">leaderboard</span>
+<span class="font-['Manrope'] text-[10px] font-bold tracking-widest">RANKS</span>
+</div>
+<div class="flex flex-col items-center justify-center text-gray-500 opacity-60 hover:opacity-100 transition-opacity active:scale-90 transition-all duration-200">
+<span class="material-symbols-outlined">person</span>
+<span class="font-['Manrope'] text-[10px] font-bold tracking-widest">PROFILE</span>
+</div>
+</nav>
+</body></html>

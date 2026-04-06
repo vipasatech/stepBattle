@@ -1,0 +1,252 @@
+<!DOCTYPE html>
+
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>StepBattle | Group Battle Setup</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&amp;family=Manrope:wght@300;400;500;600;700&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    "colors": {
+                        "tertiary-fixed": "#f39cfb",
+                        "error-container": "#9f0519",
+                        "secondary-dim": "#7e98ff",
+                        "outline": "#767577",
+                        "tertiary-container": "#f39cfb",
+                        "on-error-container": "#ffa8a3",
+                        "surface-container-highest": "#252528",
+                        "tertiary": "#fab0ff",
+                        "inverse-primary": "#005bc1",
+                        "on-tertiary-container": "#60136d",
+                        "surface-bright": "#2c2c2f",
+                        "surface-tint": "#84adff",
+                        "on-tertiary": "#6b1f77",
+                        "secondary-fixed": "#c6cfff",
+                        "on-secondary": "#00185d",
+                        "on-primary-fixed": "#000000",
+                        "inverse-on-surface": "#555557",
+                        "error": "#ff716c",
+                        "primary-dim": "#679dff",
+                        "on-surface": "#fefbfe",
+                        "on-secondary-fixed": "#00298c",
+                        "surface-container-lowest": "#000000",
+                        "on-secondary-fixed-variant": "#2b48ac",
+                        "on-secondary-container": "#c4ceff",
+                        "tertiary-dim": "#e48fed",
+                        "surface-container": "#19191c",
+                        "on-primary": "#002c65",
+                        "on-tertiary-fixed-variant": "#6a1f77",
+                        "on-background": "#fefbfe",
+                        "primary-fixed-dim": "#5091ff",
+                        "primary-fixed": "#6c9fff",
+                        "surface-dim": "#0e0e10",
+                        "surface-container-low": "#131315",
+                        "background": "#0e0e10",
+                        "error-dim": "#d7383b",
+                        "tertiary-fixed-dim": "#e48fed",
+                        "on-primary-fixed-variant": "#002a60",
+                        "outline-variant": "#48474a",
+                        "secondary-container": "#1e3da1",
+                        "on-surface-variant": "#acaaad",
+                        "surface-container-high": "#1f1f22",
+                        "on-tertiary-fixed": "#41004d",
+                        "secondary": "#7e98ff",
+                        "on-primary-container": "#00214e",
+                        "secondary-fixed-dim": "#b3c1ff",
+                        "inverse-surface": "#fcf8fb",
+                        "on-error": "#490006",
+                        "primary": "#84adff",
+                        "surface-variant": "#252528",
+                        "primary-container": "#6c9fff",
+                        "surface": "#0e0e10"
+                    },
+                    "borderRadius": {
+                        "DEFAULT": "0.25rem",
+                        "lg": "0.5rem",
+                        "xl": "0.75rem",
+                        "2xl": "1.5rem",
+                        "full": "9999px"
+                    },
+                    "fontFamily": {
+                        "headline": ["Space Grotesk"],
+                        "body": ["Manrope"],
+                        "label": ["Manrope"]
+                    }
+                },
+            },
+        }
+    </script>
+<style>
+        .material-symbols-outlined {
+            font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+        }
+        .glass-glow {
+            box-shadow: inset 0 0 10px rgba(132, 173, 255, 0.1), 0 0 20px rgba(132, 173, 255, 0.05);
+            border: 1px solid rgba(132, 173, 255, 0.2);
+        }
+        .shimmer-text {
+            background: linear-gradient(90deg, #84adff, #fab0ff, #84adff);
+            background-size: 200% auto;
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+    </style>
+<style>
+    body {
+      min-height: max(884px, 100dvh);
+    }
+  </style>
+  </head>
+<body class="bg-background text-on-background font-body selection:bg-primary selection:text-on-primary">
+<!-- Top Navigation Bar -->
+<header class="w-full top-0 sticky z-50 flex justify-between items-center px-6 py-4 w-full bg-[#0e0e10] tonal-transition bg-gradient-to-b from-[#1c1c1e] to-transparent">
+<button class="text-primary hover:opacity-80 transition-opacity active:scale-95 duration-150">
+<span class="material-symbols-outlined">arrow_back</span>
+</button>
+<div class="flex flex-col items-center">
+<h1 class="font-['Space_Grotesk'] text-2xl tracking-tighter uppercase font-bold text-[#84adff]">GROUP BATTLE</h1>
+<div class="flex items-center gap-1 opacity-80">
+<span class="font-label text-[10px] tracking-widest text-secondary uppercase">Battle ID: #B7K2</span>
+<span class="material-symbols-outlined text-[14px]">content_copy</span>
+</div>
+</div>
+<button class="text-primary hover:opacity-80 transition-opacity active:scale-95 duration-150">
+<span class="material-symbols-outlined">settings</span>
+</button>
+</header>
+<main class="pb-40">
+<!-- Participants Section -->
+<section class="m-4 p-6 rounded-2xl bg-[#0e0e10] glass-glow relative overflow-hidden">
+<div class="flex flex-col gap-4 relative z-10">
+<!-- User (Locked) -->
+<div class="flex items-center justify-between p-3 bg-surface-container-high rounded-xl border border-primary/10">
+<div class="flex items-center gap-3">
+<div class="relative">
+<img alt="User Avatar" class="w-12 h-12 rounded-full border-2 border-primary object-cover" data-alt="Close-up portrait of a determined young athlete with sweat on brow in dramatic low light fitness setting" src="https://lh3.googleusercontent.com/aida-public/AB6AXuByFrzK61N3faq73-V0f7nuVUCetkQDWDXZjIbPT9Lga72__7EKfsFN94KHFEVpGUrQecFsYcaxzgt9EHeohPmzL9HseNEOOa4turjzCFXnoHqUsbqDvh6BxyTvIs7wPQkaJ1K37V9ociXPYFwyL0qldjf0n15bVH2IGGOhHnb96x4T81eJ6Iv8G9aF64f1GivMX8AqMnFaF3_DKXWRSdaU7BbTfgW44Sznmhn8BT5Ql6iRyr8MjL_rPkiwh12ngbCWbX3Y_9wTtbjz"/>
+<span class="absolute -bottom-1 -right-1 bg-primary text-on-primary text-[8px] font-bold px-1.5 py-0.5 rounded-full uppercase">YOU</span>
+</div>
+<div>
+<p class="font-headline font-bold text-lg tracking-tight">Alex_Vanguard</p>
+<p class="text-xs text-secondary-fixed-dim uppercase tracking-widest font-bold">Host</p>
+</div>
+</div>
+<div class="bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-tighter">
+                        Ready
+                    </div>
+</div>
+<!-- Empty Slot 1 -->
+<button class="flex items-center gap-4 p-4 border-2 border-dashed border-outline-variant/30 rounded-xl hover:bg-white/5 transition-colors group">
+<div class="w-12 h-12 rounded-full bg-surface-container-low border border-outline-variant/20 flex items-center justify-center text-outline-variant group-hover:text-primary transition-colors">
+<span class="material-symbols-outlined">person_add</span>
+</div>
+<span class="font-label text-sm font-semibold text-on-surface-variant group-hover:text-on-surface">+ Add Friend</span>
+</button>
+<!-- Empty Slot 2 -->
+<button class="flex items-center gap-4 p-4 border-2 border-dashed border-outline-variant/30 rounded-xl hover:bg-white/5 transition-colors group">
+<div class="w-12 h-12 rounded-full bg-surface-container-low border border-outline-variant/20 flex items-center justify-center text-outline-variant group-hover:text-primary transition-colors">
+<span class="material-symbols-outlined">person_add</span>
+</div>
+<span class="font-label text-sm font-semibold text-on-surface-variant group-hover:text-on-surface">+ Add Friend</span>
+</button>
+<p class="text-[10px] text-outline text-center uppercase tracking-widest font-medium opacity-60">Add up to 10 participants</p>
+</div>
+<!-- Decorative background element -->
+<div class="absolute -top-20 -right-20 w-40 h-40 bg-primary/5 blur-3xl rounded-full"></div>
+</section>
+<!-- Search Section -->
+<div class="px-4 mt-8 mb-6">
+<div class="relative flex items-center group">
+<span class="material-symbols-outlined absolute left-4 text-outline group-focus-within:text-primary transition-colors">search</span>
+<input class="w-full bg-white/5 border border-white/10 rounded-xl px-12 py-4 text-sm font-medium placeholder:text-outline focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary/40 transition-all" placeholder="Search by name or username" type="text"/>
+</div>
+</div>
+<!-- Suggested Friends List -->
+<section class="px-4">
+<div class="flex items-center justify-between mb-4 px-2">
+<h3 class="font-headline text-xs font-black uppercase tracking-[0.2em] text-outline-variant">Suggested Friends</h3>
+<span class="text-[10px] font-bold text-primary">VIEW ALL</span>
+</div>
+<div class="flex flex-col gap-2">
+<!-- Friend 1 -->
+<div class="flex items-center justify-between p-4 rounded-xl bg-surface-container-low transition-colors hover:bg-surface-container-high">
+<div class="flex items-center gap-4">
+<div class="w-12 h-12 rounded-full bg-primary/20 flex items-center justify-center border border-primary/30">
+<span class="font-headline font-bold text-primary">MB</span>
+</div>
+<div>
+<p class="font-headline font-bold text-on-surface">Marcus_Bolt</p>
+<p class="text-xs text-outline-variant font-medium">Rank #42 · <span class="text-secondary-dim">12.4k Avg Steps</span></p>
+</div>
+</div>
+<button class="bg-primary hover:bg-primary-container text-on-primary p-2.5 rounded-lg active:scale-90 transition-all">
+<span class="material-symbols-outlined text-[20px]">add</span>
+</button>
+</div>
+<!-- Friend 2 -->
+<div class="flex items-center justify-between p-4 rounded-xl bg-surface-container transition-colors hover:bg-surface-container-high">
+<div class="flex items-center gap-4">
+<div class="w-12 h-12 rounded-full bg-tertiary/20 flex items-center justify-center border border-tertiary/30">
+<span class="font-headline font-bold text-tertiary">SS</span>
+</div>
+<div>
+<p class="font-headline font-bold text-on-surface">Sarah_Sprint</p>
+<p class="text-xs text-outline-variant font-medium">Rank #12 · <span class="text-secondary-dim">15.1k Avg Steps</span></p>
+</div>
+</div>
+<button class="bg-primary hover:bg-primary-container text-on-primary p-2.5 rounded-lg active:scale-90 transition-all">
+<span class="material-symbols-outlined text-[20px]">add</span>
+</button>
+</div>
+<!-- Friend 3 -->
+<div class="flex items-center justify-between p-4 rounded-xl bg-surface-container-low transition-colors hover:bg-surface-container-high">
+<div class="flex items-center gap-4">
+<div class="w-12 h-12 rounded-full bg-secondary/20 flex items-center justify-center border border-secondary/30">
+<span class="font-headline font-bold text-secondary">LS</span>
+</div>
+<div>
+<p class="font-headline font-bold text-on-surface">Leo.Steps</p>
+<p class="text-xs text-outline-variant font-medium">Rank #89 · <span class="text-secondary-dim">10.8k Avg Steps</span></p>
+</div>
+</div>
+<button class="bg-primary hover:bg-primary-container text-on-primary p-2.5 rounded-lg active:scale-90 transition-all">
+<span class="material-symbols-outlined text-[20px]">add</span>
+</button>
+</div>
+</div>
+</section>
+</main>
+<!-- Bottom Action Section -->
+<div class="fixed bottom-0 left-0 w-full p-6 bg-gradient-to-t from-[#0e0e10] via-[#0e0e10] to-transparent z-40">
+<div class="max-w-md mx-auto flex flex-col gap-3">
+<button class="w-full flex items-center justify-center gap-2 py-4 rounded-full border-2 border-primary text-primary font-headline font-bold uppercase tracking-widest hover:bg-primary/10 transition-colors active:scale-95 duration-150">
+<span class="material-symbols-outlined text-xl">share</span>
+                Invite Friends
+            </button>
+<button class="w-full py-4 rounded-full bg-surface-container-highest text-outline-variant font-headline font-bold uppercase tracking-widest cursor-not-allowed">
+                Create Battle
+            </button>
+<p class="text-center text-[10px] text-outline-variant uppercase tracking-widest font-medium opacity-80">Battle starts when all participants accept</p>
+</div>
+</div>
+<!-- Bottom Navigation Bar (Hidden on Mobile per user spec context but kept for system completeness) -->
+<nav class="fixed bottom-0 left-0 w-full z-50 flex justify-around items-center px-8 py-6 bg-[#0e0e10]/80 backdrop-blur-xl rounded-t-[2rem] border-t border-white/5 shadow-[0_-8px_30px_rgb(26,115,232,0.15)] md:hidden pointer-events-none opacity-0">
+<div class="flex flex-col items-center justify-center text-[#84adff] relative after:content-[''] after:absolute after:-bottom-1 after:w-1 after:h-1 after:bg-[#84adff] after:rounded-full">
+<span class="material-symbols-outlined">sports_kabaddi</span>
+</div>
+<div class="flex flex-col items-center justify-center text-gray-500 opacity-50">
+<span class="material-symbols-outlined">leaderboard</span>
+</div>
+<div class="flex flex-col items-center justify-center text-gray-500 opacity-50">
+<span class="material-symbols-outlined">group</span>
+</div>
+<div class="flex flex-col items-center justify-center text-gray-500 opacity-50">
+<span class="material-symbols-outlined">person</span>
+</div>
+</nav>
+</body></html>

@@ -1,0 +1,255 @@
+<!DOCTYPE html>
+
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>StepBattle - Create a Clan</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&amp;family=Manrope:wght@300;400;500;600;700;800&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    "colors": {
+                        "surface-container-low": "#131315",
+                        "primary": "#84adff",
+                        "tertiary-dim": "#e48fed",
+                        "on-primary": "#002c65",
+                        "surface-container-high": "#1f1f22",
+                        "secondary-dim": "#7e98ff",
+                        "tertiary-container": "#f39cfb",
+                        "on-tertiary-fixed-variant": "#6a1f77",
+                        "primary-fixed-dim": "#5091ff",
+                        "tertiary-fixed-dim": "#e48fed",
+                        "inverse-on-surface": "#555557",
+                        "surface": "#0e0e10",
+                        "on-tertiary-container": "#60136d",
+                        "surface-dim": "#0e0e10",
+                        "on-error-container": "#ffa8a3",
+                        "secondary": "#7e98ff",
+                        "on-primary-fixed-variant": "#002a60",
+                        "inverse-surface": "#fcf8fb",
+                        "on-error": "#490006",
+                        "on-secondary-container": "#c4ceff",
+                        "on-primary-fixed": "#000000",
+                        "on-primary-container": "#00214e",
+                        "background": "#0e0e10",
+                        "tertiary": "#fab0ff",
+                        "tertiary-fixed": "#f39cfb",
+                        "primary-dim": "#679dff",
+                        "error": "#ff716c",
+                        "error-container": "#9f0519",
+                        "primary-fixed": "#6c9fff",
+                        "surface-container": "#19191c",
+                        "on-secondary-fixed-variant": "#2b48ac",
+                        "surface-variant": "#252528",
+                        "on-secondary": "#00185d",
+                        "on-surface-variant": "#acaaad",
+                        "on-tertiary": "#6b1f77",
+                        "secondary-fixed": "#c6cfff",
+                        "surface-tint": "#84adff",
+                        "outline-variant": "#48474a",
+                        "secondary-fixed-dim": "#b3c1ff",
+                        "primary-container": "#6c9fff",
+                        "secondary-container": "#1e3da1",
+                        "surface-container-lowest": "#000000",
+                        "on-surface": "#fefbfe",
+                        "on-background": "#fefbfe",
+                        "on-tertiary-fixed": "#41004d",
+                        "on-secondary-fixed": "#00298c",
+                        "error-dim": "#d7383b",
+                        "outline": "#767577",
+                        "surface-container-highest": "#252528",
+                        "inverse-primary": "#005bc1",
+                        "surface-bright": "#2c2c2f"
+                    },
+                    "borderRadius": {
+                        "DEFAULT": "0.25rem",
+                        "lg": "0.5rem",
+                        "xl": "0.75rem",
+                        "full": "9999px"
+                    },
+                    "fontFamily": {
+                        "headline": ["Space Grotesk"],
+                        "body": ["Manrope"],
+                        "label": ["Manrope"]
+                    }
+                },
+            },
+        }
+    </script>
+<style>
+        body { font-family: 'Manrope', sans-serif; background-color: #0e0e10; color: #fefbfe; }
+        .font-headline { font-family: 'Space Grotesk', sans-serif; }
+        .material-symbols-outlined { font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24; }
+        .glass-card { background: rgba(37, 37, 40, 0.6); backdrop-filter: blur(20px); box-shadow: inset 0 0 4px rgba(132, 173, 255, 0.2); }
+    </style>
+<style>
+    body {
+      min-height: max(884px, 100dvh);
+    }
+  </style>
+  </head>
+<body class="antialiased overflow-hidden">
+<!-- SCREEN_16 BACKGROUND (Blurred/Dimmed Content) -->
+<main class="fixed inset-0 z-0 blur-md brightness-50">
+<!-- Top Nav Placeholder -->
+<header class="flex justify-between items-center px-6 h-16 w-full bg-[#0e0e10]">
+<span class="font-headline font-bold text-[#84adff] text-2xl uppercase tracking-wider">CLANS</span>
+<span class="material-symbols-outlined text-gray-400">settings</span>
+</header>
+<!-- Clan Tab Content Placeholder -->
+<div class="px-6 pt-4 space-y-6">
+<div class="glass-card p-6 rounded-xl border border-white/5 relative overflow-hidden">
+<div class="flex items-center justify-between">
+<div>
+<h2 class="font-headline text-3xl font-bold tracking-tight">Vanguard Elite</h2>
+<p class="text-sm text-primary">Rank #1 Global</p>
+</div>
+<div class="bg-primary/20 p-4 rounded-full">
+<span class="material-symbols-outlined text-primary scale-150">shield</span>
+</div>
+</div>
+<div class="mt-6 flex gap-2">
+<div class="h-1 bg-primary w-2/3 rounded-full"></div>
+<div class="h-1 bg-surface-container-highest w-1/3 rounded-full"></div>
+</div>
+</div>
+<div class="grid grid-cols-2 gap-4">
+<div class="bg-surface-container-low p-4 rounded-xl">
+<p class="text-xs text-on-surface-variant uppercase tracking-widest">Active Battles</p>
+<p class="text-2xl font-headline font-bold mt-1">12</p>
+</div>
+<div class="bg-surface-container-low p-4 rounded-xl">
+<p class="text-xs text-on-surface-variant uppercase tracking-widest">Clan XP</p>
+<p class="text-2xl font-headline font-bold mt-1">4.8k</p>
+</div>
+</div>
+<h3 class="font-headline text-xl mt-8">Recent Activity</h3>
+<div class="space-y-4">
+<div class="flex items-center gap-4 bg-surface-container-low/50 p-4 rounded-xl">
+<div class="w-12 h-12 rounded-full bg-surface-container-highest flex items-center justify-center">
+<span class="material-symbols-outlined">person</span>
+</div>
+<div>
+<p class="font-bold">Alex joined the clan</p>
+<p class="text-xs text-on-surface-variant">2 hours ago</p>
+</div>
+</div>
+</div>
+</div>
+</main>
+<!-- OVERLAY SHADE -->
+<div class="fixed inset-0 bg-black/60 z-40"></div>
+<!-- BOTTOM SHEET OVERLAY -->
+<div class="fixed inset-x-0 bottom-0 z-50 transform transition-transform duration-300">
+<div class="bg-[#1a1a1c] rounded-t-[28px] px-6 pb-12 pt-4 max-w-lg mx-auto shadow-[0_-8px_30px_rgba(0,0,0,0.5)]">
+<!-- Handle bar -->
+<div class="flex justify-center mb-8">
+<div class="w-12 h-1.5 bg-white/10 rounded-full"></div>
+</div>
+<!-- Header -->
+<div class="mb-8">
+<h1 class="font-headline text-3xl font-bold text-on-surface tracking-tight">Create a Clan</h1>
+<p class="font-body text-on-surface-variant mt-1">Build your squad and dominate together</p>
+</div>
+<!-- Form Content -->
+<div class="space-y-8">
+<!-- Field 1: Clan Name -->
+<div class="space-y-3">
+<div class="flex justify-between items-end">
+<label class="font-body font-bold text-sm uppercase tracking-wider text-on-surface-variant">Clan Name</label>
+<span class="text-xs text-on-surface-variant font-mono">0 / 20</span>
+</div>
+<input class="w-full h-14 bg-surface-container-low border-none rounded-xl px-4 text-on-surface placeholder:text-on-surface-variant/40 focus:ring-2 focus:ring-primary/50 transition-all" placeholder="Enter clan name..." type="text"/>
+<p class="text-xs text-outline font-medium">3–20 characters, letters and numbers only</p>
+</div>
+<!-- Field 2: Add Members -->
+<div class="space-y-4">
+<label class="font-body font-bold text-sm uppercase tracking-wider text-on-surface-variant">Add Members</label>
+<button class="w-full h-14 rounded-full border-2 border-primary text-primary font-bold flex items-center justify-center gap-2 active:scale-[0.98] transition-transform">
+<span class="material-symbols-outlined text-xl">person_add</span>
+                        + Add Friends
+                    </button>
+<p class="text-xs text-on-surface-variant/70 text-center italic">Invite friends to join your clan</p>
+</div>
+<!-- Selected Members Preview -->
+<div class="space-y-3">
+<div class="flex overflow-x-auto gap-6 pb-2 no-scrollbar">
+<!-- Member 1 -->
+<div class="flex-shrink-0 flex flex-col items-center gap-2 relative">
+<div class="w-16 h-16 rounded-full p-0.5 bg-gradient-to-tr from-primary to-tertiary">
+<div class="w-full h-full rounded-full bg-surface-container-low overflow-hidden flex items-center justify-center">
+<img alt="Alex" class="w-full h-full object-cover" data-alt="close-up portrait of a young man with glasses and a friendly smile, stylized 3D avatar aesthetic" src="https://lh3.googleusercontent.com/aida-public/AB6AXuCUZL2tJ6cNcNTs5oOj31Hkcl4OAV3EhbM3d6hUqydaHWS3alxMN-hCbvBmTciXm-P29svozh8rdsGHlBofz79AUH1o9Q6gflOHNVQONGrQr50Ub4M-IiLF7jycwLqbbBGRImHvMP3OmJcFVxH2631uCTWnfmjkTBGEHSrtYgZ5-uNGaCcnz9uV6wPvNJaAhNTVbkw5_B6js2XZ4-ixz9XsAnyscwaI-KEg4RcOI_uu0G0ClF6CtiHyKe46qLncMENks0uscNbg0uxz"/>
+</div>
+</div>
+<button class="absolute top-0 -right-1 w-5 h-5 bg-error rounded-full flex items-center justify-center border-2 border-[#1a1a1c]">
+<span class="material-symbols-outlined text-[12px] font-bold">close</span>
+</button>
+<span class="text-xs font-bold text-on-surface">Alex</span>
+</div>
+<!-- Member 2 -->
+<div class="flex-shrink-0 flex flex-col items-center gap-2 relative">
+<div class="w-16 h-16 rounded-full p-0.5 bg-gradient-to-tr from-primary to-tertiary">
+<div class="w-full h-full rounded-full bg-surface-container-low overflow-hidden flex items-center justify-center">
+<img alt="Sam" class="w-full h-full object-cover" data-alt="close-up portrait of a young woman with a short bob haircut, minimalist clean digital illustration" src="https://lh3.googleusercontent.com/aida-public/AB6AXuBDb5WW5U_DL2RofjPTgrbqmNt2dLSeHZ34GzDPIE0vGz3wYhpci9CZIQemk3brWXPC9xnEPTHG0NtGlicBO1padO-FcN0zifsttXq9j_wyCdHFSh1YqhB9V4M2-2HjPiOVvz-hwJTk3Q4BcrQV-uOVKQ-iYaofAsH1cyNTTQ-vjMvygdaheGfT-o2XdPcvX9DmTIL8Ska8xagsQcFWO3Z3NVJFDmPhN89-ZPMLjKE0GcZA0g1lEKG0F525ec8aBK-N9_it5aSeHyLv"/>
+</div>
+</div>
+<button class="absolute top-0 -right-1 w-5 h-5 bg-error rounded-full flex items-center justify-center border-2 border-[#1a1a1c]">
+<span class="material-symbols-outlined text-[12px] font-bold">close</span>
+</button>
+<span class="text-xs font-bold text-on-surface">Sam</span>
+</div>
+<!-- Member 3 -->
+<div class="flex-shrink-0 flex flex-col items-center gap-2 relative">
+<div class="w-16 h-16 rounded-full p-0.5 bg-gradient-to-tr from-primary to-tertiary">
+<div class="w-full h-full rounded-full bg-surface-container-low overflow-hidden flex items-center justify-center">
+<img alt="Jo" class="w-full h-full object-cover" data-alt="close-up portrait of a person with a beanie hat and athletic gear, modern digital character design" src="https://lh3.googleusercontent.com/aida-public/AB6AXuDUWB9qdSPK_gU6yGxr8gQJJugUH68R9s0TZNTxaBV3NNMUUj6-XAa764NqB8EiLvht3MK5GLC8WhwcBRAmQAAW6km9LvQe-dSX8nbSY1Ga7XNY_PhKFykcCuK_2Cser9SO9PKHOUD86-tT4Dbz-Q0CUdQ_hGQt4WB3EQPuJaNLes_w3GpRTEgxNJ0uomwCjmpBj8BYj1ANWP-A2zm3am1o-ursI3CvEzh5xox2YglY4HJmm2O3smgbMwHweJza9xZNS0LUTF63pOOY"/>
+</div>
+</div>
+<button class="absolute top-0 -right-1 w-5 h-5 bg-error rounded-full flex items-center justify-center border-2 border-[#1a1a1c]">
+<span class="material-symbols-outlined text-[12px] font-bold">close</span>
+</button>
+<span class="text-xs font-bold text-on-surface">Jo</span>
+</div>
+</div>
+</div>
+</div>
+<!-- Footer Actions -->
+<div class="mt-12 flex gap-4">
+<button class="flex-1 h-14 rounded-full border border-outline text-on-surface font-bold active:bg-white/5 transition-colors">
+                    Cancel
+                </button>
+<button class="flex-1 h-14 rounded-full bg-gray-600/50 text-gray-400 font-bold cursor-not-allowed" disabled="">
+                    Create
+                </button>
+</div>
+</div>
+</div>
+<!-- Hidden Bottom Nav to maintain shell logic but suppressed by overlay context -->
+<nav class="hidden md:hidden fixed bottom-0 left-0 w-full bg-[#0e0e10]/90 backdrop-blur-xl flex justify-around items-center px-4 py-3 z-30">
+<div class="flex flex-col items-center justify-center text-gray-500">
+<span class="material-symbols-outlined">sports_kabaddi</span>
+<span class="text-[10px] font-bold uppercase tracking-widest mt-1">Arena</span>
+</div>
+<div class="flex flex-col items-center justify-center text-[#1A73E8] scale-110">
+<span class="material-symbols-outlined" style="font-variation-settings: 'FILL' 1;">groups</span>
+<span class="text-[10px] font-bold uppercase tracking-widest mt-1">Clans</span>
+</div>
+<div class="flex flex-col items-center justify-center text-gray-500">
+<span class="material-symbols-outlined">fitness_center</span>
+<span class="text-[10px] font-bold uppercase tracking-widest mt-1">Train</span>
+</div>
+<div class="flex flex-col items-center justify-center text-gray-500">
+<span class="material-symbols-outlined">forum</span>
+<span class="text-[10px] font-bold uppercase tracking-widest mt-1">Social</span>
+</div>
+<div class="flex flex-col items-center justify-center text-gray-500">
+<span class="material-symbols-outlined">person</span>
+<span class="text-[10px] font-bold uppercase tracking-widest mt-1">Profile</span>
+</div>
+</nav>
+</body></html>

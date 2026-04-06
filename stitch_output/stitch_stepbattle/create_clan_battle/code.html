@@ -1,0 +1,256 @@
+<!DOCTYPE html>
+
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&amp;family=Manrope:wght@300;400;500;600;700;800&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<script id="tailwind-config">
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    "colors": {
+                        "on-primary-fixed": "#000000",
+                        "on-secondary-fixed": "#00298c",
+                        "on-primary-container": "#00214e",
+                        "on-surface-variant": "#acaaad",
+                        "tertiary-fixed": "#f39cfb",
+                        "surface-container": "#19191c",
+                        "outline": "#767577",
+                        "surface-bright": "#2c2c2f",
+                        "tertiary-fixed-dim": "#e48fed",
+                        "primary-fixed-dim": "#5091ff",
+                        "on-secondary": "#00185d",
+                        "on-secondary-fixed-variant": "#2b48ac",
+                        "tertiary-dim": "#e48fed",
+                        "inverse-primary": "#005bc1",
+                        "background": "#0e0e10",
+                        "error-container": "#9f0519",
+                        "surface": "#0e0e10",
+                        "surface-container-high": "#1f1f22",
+                        "surface-variant": "#252528",
+                        "surface-dim": "#0e0e10",
+                        "surface-tint": "#84adff",
+                        "on-surface": "#fefbfe",
+                        "inverse-on-surface": "#555557",
+                        "tertiary": "#fab0ff",
+                        "primary": "#84adff",
+                        "on-tertiary-container": "#60136d",
+                        "on-secondary-container": "#c4ceff",
+                        "surface-container-low": "#131315",
+                        "outline-variant": "#48474a",
+                        "secondary": "#7e98ff",
+                        "on-tertiary-fixed-variant": "#6a1f77",
+                        "inverse-surface": "#fcf8fb",
+                        "error-dim": "#d7383b",
+                        "secondary-dim": "#7e98ff",
+                        "secondary-container": "#1e3da1",
+                        "primary-fixed": "#6c9fff",
+                        "on-primary-fixed-variant": "#002a60",
+                        "tertiary-container": "#f39cfb",
+                        "secondary-fixed-dim": "#b3c1ff",
+                        "on-background": "#fefbfe",
+                        "secondary-fixed": "#c6cfff",
+                        "on-error": "#490006",
+                        "surface-container-lowest": "#000000",
+                        "primary-dim": "#679dff",
+                        "surface-container-highest": "#252528",
+                        "on-tertiary": "#6b1f77",
+                        "on-error-container": "#ffa8a3",
+                        "error": "#ff716c",
+                        "on-tertiary-fixed": "#41004d",
+                        "on-primary": "#002c65",
+                        "primary-container": "#6c9fff"
+                    },
+                    "borderRadius": {
+                        "DEFAULT": "0.25rem",
+                        "lg": "0.5rem",
+                        "xl": "0.75rem",
+                        "full": "9999px"
+                    },
+                    "fontFamily": {
+                        "headline": ["Space Grotesk"],
+                        "body": ["Manrope"],
+                        "label": ["Manrope"]
+                    }
+                },
+            },
+        }
+    </script>
+<style>
+        .glass-card {
+            background: rgba(37, 37, 40, 0.6);
+            backdrop-filter: blur(20px);
+            box-shadow: inset 0 0 4px 0 rgba(132, 173, 255, 0.2);
+        }
+        .glow-primary {
+            box-shadow: 0 0 15px rgba(132, 173, 255, 0.3);
+        }
+        .material-symbols-outlined {
+            font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+        }
+    </style>
+<style>
+    body {
+      min-height: max(884px, 100dvh);
+    }
+  </style>
+  </head>
+<body class="bg-background text-on-surface font-body selection:bg-primary selection:text-on-primary">
+<!-- TopAppBar -->
+<header class="fixed top-0 w-full z-50 bg-[#0e0e10] bg-gradient-to-b from-[#1A73E8]/10 to-transparent flex items-center justify-between px-6 py-4 w-full">
+<div class="flex items-center gap-4">
+<button class="text-slate-400 hover:opacity-80 transition-opacity active:scale-95 duration-150">
+<span class="material-symbols-outlined">arrow_back</span>
+</button>
+<h1 class="font-headline uppercase tracking-tighter text-xl font-bold text-[#84adff] italic">CREATE CLAN BATTLE</h1>
+</div>
+<div class="w-10 h-10 rounded-full bg-surface-container-highest overflow-hidden border border-primary/20">
+<img class="w-full h-full object-cover" data-alt="Close-up portrait of a competitive male athlete with a focused expression, dark studio lighting with blue neon accents" src="https://lh3.googleusercontent.com/aida-public/AB6AXuDrldm4JJ-Ax-HCEQsSRxWwCqcAyyRm_BIPirx8J874y2YjbB-0693CdKuV1hHgaLx2EXtgkrSOZnLVpHIucIFe8s3mIGSDqE8lpamFCkUhzEHMGI4rke5h3xxy2oNWGwhvJSX6GMmx4vFNQpHvrG9XgbvfWN1tMj9q2XKnAvr3YILNvulDro0CQWYLLK7e7wrHoRm7SXCti3OCqVwWT3QOx4EPwHx4OlS3j4p2euHIYg_8PPLenR0z9ze_L5wsXE2yNeULniffBsvS"/>
+</div>
+</header>
+<main class="pt-24 pb-32 px-6 max-w-2xl mx-auto space-y-8">
+<!-- Hero Section: Battle Matchup -->
+<section class="relative">
+<div class="glass-card rounded-xl p-8 flex items-center justify-between gap-4 border border-outline-variant/10 overflow-hidden">
+<!-- My Clan -->
+<div class="flex flex-col items-center gap-3 flex-1">
+<div class="w-20 h-20 rounded-2xl bg-primary/20 flex items-center justify-center glow-primary border border-primary/40 relative">
+<span class="material-symbols-outlined text-4xl text-primary">groups</span>
+<div class="absolute -top-2 -right-2 bg-primary text-on-primary text-[10px] font-bold px-2 py-0.5 rounded-full uppercase tracking-widest">OWNER</div>
+</div>
+<span class="font-headline font-bold text-primary tracking-tight text-lg">Team Alpha</span>
+</div>
+<!-- VS Divider -->
+<div class="flex flex-col items-center">
+<div class="h-px w-8 bg-gradient-to-r from-transparent via-outline-variant to-transparent mb-2"></div>
+<span class="font-headline italic font-extrabold text-3xl text-outline-variant/40">VS</span>
+<div class="h-px w-8 bg-gradient-to-r from-transparent via-outline-variant to-transparent mt-2"></div>
+</div>
+<!-- Opponent Slot -->
+<div class="flex flex-col items-center gap-3 flex-1">
+<div class="w-20 h-20 rounded-2xl border-2 border-dashed border-outline-variant/30 flex items-center justify-center group hover:border-primary/50 transition-colors cursor-pointer">
+<span class="material-symbols-outlined text-3xl text-outline-variant group-hover:text-primary transition-colors">person_search</span>
+</div>
+<span class="font-label text-xs text-on-surface-variant uppercase tracking-widest text-center">Search Opponent Clan</span>
+</div>
+</div>
+<!-- Background Decorative Glow -->
+<div class="absolute -z-10 top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-64 h-64 bg-primary/5 blur-[80px] rounded-full"></div>
+</section>
+<!-- Search Section -->
+<section class="space-y-4">
+<div class="relative">
+<input class="w-full bg-surface-container-low border-none rounded-lg py-4 pl-12 pr-4 text-on-surface placeholder:text-on-surface-variant focus:ring-1 focus:ring-primary focus:bg-surface-container-high transition-all font-body" placeholder="Find a rival clan..." type="text"/>
+<span class="material-symbols-outlined absolute left-4 top-1/2 -translate-y-1/2 text-on-surface-variant">search</span>
+</div>
+<!-- Search Results -->
+<div class="space-y-3">
+<!-- Result Row 1 -->
+<div class="flex items-center justify-between p-4 rounded-xl bg-surface-container-low hover:bg-surface-container transition-colors group">
+<div class="flex items-center gap-4">
+<div class="w-12 h-12 rounded-lg bg-surface-container-highest flex items-center justify-center">
+<span class="material-symbols-outlined text-tertiary">bolt</span>
+</div>
+<div>
+<h4 class="font-headline font-bold text-on-surface">Storm Walkers</h4>
+<div class="flex items-center gap-3 mt-0.5">
+<span class="text-xs text-on-surface-variant flex items-center gap-1">
+<span class="material-symbols-outlined text-[14px]">groups</span> 24/30
+                                </span>
+<span class="text-xs text-on-surface-variant flex items-center gap-1">
+<span class="material-symbols-outlined text-[14px]">military_tech</span> 4.2k XP
+                                </span>
+</div>
+</div>
+</div>
+<button class="bg-surface-container-high hover:bg-primary hover:text-on-primary px-4 py-2 rounded-full text-xs font-bold uppercase transition-all active:scale-95">Select</button>
+</div>
+<!-- Result Row 2 -->
+<div class="flex items-center justify-between p-4 rounded-xl bg-surface-container-low hover:bg-surface-container transition-colors group">
+<div class="flex items-center gap-4">
+<div class="w-12 h-12 rounded-lg bg-surface-container-highest flex items-center justify-center">
+<span class="material-symbols-outlined text-secondary">shield</span>
+</div>
+<div>
+<h4 class="font-headline font-bold text-on-surface">Iron Guardians</h4>
+<div class="flex items-center gap-3 mt-0.5">
+<span class="text-xs text-on-surface-variant flex items-center gap-1">
+<span class="material-symbols-outlined text-[14px]">groups</span> 12/30
+                                </span>
+<span class="text-xs text-on-surface-variant flex items-center gap-1">
+<span class="material-symbols-outlined text-[14px]">military_tech</span> 1.8k XP
+                                </span>
+</div>
+</div>
+</div>
+<button class="bg-surface-container-high hover:bg-primary hover:text-on-primary px-4 py-2 rounded-full text-xs font-bold uppercase transition-all active:scale-95">Select</button>
+</div>
+</div>
+</section>
+<!-- Settings Section -->
+<section class="space-y-4">
+<h3 class="font-headline font-bold text-xs uppercase tracking-[0.2em] text-on-surface-variant ml-1">Battle Configuration</h3>
+<div class="glass-card rounded-xl border border-outline-variant/10 divide-y divide-outline-variant/10">
+<!-- Duration Row -->
+<div class="p-5 flex items-center justify-between">
+<div class="flex items-center gap-3">
+<span class="material-symbols-outlined text-on-surface-variant">schedule</span>
+<span class="font-headline font-medium">Duration</span>
+</div>
+<div class="flex bg-surface-container-lowest p-1 rounded-full gap-1">
+<button class="px-4 py-1.5 rounded-full text-xs font-bold uppercase text-on-surface-variant hover:text-on-surface">1 Day</button>
+<button class="px-4 py-1.5 rounded-full text-xs font-bold uppercase bg-primary text-on-primary glow-primary">3 Days</button>
+<button class="px-4 py-1.5 rounded-full text-xs font-bold uppercase text-on-surface-variant hover:text-on-surface">7 Days</button>
+</div>
+</div>
+<!-- Type Row -->
+<div class="p-5 flex items-center justify-between">
+<div class="flex items-center gap-3">
+<span class="material-symbols-outlined text-on-surface-variant">leaderboard</span>
+<span class="font-headline font-medium">Battle Type</span>
+</div>
+<select class="bg-transparent border-none text-primary font-headline font-bold text-sm focus:ring-0 cursor-pointer">
+<option>Total Steps</option>
+<option>Daily Average</option>
+</select>
+</div>
+<!-- Reward Row -->
+<div class="p-5 flex items-center justify-between">
+<div class="flex items-center gap-3">
+<span class="material-symbols-outlined text-on-surface-variant">military_tech</span>
+<span class="font-headline font-medium">Reward Pool</span>
+</div>
+<span class="text-on-surface-variant font-headline font-bold">+300 XP</span>
+</div>
+</div>
+</section>
+<!-- Action Buttons -->
+<section class="flex flex-col gap-4">
+<button class="w-full py-4 rounded-full bg-primary/20 text-on-surface-variant font-headline font-extrabold uppercase tracking-widest cursor-not-allowed border border-primary/10">
+                CREATE BATTLE
+            </button>
+<button class="w-full py-4 rounded-full border border-outline-variant/30 text-on-surface font-headline font-bold uppercase tracking-widest hover:bg-surface-container-low transition-colors">
+                CANCEL
+            </button>
+</section>
+</main>
+<!-- BottomNavBar -->
+<nav class="fixed bottom-0 w-full z-50 rounded-t-[24px] bg-[#0e0e10]/80 backdrop-blur-xl border-t border-[#84adff]/10 shadow-[0_-8px_24px_rgba(26,115,232,0.15)] flex justify-around items-center px-8 pb-6 pt-4 w-full">
+<div class="flex items-center justify-center bg-[#1A73E8]/20 text-[#84adff] rounded-full p-3 shadow-[0_0_15px_rgba(132,173,255,0.3)] hover:text-[#fab0ff] transition-colors active:scale-90 duration-200">
+<span class="material-symbols-outlined">sports_kabaddi</span>
+</div>
+<div class="flex items-center justify-center text-slate-500 p-3 hover:text-[#fab0ff] transition-colors active:scale-90 duration-200">
+<span class="material-symbols-outlined">leaderboard</span>
+</div>
+<div class="flex items-center justify-center text-slate-500 p-3 hover:text-[#fab0ff] transition-colors active:scale-90 duration-200">
+<span class="material-symbols-outlined">groups</span>
+</div>
+<div class="flex items-center justify-center text-slate-500 p-3 hover:text-[#fab0ff] transition-colors active:scale-90 duration-200">
+<span class="material-symbols-outlined">settings</span>
+</div>
+</nav>
+</body></html>

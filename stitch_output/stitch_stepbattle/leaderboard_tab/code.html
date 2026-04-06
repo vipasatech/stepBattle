@@ -1,0 +1,279 @@
+<!DOCTYPE html>
+
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&amp;family=Manrope:wght@300;400;500;600;700;800&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<script id="tailwind-config">
+    tailwind.config = {
+      darkMode: "class",
+      theme: {
+        extend: {
+          "colors": {
+            "on-primary": "#002c65",
+            "primary-fixed": "#6c9fff",
+            "error-dim": "#d7383b",
+            "tertiary-container": "#f39cfb",
+            "surface-variant": "#252528",
+            "on-error-container": "#ffa8a3",
+            "on-primary-fixed": "#000000",
+            "surface": "#0e0e10",
+            "outline": "#767577",
+            "surface-container-low": "#131315",
+            "surface-container-highest": "#252528",
+            "tertiary-dim": "#e48fed",
+            "error": "#ff716c",
+            "on-secondary-fixed-variant": "#2b48ac",
+            "inverse-on-surface": "#555557",
+            "primary-container": "#6c9fff",
+            "on-tertiary-fixed": "#41004d",
+            "surface-bright": "#2c2c2f",
+            "on-tertiary-container": "#60136d",
+            "secondary": "#7e98ff",
+            "on-background": "#fefbfe",
+            "outline-variant": "#48474a",
+            "on-tertiary-fixed-variant": "#6a1f77",
+            "primary": "#84adff",
+            "surface-container": "#19191c",
+            "background": "#0e0e10",
+            "on-tertiary": "#6b1f77",
+            "tertiary-fixed-dim": "#e48fed",
+            "tertiary-fixed": "#f39cfb",
+            "on-primary-container": "#00214e",
+            "surface-container-lowest": "#000000",
+            "primary-fixed-dim": "#5091ff",
+            "surface-container-high": "#1f1f22",
+            "on-surface": "#fefbfe",
+            "secondary-dim": "#7e98ff",
+            "on-secondary-fixed": "#00298c",
+            "tertiary": "#fab0ff",
+            "on-secondary-container": "#c4ceff",
+            "inverse-surface": "#fcf8fb",
+            "on-secondary": "#00185d",
+            "on-error": "#490006",
+            "on-surface-variant": "#acaaad",
+            "secondary-fixed-dim": "#b3c1ff",
+            "secondary-fixed": "#c6cfff",
+            "primary-dim": "#679dff",
+            "inverse-primary": "#005bc1",
+            "surface-dim": "#0e0e10",
+            "secondary-container": "#1e3da1",
+            "surface-tint": "#84adff",
+            "error-container": "#9f0519",
+            "on-primary-fixed-variant": "#002a60"
+          },
+          "borderRadius": {
+            "DEFAULT": "0.25rem",
+            "lg": "0.5rem",
+            "xl": "0.75rem",
+            "2xl": "1rem",
+            "3xl": "1.5rem",
+            "full": "9999px"
+          },
+          "fontFamily": {
+            "headline": ["Space Grotesk"],
+            "body": ["Manrope"],
+            "label": ["Manrope"]
+          }
+        },
+      },
+    }
+  </script>
+<style>
+    .material-symbols-outlined {
+      font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+    }
+    .glass-card {
+      background: rgba(37, 37, 40, 0.6);
+      backdrop-filter: blur(20px);
+      border-top: 1px solid rgba(255, 255, 255, 0.05);
+    }
+    .podium-shine {
+      position: relative;
+      overflow: hidden;
+    }
+    .podium-shine::after {
+      content: '';
+      position: absolute;
+      top: -50%;
+      left: -50%;
+      width: 200%;
+      height: 200%;
+      background: linear-gradient(45deg, transparent, rgba(255,255,255,0.03), transparent);
+      transform: rotate(45deg);
+    }
+  </style>
+<style>
+    body {
+      min-height: max(884px, 100dvh);
+    }
+  </style>
+  </head>
+<body class="bg-background text-on-surface font-body selection:bg-primary selection:text-on-primary min-h-screen pb-40">
+<!-- TopAppBar -->
+<header class="bg-[#0e0e10] flex justify-between items-center w-full px-6 h-16 fixed top-0 z-50 bg-gradient-to-b from-[#1A73E8]/10 to-transparent">
+<div class="flex items-center gap-3">
+<h1 class="text-xl font-bold text-white uppercase tracking-widest font-['Space_Grotesk'] tracking-tight">LEADERBOARD</h1>
+</div>
+<!-- Segmented Pill Toggle -->
+<div class="flex bg-surface-container-high p-1 rounded-full border border-outline-variant/20">
+<button class="px-4 py-1.5 rounded-full text-xs font-bold font-label transition-all bg-[#1A73E8] text-white">OVERALL</button>
+<button class="px-4 py-1.5 rounded-full text-xs font-bold font-label transition-all text-on-surface-variant hover:text-on-surface">FRIENDS</button>
+</div>
+</header>
+<main class="pt-20 px-4 max-w-md mx-auto space-y-6">
+<!-- Top 3 Podium Area -->
+<section class="grid grid-cols-1 gap-4">
+<!-- Rank 1: Gold -->
+<div class="relative overflow-hidden group">
+<div class="absolute inset-y-0 left-0 w-1.5 bg-[#FFD700] rounded-l-xl"></div>
+<div class="bg-surface-container-high rounded-xl p-5 flex items-center gap-4 border border-white/5 podium-shine transition-transform group-active:scale-[0.98]">
+<div class="flex-shrink-0 relative">
+<img alt="Avatar" class="w-16 h-16 rounded-full border-2 border-[#FFD700]" data-alt="portrait of a focused athletic man with sharp features and modern style in cinematic studio lighting" src="https://lh3.googleusercontent.com/aida-public/AB6AXuDleiEewBvAVS1vaaiLKitw7gW-A2Fc21wFbwdU4twExMjnibm81EKSoXpZSu6to5aXc2xWPkNx90fv9Nu27lwG5Nv6bnaNnN8d4tiArIzkKV8D89g9LVTfQr-ABqJFezdWI7jXBtSkHmIfEvdfbWJm36h1VfSPUAMzs6-b9pB25DdnWYbSyKBlbpBauWCs3WbxS22IJSalBAL4Ui1H2mFG9LModWujw692Yr3lamR-l3c_lC4CvdpL_aWwNZyv5nvr6nu0GlDKXKnI"/>
+<div class="absolute -bottom-1 -right-1 bg-[#FFD700] text-on-primary-fixed rounded-full w-6 h-6 flex items-center justify-center text-sm font-black shadow-lg">1</div>
+</div>
+<div class="flex-1">
+<div class="flex items-center gap-2">
+<span class="text-xl">🥇</span>
+<h3 class="font-headline font-bold text-lg tracking-tight">Vikram Singh</h3>
+</div>
+<p class="text-[#FFD700] font-headline font-bold text-2xl tracking-tighter">1,50,000 <span class="text-[10px] uppercase tracking-widest text-[#FFD700]/60">XP</span></p>
+</div>
+<div class="material-symbols-outlined text-[#FFD700]/30 text-4xl">workspace_premium</div>
+</div>
+</div>
+<div class="grid grid-cols-2 gap-4">
+<!-- Rank 2: Silver -->
+<div class="bg-surface-container-low rounded-xl p-4 flex flex-col items-center text-center gap-2 border border-white/5 transition-transform active:scale-95">
+<div class="relative">
+<img alt="Avatar" class="w-14 h-14 rounded-full border-2 border-[#C0C0C0]" data-alt="professional woman athlete portrait with confident expression and soft backlighting" src="https://lh3.googleusercontent.com/aida-public/AB6AXuCYV5gmX5vilz1MDjCM9deOKB23EXTHSDW-0ldEgwgHUkgIvm66OkwGlbAGhDxR1q2DjpMRbTu4wctKsIFcRqEZAGJJfB9JhkiMkOBDD-_N-NJipfoxL_6AIjJfWmsIhlM5oU_GsiKfMqzW9zvZ-S6LKuVMTtcjmSWx34gMnDamOhV9FMshNu0RDXb1TXjfwzJteNlpAVpvW7ORsQnQubbnXMiaYuQONigbolGCjRtSMS4l1ff-sjurn-xGtk4uJxJeeRw6slXGi3l_"/>
+<div class="absolute -bottom-1 -right-1 bg-[#C0C0C0] text-black rounded-full w-5 h-5 flex items-center justify-center text-xs font-black">2</div>
+</div>
+<div>
+<div class="flex items-center justify-center gap-1">
+<span class="text-sm">🥈</span>
+<h3 class="font-headline font-bold text-sm">Meera R.</h3>
+</div>
+<p class="text-[#C0C0C0] font-headline font-bold text-lg">1,20,000 <span class="text-[8px] uppercase tracking-widest">XP</span></p>
+</div>
+</div>
+<!-- Rank 3: Bronze -->
+<div class="bg-surface-container-low rounded-xl p-4 flex flex-col items-center text-center gap-2 border border-white/5 transition-transform active:scale-95">
+<div class="relative">
+<img alt="Avatar" class="w-14 h-14 rounded-full border-2 border-[#CD7F32]" data-alt="energetic young man smiling with sports gear in soft natural lighting" src="https://lh3.googleusercontent.com/aida-public/AB6AXuDnbtAE9eA-qK78jf4eGFV5mB3J5DqrWWKTsfHnjc0tvoxJEuObffS38m-7NCOKnZfpRUWLrNfhJ5Zv-8FmvO1ajG4ga1kDiM8FqgoEDwdZzgI5PADXAfkhR5CFZIIjn6n8YTxSarLgt4xDd4EBRplApcRhzmH6sv5Oeq8GNS23670s1tMA7bTiy7kxoYSYtQd8wiJA9_IB7dkLJhX5xu3-XyOcsz4BP2d1q1EyrqeOd5vPkw9hiPodzzyYKMNWXqlNA7XFMEb5FkQG"/>
+<div class="absolute -bottom-1 -right-1 bg-[#CD7F32] text-white rounded-full w-5 h-5 flex items-center justify-center text-xs font-black">3</div>
+</div>
+<div>
+<div class="flex items-center justify-center gap-1">
+<span class="text-sm">🥉</span>
+<h3 class="font-headline font-bold text-sm">Aarav K.</h3>
+</div>
+<p class="text-[#CD7F32] font-headline font-bold text-lg">98,000 <span class="text-[8px] uppercase tracking-widest">XP</span></p>
+</div>
+</div>
+</div>
+</section>
+<!-- Standard List Rows (4-8) -->
+<section class="space-y-3">
+<!-- Row 4 -->
+<div class="flex items-center gap-4 px-4 py-3 bg-surface-container-low/40 rounded-2xl hover:bg-surface-container-low transition-colors group">
+<span class="font-headline font-bold text-on-surface-variant w-4">4</span>
+<img alt="User" class="w-10 h-10 rounded-full" data-alt="casual portrait of a young person in urban setting with soft depth of field" src="https://lh3.googleusercontent.com/aida-public/AB6AXuD-H0woCzJQVlB_mwUPBLJotbM3F9dMJEBv__jLheCLyqLj4lTzRYeN4b4qPJKlG5UfzGpf0TiNqKLpCpDrLpFQlLpE52TnSDflJihhshmGZaazLb3e_WIvBsZXrp_JRpsMJS7VGk0YBaGTaVMyaqAYDErI6KCNH5AUWPKh0SelY94gPYSBTuSy8XRNoizV6VbVSDR2hNLuA1go_Pec1j2SYFQrsr-tukVFcWh8-mGKQrsKgkH-1koKy0aErYlA6bXiVgFMk49N5Xl8"/>
+<div class="flex-1">
+<p class="font-bold text-sm">Sanya Malhotra</p>
+<p class="text-xs text-on-surface-variant font-medium">85,200 XP</p>
+</div>
+<span class="material-symbols-outlined text-on-surface-variant group-hover:text-primary transition-colors">chevron_right</span>
+</div>
+<!-- Row 5 -->
+<div class="flex items-center gap-4 px-4 py-3 bg-surface-container-low/40 rounded-2xl hover:bg-surface-container-low transition-colors group">
+<span class="font-headline font-bold text-on-surface-variant w-4">5</span>
+<img alt="User" class="w-10 h-10 rounded-full" data-alt="professional profile of a man with spectacles in daylight" src="https://lh3.googleusercontent.com/aida-public/AB6AXuBtzEAExDvVvVzfFHHofs1h7xnLwgozff9kgp43UwPG4dk2wv4YrLIlPvYyYtnyOjtNYn0Zef2DgS_18ZFRTKqQ9L-AznLfdm66qaxnHZBc4toeVReLi0wLcSpztvSxLlrC5nKsVAPqsfxRaj1kwlUA1NAlxvLXUvCMDSLp5InGUCqlFNVv5VIuRX-_cL-cyK1fjxfPK8wAxECuUHl0Zp0JNVRoq087E3p4fHqkNeey67z8p896MP3JhsOnmMIpNJF_HVz-DkJ9Lvmd"/>
+<div class="flex-1">
+<p class="font-bold text-sm">Rohan Verma</p>
+<p class="text-xs text-on-surface-variant font-medium">79,400 XP</p>
+</div>
+<span class="material-symbols-outlined text-on-surface-variant group-hover:text-primary transition-colors">chevron_right</span>
+</div>
+<!-- Row 6 -->
+<div class="flex items-center gap-4 px-4 py-3 bg-surface-container-low/40 rounded-2xl hover:bg-surface-container-low transition-colors group">
+<span class="font-headline font-bold text-on-surface-variant w-4">6</span>
+<img alt="User" class="w-10 h-10 rounded-full" data-alt="portrait of a young woman with a warm smile in natural outdoor light" src="https://lh3.googleusercontent.com/aida-public/AB6AXuDglzxXv2VI48Npp9Xf2e1NemXYBEGorx1tKKE7rrjUSEZRxgbT6rCBvZUay_iCJmHfUW1xpdF8edexUy6blJTzdixioKOPYGJVM17lOpy1em5Lqi5BYif4kbZpZObCLPzWuCz99yqrgAZSjNZyENN75or_Mmxk01VR169xa9dP6Yj78WUgVRjBqG7E7m7B4gu5WOV5bLP_NgDMm2l_9lVFp2odcAj1hRoZrmq4AEzdq9JPoU1Igz11lL7lxEFaWdANxxiBLfU3dCo_"/>
+<div class="flex-1">
+<p class="font-bold text-sm">Ananya Singh</p>
+<p class="text-xs text-on-surface-variant font-medium">72,100 XP</p>
+</div>
+<span class="material-symbols-outlined text-on-surface-variant group-hover:text-primary transition-colors">chevron_right</span>
+</div>
+<!-- Row 7 -->
+<div class="flex items-center gap-4 px-4 py-3 bg-surface-container-low/40 rounded-2xl hover:bg-surface-container-low transition-colors group">
+<span class="font-headline font-bold text-on-surface-variant w-4">7</span>
+<img alt="User" class="w-10 h-10 rounded-full" data-alt="cheerful athletic man in sports attire looking directly at camera" src="https://lh3.googleusercontent.com/aida-public/AB6AXuDlCv85rDrZv8Y4RSonjiZquBOFKuWlotP0wARqixG9lsz0rHbx8HyNnK6hah7v5vQcx_hk2cRD4KgdKtkhrRllIRhPHYA5XCcgkca5WZtmVeKaJ5Y_JxzG6sdXsey3fONeXjdTPJJDf5NHU2EV7EfXREKPQDxhI0251AYwxk5NnM8TtkO9xOwnpG59WtdcUIOEKz6qfsyF6rEw-hv3ipZM1qxbq9OEUtskY05sC-n9zoEW35f7vHL5DAzIGD2YvhxP-0HwVpN8lmRp"/>
+<div class="flex-1">
+<p class="font-bold text-sm">Karan Johar</p>
+<p class="text-xs text-on-surface-variant font-medium">68,900 XP</p>
+</div>
+<span class="material-symbols-outlined text-on-surface-variant group-hover:text-primary transition-colors">chevron_right</span>
+</div>
+<!-- Row 8 -->
+<div class="flex items-center gap-4 px-4 py-3 bg-surface-container-low/40 rounded-2xl hover:bg-surface-container-low transition-colors group">
+<span class="font-headline font-bold text-on-surface-variant w-4">8</span>
+<img alt="User" class="w-10 h-10 rounded-full" data-alt="smiling woman with glasses against a clean minimal background" src="https://lh3.googleusercontent.com/aida-public/AB6AXuByclWTu3wu4bos0RqUV3Gixc4ubsNLiU37Xx-i1W0Xdu0g-G9IzWGfHLcnXZuga9oQXNnBCQKJVtGv19NZz8eH7cK-kbj8xWRaDoZLxahTTnKkgj2t6biydnMBkujjb6pc6KZLdkFRz7oYZgSlRBboeG4QNwWPb-LVk04d5nZHHyyDZZI0xeDmSm_ZShdNvnrrPJfGwy9KxoHG-6YvSJCnuxptLOlp0A1X9mje-Lvqyc9Ew7eoyv_P7Wup5Hweg19uJIdcAikfHzm9"/>
+<div class="flex-1">
+<p class="font-bold text-sm">Priya Das</p>
+<p class="text-xs text-on-surface-variant font-medium">64,500 XP</p>
+</div>
+<span class="material-symbols-outlined text-on-surface-variant group-hover:text-primary transition-colors">chevron_right</span>
+</div>
+</section>
+<!-- Help Action -->
+<div class="flex justify-center pt-4 pb-12">
+<button class="flex items-center gap-2 text-primary font-bold text-sm px-6 py-3 rounded-full hover:bg-primary/10 transition-all active:scale-95">
+<span class="material-symbols-outlined text-lg">help</span>
+        How to earn more XP
+      </button>
+</div>
+</main>
+<!-- Floating Pinned User Card -->
+<div class="fixed bottom-24 left-4 right-4 z-40">
+<div class="glass-card rounded-3xl p-5 shadow-[0_20px_50px_rgba(0,0,0,0.5)] border border-primary/20 flex items-center gap-4 ring-1 ring-white/10">
+<div class="flex flex-col items-center justify-center bg-primary/20 rounded-2xl w-14 h-14 border border-primary/30">
+<span class="text-[10px] text-primary-fixed font-black uppercase">Rank</span>
+<span class="font-headline font-bold text-xl text-primary leading-none">#200</span>
+</div>
+<div class="flex-1">
+<h4 class="font-headline font-bold text-white text-lg">You (Your Name)</h4>
+<p class="text-primary font-bold">6,000 <span class="text-[10px] text-primary/60 tracking-widest">XP</span></p>
+</div>
+<div class="text-right">
+<div class="flex items-center justify-end gap-1 text-emerald-400 font-black text-xs">
+<span class="material-symbols-outlined text-sm">trending_up</span>
+          12 spots
+        </div>
+<p class="text-[10px] text-on-surface-variant uppercase font-bold tracking-tighter">this week</p>
+</div>
+</div>
+</div>
+<!-- BottomNavBar -->
+<nav class="fixed bottom-0 left-0 w-full z-50 flex justify-around items-center px-4 pt-2 pb-6 bg-[#0e0e10]/80 backdrop-blur-xl border-t border-white/5 shadow-[0_-8px_30px_rgba(26,115,232,0.15)] rounded-t-[2rem]">
+<a class="flex flex-col items-center justify-center text-gray-400 px-5 py-2 hover:text-white transition-all active:scale-90 duration-200" href="#">
+<span class="material-symbols-outlined" data-icon="swords">swords</span>
+<span class="font-['Manrope'] text-[10px] uppercase font-bold tracking-wider mt-1">BATTLE</span>
+</a>
+<a class="flex flex-col items-center justify-center bg-[#1A73E8]/20 text-[#1A73E8] rounded-xl px-5 py-2 shadow-[inset_0_0_10px_rgba(26,115,232,0.3)] active:scale-90 duration-200" href="#">
+<span class="material-symbols-outlined" data-icon="leaderboard" style="font-variation-settings: 'FILL' 1;">leaderboard</span>
+<span class="font-['Manrope'] text-[10px] uppercase font-bold tracking-wider mt-1">ARENA</span>
+</a>
+<a class="flex flex-col items-center justify-center text-gray-400 px-5 py-2 hover:text-white transition-all active:scale-90 duration-200" href="#">
+<span class="material-symbols-outlined" data-icon="group">group</span>
+<span class="font-['Manrope'] text-[10px] uppercase font-bold tracking-wider mt-1">SOCIAL</span>
+</a>
+<a class="flex flex-col items-center justify-center text-gray-400 px-5 py-2 hover:text-white transition-all active:scale-90 duration-200" href="#">
+<span class="material-symbols-outlined" data-icon="person">person</span>
+<span class="font-['Manrope'] text-[10px] uppercase font-bold tracking-wider mt-1">PROFILE</span>
+</a>
+</nav>
+</body></html>
