@@ -37,10 +37,11 @@ class _PublicProfileSheetState extends ConsumerState<PublicProfileSheet> {
   Future<void> _addFriend() async {
     setState(() => _addingFriend = true);
     try {
-      final uid = FirebaseAuth.instance.currentUser!.uid;
+      final me = FirebaseAuth.instance.currentUser!;
       await ref.read(friendServiceProvider).sendRequest(
-            fromUserId: uid,
+            fromUserId: me.uid,
             toUserId: widget.entry.userId,
+            fromDisplayName: me.displayName ?? 'Someone',
           );
       setState(() => _isFriend = true);
     } catch (_) {}

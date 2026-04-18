@@ -2,7 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../../config/colors.dart';
+import '../../providers/notification_provider.dart';
 import '../../providers/user_provider.dart';
+import '../../sheets/notifications_sheet.dart';
 import '../../sheets/streak_history_sheet.dart';
 import '../../widgets/avatar_circle.dart';
 import 'widgets/overview_card.dart';
@@ -18,6 +20,7 @@ class HomeScreen extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final profile = ref.watch(userProfileProvider).valueOrNull;
     final streak = profile?.currentStreak ?? 0;
+    final unreadCount = ref.watch(unreadNotificationCountProvider);
 
     return Scaffold(
       appBar: AppBar(
@@ -35,6 +38,9 @@ class HomeScreen extends ConsumerWidget {
           ],
         ),
         actions: [
+          // Notification bell with badge
+          _BellButton(unreadCount: unreadCount),
+          const SizedBox(width: 8),
           // Streak badge
           GestureDetector(
             onTap: () => showModalBottomSheet(
@@ -64,7 +70,7 @@ class HomeScreen extends ConsumerWidget {
               ),
             ),
           ),
-          const SizedBox(width: 12),
+          const SizedBox(width: 8),
           // Profile avatar
           GestureDetector(
             onTap: () => context.push('/profile'),
@@ -90,6 +96,63 @@ class HomeScreen extends ConsumerWidget {
       return '${parts[0][0]}${parts[1][0]}'.toUpperCase();
     }
     return name[0].toUpperCase();
+  }
+}
+
+class _BellButton extends StatelessWidget {
+  final int unreadCount;
+  const _BellButton({required this.unreadCount});
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: () => showModalBottomSheet(
+        context: context,
+        isScrollControlled: true,
+        backgroundColor: Colors.transparent,
+        builder: (_) => const NotificationsSheet(),
+      ),
+      child: Container(
+        padding: const EdgeInsets.all(8),
+        decoration: BoxDecoration(
+          color: AppColors.surfaceContainerHigh,
+          borderRadius: BorderRadius.circular(12),
+        ),
+        child: Stack(
+          clipBehavior: Clip.none,
+          children: [
+            const Icon(Icons.notifications_outlined,
+                color: AppColors.onSurface, size: 20),
+            if (unreadCount > 0)
+              Positioned(
+                top: -4,
+                right: -4,
+                child: Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+                  constraints:
+                      const BoxConstraints(minWidth: 16, minHeight: 16),
+                  decoration: BoxDecoration(
+                    color: AppColors.error,
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(
+                        color: AppColors.background, width: 1.5),
+                  ),
+                  child: Text(
+                    unreadCount > 9 ? '9+' : '$unreadCount',
+                    style: const TextStyle(
+                      fontSize: 9,
+                      fontWeight: FontWeight.w900,
+                      color: Colors.white,
+                    ),
+                    textAlign: TextAlign.center,
+                  ),
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
   }
 }
 

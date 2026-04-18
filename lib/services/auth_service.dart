@@ -102,8 +102,10 @@ class AuthService {
     String? avatarURL,
   }) async {
     final now = DateTime.now();
+    final userCode = await _generateUniqueUserCode();
     final user = UserModel(
       userId: uid,
+      userCode: userCode,
       displayName: displayName,
       avatarURL: avatarURL,
       email: email,
@@ -114,9 +116,53 @@ class AuthService {
     await _userDoc(uid).set(user.toFirestore());
   }
 
+  /// Generate a userCode not in use by another user. Retries up to 5 times.
+  Future<String> _generateUniqueUserCode() async {
+    for (var i = 0; i < 5; i++) {
+      final code = UserModel.generateUserCode();
+      final existing = await _firestore
+          .collection('users')
+          .where('userCode', isEqualTo: code)
+          .limit(1)
+          .get();
+      if (existing.docs.isEmpty) return code;
+    }
+    // Extremely unlikely. Fall back to timestamp-suffixed code.
+    return '#${DateTime.now().microsecondsSinceEpoch.toRadixString(36).toUpperCase().substring(0, 5)}';
+  }
+
   /// Update specific fields on the user document.
   Future<void> updateUser(String uid, Map<String, dynamic> data) async {
     await _userDoc(uid).update(data);
+  }
+
+  /// Backfill any missing fields on an existing user doc.
+  /// Called after sign-in to handle schema migrations non-destructively.
+  /// Safe to call every launch — only writes if something is missing.
+  Future<void> ensureUserDataComplete(String uid) async {
+    final doc = await _userDoc(uid).get();
+    if (!doc.exists) return; // Not onboarded yet
+    final data = doc.data()!;
+
+    final updates = <String, dynamic>{};
+
+    // 1. userCode — generate if missing
+    final code = data['userCode'] as String?;
+    if (code == null || code.isEmpty) {
+      updates['userCode'] = await _generateUniqueUserCode();
+    }
+
+    // 2. XP tracking fields — default to 0/empty if absent
+    if (data['lastStepXPThreshold'] == null) {
+      updates['lastStepXPThreshold'] = 0;
+    }
+    if (data['lastStepXPDate'] == null) {
+      updates['lastStepXPDate'] = '';
+    }
+
+    if (updates.isNotEmpty) {
+      await _userDoc(uid).update(updates);
+    }
   }
 }
 

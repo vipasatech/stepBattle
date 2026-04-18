@@ -1,23 +1,91 @@
 import 'dart:ui';
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../../config/colors.dart';
+import '../../providers/auth_provider.dart';
+import '../../providers/step_provider.dart';
+import '../../widgets/permission_gate.dart';
 
-class MainShell extends StatelessWidget {
+/// Main shell with 5-tab bottom nav.
+/// On first build after sign-in:
+///   - Runs schema backfill (ensures userCode + XP fields exist)
+/// Continuously:
+///   - Listens to local step changes and auto-syncs to Firestore
+class MainShell extends ConsumerStatefulWidget {
   final StatefulNavigationShell navigationShell;
 
   const MainShell({super.key, required this.navigationShell});
 
   @override
+  ConsumerState<MainShell> createState() => _MainShellState();
+}
+
+class _MainShellState extends ConsumerState<MainShell> {
+  bool _backfillTriggered = false;
+
+  Future<void> _runInitialSync(String uid) async {
+    // 1. Backfill missing user doc fields (userCode, etc.)
+    await ref.read(authServiceProvider).ensureUserDataComplete(uid);
+
+    // 2. Force a step sync using current device step count — this pushes
+    //    today's steps to every downstream (step_logs, missions, battles, clan).
+    //    Needed because ref.listen only fires on CHANGE, not on first load.
+    try {
+      final health = ref.read(healthServiceProvider);
+      final steps = await health.getTodaySteps();
+      if (steps > 0) {
+        await ref.read(stepServiceProvider).syncSteps(
+              userId: uid,
+              steps: steps,
+              source: health.sourceName,
+            );
+      }
+    } catch (_) {
+      // Health not authorized or offline — ignore silently.
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      body: navigationShell,
-      extendBody: true,
-      bottomNavigationBar: _BottomNavBar(
-        currentIndex: navigationShell.currentIndex,
-        onTap: (index) => navigationShell.goBranch(
-          index,
-          initialLocation: index == navigationShell.currentIndex,
+    // Run one-time schema backfill + force initial step sync when auth confirms.
+    // Non-blocking: fires and forgets.
+    final uid = ref.watch(authStateProvider).valueOrNull?.uid;
+    if (uid != null && !_backfillTriggered) {
+      _backfillTriggered = true;
+      _runInitialSync(uid);
+    }
+
+    // Auto-sync step count to Firestore whenever local device reading changes.
+    // This fans out to: step_logs, users.totalStepsAllTime,
+    // user_mission_progress, active battles, clan members.
+    ref.listen<AsyncValue<int>>(localTodayStepsProvider, (prev, next) {
+      final newSteps = next.valueOrNull;
+      if (newSteps == null || newSteps <= 0) return;
+      if (prev?.valueOrNull == newSteps) return;
+
+      final uid = ref.read(authStateProvider).valueOrNull?.uid;
+      if (uid == null) return;
+
+      final healthService = ref.read(healthServiceProvider);
+      ref.read(stepServiceProvider).syncSteps(
+            userId: uid,
+            steps: newSteps,
+            source: healthService.sourceName,
+          );
+    });
+
+    final shell = widget.navigationShell;
+    return PermissionGate(
+      child: Scaffold(
+        body: shell,
+        extendBody: true,
+        bottomNavigationBar: _BottomNavBar(
+          currentIndex: shell.currentIndex,
+          onTap: (index) => shell.goBranch(
+            index,
+            initialLocation: index == shell.currentIndex,
+          ),
         ),
       ),
     );

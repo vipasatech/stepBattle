@@ -2,6 +2,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import '../models/friend_relationship_model.dart';
 import '../models/user_model.dart';
 
+/// Friend system — approval-based. Searches by username or userCode.
 class FriendService {
   final FirebaseFirestore _firestore;
 
@@ -14,11 +15,26 @@ class FriendService {
   CollectionReference<Map<String, dynamic>> get _relationships =>
       _firestore.collection('friend_relationships');
 
+  CollectionReference<Map<String, dynamic>> get _notifications =>
+      _firestore.collection('notifications');
+
   // ---------------------------------------------------------------------------
-  // Search
+  // Search — by username prefix OR by userCode
   // ---------------------------------------------------------------------------
 
-  /// Search users by display name prefix.
+  /// Smart search: if query starts with "#" treat as userCode, otherwise as username.
+  Future<List<UserModel>> search(String query) async {
+    final q = query.trim();
+    if (q.isEmpty) return [];
+
+    if (q.startsWith('#')) {
+      final user = await searchByUserCode(q.toUpperCase());
+      return user != null ? [user] : [];
+    }
+    return searchByUsername(q);
+  }
+
+  /// Case-insensitive username prefix search.
   Future<List<UserModel>> searchByUsername(String query) async {
     final q = query.trim();
     if (q.isEmpty) return [];
@@ -30,7 +46,17 @@ class FriendService {
     return snap.docs.map((d) => UserModel.fromFirestore(d)).toList();
   }
 
-  /// Search user by exact user ID.
+  /// Exact userCode match (e.g. "#U4X92").
+  Future<UserModel?> searchByUserCode(String userCode) async {
+    final snap = await _users
+        .where('userCode', isEqualTo: userCode)
+        .limit(1)
+        .get();
+    if (snap.docs.isEmpty) return null;
+    return UserModel.fromFirestore(snap.docs.first);
+  }
+
+  /// Exact userId lookup.
   Future<UserModel?> searchByUserId(String userId) async {
     final doc = await _users.doc(userId).get();
     if (!doc.exists) return null;
@@ -41,37 +67,58 @@ class FriendService {
   // Friend requests
   // ---------------------------------------------------------------------------
 
-  /// Send a friend request.
-  Future<void> sendRequest({
+  /// Send a friend request. Creates a pending relationship doc + notification.
+  /// Returns the relationship ID, or null if request already existed.
+  Future<String?> sendRequest({
     required String fromUserId,
     required String toUserId,
+    required String fromDisplayName,
   }) async {
-    // Check if relationship already exists
-    final existing = await _relationships
+    if (fromUserId == toUserId) return null;
+
+    // Deduplicate: check either direction
+    final forward = await _relationships
         .where('fromUserId', isEqualTo: fromUserId)
         .where('toUserId', isEqualTo: toUserId)
         .limit(1)
         .get();
-    if (existing.docs.isNotEmpty) return;
+    if (forward.docs.isNotEmpty) return forward.docs.first.id;
 
-    // Check reverse direction too
     final reverse = await _relationships
         .where('fromUserId', isEqualTo: toUserId)
         .where('toUserId', isEqualTo: fromUserId)
         .limit(1)
         .get();
-    if (reverse.docs.isNotEmpty) return;
+    if (reverse.docs.isNotEmpty) return reverse.docs.first.id;
 
-    await _relationships.add(FriendRelationship(
+    // Create request
+    final doc = await _relationships.add(FriendRelationship(
       relationshipId: '',
       fromUserId: fromUserId,
       toUserId: toUserId,
       status: FriendStatus.pending,
       createdAt: DateTime.now(),
     ).toFirestore());
+
+    // Queue push notification (Cloud Function picks this up)
+    await _notifications.add({
+      'userId': toUserId,
+      'type': 'friend_request',
+      'title': 'New Friend Request',
+      'body': '$fromDisplayName wants to be your friend',
+      'data': {
+        'relationshipId': doc.id,
+        'fromUserId': fromUserId,
+      },
+      'read': false,
+      'createdAt': Timestamp.now(),
+    });
+
+    return doc.id;
   }
 
-  /// Accept a friend request — updates relationship + adds to both users' friends lists.
+  /// Accept a friend request — updates status, adds to both friends arrays,
+  /// queues push notification to the sender.
   Future<void> acceptRequest(String relationshipId) async {
     final doc = await _relationships.doc(relationshipId).get();
     if (!doc.exists) return;
@@ -79,21 +126,38 @@ class FriendService {
 
     await _relationships.doc(relationshipId).update({'status': 'accepted'});
 
-    // Add to both users' friends arrays
     await _users.doc(rel.fromUserId).update({
       'friends': FieldValue.arrayUnion([rel.toUserId]),
     });
     await _users.doc(rel.toUserId).update({
       'friends': FieldValue.arrayUnion([rel.fromUserId]),
     });
+
+    // Notify sender
+    final accepterDoc = await _users.doc(rel.toUserId).get();
+    final accepterName =
+        accepterDoc.data()?['displayName'] as String? ?? 'Someone';
+    await _notifications.add({
+      'userId': rel.fromUserId,
+      'type': 'friend_accepted',
+      'title': 'Friend Request Accepted',
+      'body': '$accepterName is now your friend',
+      'data': {'friendUserId': rel.toUserId},
+      'read': false,
+      'createdAt': Timestamp.now(),
+    });
   }
 
-  /// Reject a friend request.
   Future<void> rejectRequest(String relationshipId) async {
     await _relationships.doc(relationshipId).update({'status': 'rejected'});
   }
 
-  /// Remove a friend from both users.
+  /// Cancel an outgoing pending request (from sender).
+  Future<void> cancelRequest(String relationshipId) async {
+    await _relationships.doc(relationshipId).delete();
+  }
+
+  /// Remove an accepted friend from both users.
   Future<void> removeFriend({
     required String userId,
     required String friendId,
@@ -104,13 +168,23 @@ class FriendService {
     await _users.doc(friendId).update({
       'friends': FieldValue.arrayRemove([userId]),
     });
+    // Also clean up the relationship doc
+    final rels = await _relationships
+        .where('fromUserId', whereIn: [userId, friendId])
+        .get();
+    for (final d in rels.docs) {
+      final r = FriendRelationship.fromFirestore(d);
+      if ((r.fromUserId == userId && r.toUserId == friendId) ||
+          (r.fromUserId == friendId && r.toUserId == userId)) {
+        await d.reference.delete();
+      }
+    }
   }
 
   // ---------------------------------------------------------------------------
   // Queries
   // ---------------------------------------------------------------------------
 
-  /// Get the full UserModel for each friend ID.
   Future<List<UserModel>> getFriends(List<String> friendIds) async {
     if (friendIds.isEmpty) return [];
     final results = <UserModel>[];
@@ -124,10 +198,20 @@ class FriendService {
     return results;
   }
 
-  /// Stream pending friend requests for a user.
-  Stream<List<FriendRelationship>> watchPendingRequests(String userId) {
+  /// Stream incoming pending friend requests.
+  Stream<List<FriendRelationship>> watchIncomingRequests(String userId) {
     return _relationships
         .where('toUserId', isEqualTo: userId)
+        .where('status', isEqualTo: 'pending')
+        .snapshots()
+        .map((snap) =>
+            snap.docs.map((d) => FriendRelationship.fromFirestore(d)).toList());
+  }
+
+  /// Stream outgoing pending friend requests.
+  Stream<List<FriendRelationship>> watchOutgoingRequests(String userId) {
+    return _relationships
+        .where('fromUserId', isEqualTo: userId)
         .where('status', isEqualTo: 'pending')
         .snapshots()
         .map((snap) =>

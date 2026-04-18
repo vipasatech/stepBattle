@@ -3,8 +3,10 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../config/colors.dart';
 import '../config/constants.dart';
+import '../models/user_model.dart';
 import '../providers/clan_provider.dart';
 import '../widgets/bottom_sheet_handle.dart';
+import 'add_friends_sheet.dart';
 
 class CreateClanSheet extends ConsumerStatefulWidget {
   const CreateClanSheet({super.key});
@@ -15,6 +17,7 @@ class CreateClanSheet extends ConsumerStatefulWidget {
 
 class _CreateClanSheetState extends ConsumerState<CreateClanSheet> {
   final _nameController = TextEditingController();
+  final List<UserModel> _invitedMembers = [];
   bool _creating = false;
 
   @override
@@ -29,6 +32,22 @@ class _CreateClanSheetState extends ConsumerState<CreateClanSheet> {
         name.length <= AppConstants.clanNameMaxLength;
   }
 
+  void _openAddFriends() {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (_) => AddFriendsSheet(
+        multiSelect: true,
+        confirmLabel: 'Add to Clan',
+        onConfirm: (selected) =>
+            setState(() => _invitedMembers
+              ..clear()
+              ..addAll(selected)),
+      ),
+    );
+  }
+
   Future<void> _create() async {
     if (!_isValid) return;
     setState(() => _creating = true);
@@ -38,9 +57,21 @@ class _CreateClanSheetState extends ConsumerState<CreateClanSheet> {
       await ref.read(clanServiceProvider).createClan(
             name: _nameController.text.trim(),
             captainId: uid,
-            initialMemberIds: [],
+            invitedUserIds:
+                _invitedMembers.map((u) => u.userId).toList(),
           );
-      if (mounted) Navigator.pop(context);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              _invitedMembers.isEmpty
+                  ? 'Clan created!'
+                  : 'Clan created! Invites sent to ${_invitedMembers.length} friend${_invitedMembers.length == 1 ? '' : 's'}.',
+            ),
+          ),
+        );
+        Navigator.pop(context);
+      }
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context)
@@ -61,8 +92,10 @@ class _CreateClanSheetState extends ConsumerState<CreateClanSheet> {
         color: AppColors.surfaceContainer,
         borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
       ),
-      padding: const EdgeInsets.fromLTRB(24, 0, 24, 32),
-      child: Column(
+      child: SingleChildScrollView(
+        padding: EdgeInsets.fromLTRB(
+            24, 0, 24, 32 + MediaQuery.of(context).viewInsets.bottom),
+        child: Column(
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -119,11 +152,11 @@ class _CreateClanSheetState extends ConsumerState<CreateClanSheet> {
             width: double.infinity,
             height: 50,
             child: OutlinedButton.icon(
-              onPressed: () {
-                // TODO: Open Add Friends sheet multi-select
-              },
+              onPressed: _openAddFriends,
               icon: const Icon(Icons.person_add, size: 18),
-              label: const Text('+ Add Friends'),
+              label: Text(_invitedMembers.isEmpty
+                  ? '+ Add Friends'
+                  : '${_invitedMembers.length} invited · Tap to edit'),
               style: OutlinedButton.styleFrom(
                 side: const BorderSide(color: AppColors.primary),
                 foregroundColor: AppColors.primary,
@@ -175,6 +208,7 @@ class _CreateClanSheetState extends ConsumerState<CreateClanSheet> {
             ],
           ),
         ],
+        ),
       ),
     );
   }

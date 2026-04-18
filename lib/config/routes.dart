@@ -5,8 +5,10 @@ import '../providers/auth_provider.dart';
 import '../screens/shell/main_shell.dart';
 import '../screens/home/home_screen.dart';
 import '../screens/battles/battles_screen.dart';
+import '../screens/battles/pending_battles_screen.dart';
 import '../screens/missions/missions_screen.dart';
 import '../screens/clan/clan_screen.dart';
+import '../screens/clan/clan_details_screen.dart';
 import '../screens/leaderboard/leaderboard_screen.dart';
 import '../screens/auth/login_screen.dart';
 import '../screens/auth/onboarding_screen.dart';
@@ -19,6 +21,7 @@ final GlobalKey<NavigatorState> _rootNavigatorKey = GlobalKey<NavigatorState>();
 /// GoRouter provider — rebuilds when auth state changes for redirect logic.
 final routerProvider = Provider<GoRouter>((ref) {
   final authState = ref.watch(authStateProvider);
+  final hasOnboarded = ref.watch(hasCompletedOnboardingProvider);
 
   return GoRouter(
     navigatorKey: _rootNavigatorKey,
@@ -26,23 +29,28 @@ final routerProvider = Provider<GoRouter>((ref) {
     redirect: (context, state) {
       final user = authState.valueOrNull;
       final isLoggedIn = user != null;
-      final isOnLoginPage = state.matchedLocation == '/login';
-      final isOnOnboarding = state.matchedLocation == '/onboarding';
+      final location = state.matchedLocation;
+      final isOnLoginPage = location == '/login';
+      final isOnOnboarding = location == '/onboarding';
 
       // Not logged in → force login
       if (!isLoggedIn) {
         return isOnLoginPage ? null : '/login';
       }
 
-      // Logged in but on login page → check onboarding
+      // Logged in but on login page → go to onboarding or home
       if (isOnLoginPage) {
         return '/onboarding';
       }
 
-      // Let onboarding page handle its own redirect after completion
-      if (isOnOnboarding) return null;
+      // Check if user has completed onboarding (Firestore doc exists)
+      final onboarded = hasOnboarded.valueOrNull;
+      if (onboarded == false && !isOnOnboarding) {
+        // User is authenticated but no Firestore doc → force onboarding
+        return '/onboarding';
+      }
 
-      // Otherwise allow navigation
+      // All other pages allowed
       return null;
     },
     routes: [
@@ -58,13 +66,13 @@ final routerProvider = Provider<GoRouter>((ref) {
         builder: (context, state) => const OnboardingScreen(),
       ),
 
-      // Profile (full screen, not a tab)
+      // Profile (full screen, not a tab — uses root navigator)
       GoRoute(
+        parentNavigatorKey: _rootNavigatorKey,
         path: '/profile',
         name: 'profile',
         builder: (context, state) => const ProfileScreen(),
       ),
-
 
       // Main app shell with 5 tabs
       StatefulShellRoute.indexedStack(
@@ -89,6 +97,14 @@ final routerProvider = Provider<GoRouter>((ref) {
                 path: '/battles',
                 name: 'battles',
                 builder: (context, state) => const BattlesScreen(),
+                routes: [
+                  GoRoute(
+                    path: 'pending',
+                    name: 'pendingBattles',
+                    builder: (context, state) =>
+                        const PendingBattlesScreen(),
+                  ),
+                ],
               ),
             ],
           ),
@@ -121,6 +137,12 @@ final routerProvider = Provider<GoRouter>((ref) {
                     name: 'joinClanBattle',
                     builder: (context, state) =>
                         const JoinClanBattleScreen(),
+                  ),
+                  GoRoute(
+                    path: 'details',
+                    name: 'clanDetails',
+                    builder: (context, state) =>
+                        const ClanDetailsScreen(),
                   ),
                 ],
               ),

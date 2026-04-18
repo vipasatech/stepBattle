@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../config/colors.dart';
+import '../../../providers/stats_provider.dart';
 import '../../../providers/step_provider.dart';
 import '../../../widgets/glass_card.dart';
 
@@ -12,6 +13,8 @@ class ThisWeekStats extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final theme = Theme.of(context);
     final weeklySteps = ref.watch(weeklyStepsProvider).valueOrNull ?? 0;
+    final battleStats = ref.watch(battleStatsProvider);
+    final missionStats = ref.watch(missionStatsProvider);
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -38,12 +41,16 @@ class ThisWeekStats extends ConsumerWidget {
               _Divider(),
               _StatRow(
                   label: 'XP Earned',
-                  value: '200 XP',
+                  value: '${missionStats.xpEarnedToday} XP',
                   valueColor: AppColors.tertiary),
               _Divider(),
-              _StatRow(label: 'Battles Won', value: '2 / 3'),
+              _StatRow(
+                  label: 'Battles Won',
+                  value: battleStats.thisWeekLabel),
               _Divider(),
-              _StatRow(label: 'Missions Done', value: '7 / 10'),
+              _StatRow(
+                  label: 'Missions Done',
+                  value: missionStats.thisWeekLabel),
             ],
           ),
         ),
@@ -95,6 +102,9 @@ class _StatRow extends StatelessWidget {
 class _Divider extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
-    return Container(height: 1, color: Colors.white.withValues(alpha: 0.05));
+    return SizedBox(
+      height: 1,
+      child: ColoredBox(color: Colors.white.withValues(alpha: 0.05)),
+    );
   }
 }

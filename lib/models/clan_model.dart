@@ -4,7 +4,7 @@ class ClanMember {
   final String userId;
   final String displayName;
   final String? avatarURL;
-  final String role; // "captain" | "soldier"
+  final String role; // "captain" | "admin" | "soldier"
   final int stepsToday;
 
   const ClanMember({
@@ -16,6 +16,15 @@ class ClanMember {
   });
 
   bool get isCaptain => role == 'captain';
+  bool get isAdmin => role == 'admin';
+  bool get isSoldier => role == 'soldier';
+
+  /// Human-readable role label.
+  String get roleLabel => switch (role) {
+        'captain' => 'Captain',
+        'admin' => 'Admin',
+        _ => 'Soldier',
+      };
 
   factory ClanMember.fromMap(Map<String, dynamic> m) => ClanMember(
         userId: m['userId'] as String? ?? '',
@@ -39,7 +48,18 @@ class ClanModel {
   final String name;
   final String clanIdCode; // e.g. "#CL7X9"
   final String captainId;
+
+  /// User IDs with admin privileges (invite/kick soldiers). Captain is NOT
+  /// listed here — captain powers are a superset of admin and derived from
+  /// `captainId`. Never contains `captainId`.
+  final List<String> adminIds;
+
+  /// User IDs that have accepted and are full members (show on dashboard).
   final List<String> memberIds;
+
+  /// User IDs invited but haven't accepted yet.
+  final List<String> pendingInviteIds;
+
   final int totalClanXP;
   final String? activeBattleId;
   final DateTime createdAt;
@@ -50,7 +70,9 @@ class ClanModel {
     required this.name,
     required this.clanIdCode,
     required this.captainId,
+    this.adminIds = const [],
     required this.memberIds,
+    this.pendingInviteIds = const [],
     this.totalClanXP = 0,
     this.activeBattleId,
     required this.createdAt,
@@ -59,6 +81,26 @@ class ClanModel {
 
   bool get isFull => memberIds.length >= maxMembers;
   int get memberCount => memberIds.length;
+  int get pendingInviteCount => pendingInviteIds.length;
+
+  bool hasPendingInviteFor(String userId) =>
+      pendingInviteIds.contains(userId);
+
+  /// True if the user is the captain.
+  bool isCaptain(String userId) => captainId == userId;
+
+  /// True if the user has admin privileges (captain OR explicit admin).
+  bool isAdminOrCaptain(String userId) =>
+      captainId == userId || adminIds.contains(userId);
+
+  /// Derive role string for a given user in this clan.
+  /// Returns 'captain', 'admin', 'soldier', or 'none' (not a member).
+  String roleOf(String userId) {
+    if (captainId == userId) return 'captain';
+    if (adminIds.contains(userId)) return 'admin';
+    if (memberIds.contains(userId)) return 'soldier';
+    return 'none';
+  }
 
   factory ClanModel.fromFirestore(DocumentSnapshot<Map<String, dynamic>> doc) {
     final d = doc.data()!;
@@ -67,7 +109,10 @@ class ClanModel {
       name: d['name'] as String? ?? '',
       clanIdCode: d['clanIdCode'] as String? ?? '',
       captainId: d['captainId'] as String? ?? '',
+      adminIds: List<String>.from(d['adminIds'] as List? ?? []),
       memberIds: List<String>.from(d['memberIds'] as List? ?? []),
+      pendingInviteIds:
+          List<String>.from(d['pendingInviteIds'] as List? ?? []),
       totalClanXP: d['totalClanXP'] as int? ?? 0,
       activeBattleId: d['activeBattleId'] as String?,
       createdAt: (d['createdAt'] as Timestamp?)?.toDate() ?? DateTime.now(),
@@ -79,7 +124,9 @@ class ClanModel {
         'name': name,
         'clanIdCode': clanIdCode,
         'captainId': captainId,
+        'adminIds': adminIds,
         'memberIds': memberIds,
+        'pendingInviteIds': pendingInviteIds,
         'totalClanXP': totalClanXP,
         'activeBattleId': activeBattleId,
         'createdAt': Timestamp.fromDate(createdAt),

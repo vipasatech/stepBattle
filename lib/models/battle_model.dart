@@ -36,13 +36,21 @@ class BattleParticipant {
 
 enum BattleType { oneVsOne, group }
 
-enum BattleStatus { pending, active, completed }
+enum BattleStatus { pending, active, completed, cancelled }
 
 class BattleModel {
   final String battleId;
   final BattleType type;
   final BattleStatus status;
   final List<BattleParticipant> participants;
+
+  /// User IDs invited but not yet responded (creator + recipients).
+  /// Creator's UID is always in `acceptedUserIds` by default.
+  final List<String> invitedUserIds;
+
+  /// User IDs who accepted the invite. Battle becomes active when all match invitedUserIds.
+  final List<String> acceptedUserIds;
+
   final DateTime startTime;
   final DateTime endTime;
   final int durationDays;
@@ -50,17 +58,23 @@ class BattleModel {
   final String? winnerId;
   final String createdBy;
 
+  /// When the invite was created. Used for 24h auto-expire check.
+  final DateTime createdAt;
+
   const BattleModel({
     required this.battleId,
     required this.type,
     required this.status,
     required this.participants,
+    this.invitedUserIds = const [],
+    this.acceptedUserIds = const [],
     required this.startTime,
     required this.endTime,
     required this.durationDays,
     required this.xpReward,
     this.winnerId,
     required this.createdBy,
+    required this.createdAt,
   });
 
   factory BattleModel.fromFirestore(
@@ -73,6 +87,10 @@ class BattleModel {
       participants: (data['participants'] as List<dynamic>? ?? [])
           .map((p) => BattleParticipant.fromMap(p as Map<String, dynamic>))
           .toList(),
+      invitedUserIds:
+          List<String>.from(data['invitedUserIds'] as List? ?? []),
+      acceptedUserIds:
+          List<String>.from(data['acceptedUserIds'] as List? ?? []),
       startTime:
           (data['startTime'] as Timestamp?)?.toDate() ?? DateTime.now(),
       endTime: (data['endTime'] as Timestamp?)?.toDate() ?? DateTime.now(),
@@ -80,6 +98,8 @@ class BattleModel {
       xpReward: data['xpReward'] as int? ?? 200,
       winnerId: data['winnerId'] as String?,
       createdBy: data['createdBy'] as String? ?? '',
+      createdAt:
+          (data['createdAt'] as Timestamp?)?.toDate() ?? DateTime.now(),
     );
   }
 
@@ -87,13 +107,28 @@ class BattleModel {
         'type': type == BattleType.oneVsOne ? '1v1' : 'group',
         'status': status.name,
         'participants': participants.map((p) => p.toMap()).toList(),
+        'invitedUserIds': invitedUserIds,
+        'acceptedUserIds': acceptedUserIds,
         'startTime': Timestamp.fromDate(startTime),
         'endTime': Timestamp.fromDate(endTime),
         'durationDays': durationDays,
         'xpReward': xpReward,
         'winnerId': winnerId,
         'createdBy': createdBy,
+        'createdAt': Timestamp.fromDate(createdAt),
       };
+
+  /// True if this is a pending invite for the given user and they haven't responded.
+  bool isPendingInviteFor(String userId) =>
+      status == BattleStatus.pending &&
+      invitedUserIds.contains(userId) &&
+      !acceptedUserIds.contains(userId);
+
+  /// True if the invite has expired (>24h old and still pending).
+  bool get isExpired {
+    if (status != BattleStatus.pending) return false;
+    return DateTime.now().difference(createdAt).inHours >= 24;
+  }
 
   /// Get this user's participant entry.
   BattleParticipant? participantFor(String userId) {
@@ -142,6 +177,7 @@ class BattleModel {
   static BattleStatus _parseStatus(String s) => switch (s) {
         'active' => BattleStatus.active,
         'completed' => BattleStatus.completed,
+        'cancelled' => BattleStatus.cancelled,
         _ => BattleStatus.pending,
       };
 }

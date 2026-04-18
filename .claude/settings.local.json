@@ -18,7 +18,10 @@
       "Bash(\"/c/Program Files/Android/Android Studio/jbr/bin/keytool.exe\" -genkey -v -keystore android/app/upload-keystore.jks -storetype JKS -keyalg RSA -keysize 2048 -validity 10000 -alias upload -storepass stepbattle2025 -keypass stepbattle2025 -dname \"CN=StepBattle, OU=Mobile, O=StepBattle, L=Unknown, ST=Unknown, C=IN\")",
       "Bash(flutter build:*)",
       "Bash('/c/Program Files/Android/Android Studio/jbr/bin/keytool.exe' -list -v -keystore __TRACKED_VAR__/.android/debug.keystore -alias androiddebugkey -storepass android -keypass android)",
-      "Bash(flutter devices:*)"
+      "Bash(flutter devices:*)",
+      "Bash(flutter run:*)",
+      "Bash(timeout 10 flutter logs)",
+      "Bash(flutter logs:*)"
     ]
   }
 }

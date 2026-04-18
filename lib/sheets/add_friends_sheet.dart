@@ -7,18 +7,23 @@ import '../providers/friend_provider.dart';
 import '../widgets/avatar_circle.dart';
 import '../widgets/bottom_sheet_handle.dart';
 
-/// Reusable Add Friends bottom sheet — used from Battles, Clan, Profile.
-/// [mode]: single (1v1 battle) or multi (group/clan).
-/// [onConfirm]: callback with selected user(s).
+/// Reusable Add Friends bottom sheet with 3 tabs:
+///   Friends List — accepted friends (multi/single select mode)
+///   Search — by @username or #UserCode
+///   Requests — incoming pending requests with Accept/Reject
 class AddFriendsSheet extends ConsumerStatefulWidget {
   final bool multiSelect;
+  final bool allowSelect;
   final String confirmLabel;
+  final int initialTab;
   final void Function(List<UserModel> selected)? onConfirm;
 
   const AddFriendsSheet({
     super.key,
     this.multiSelect = true,
+    this.allowSelect = true,
     this.confirmLabel = 'Confirm Selection',
+    this.initialTab = 0,
     this.onConfirm,
   });
 
@@ -27,11 +32,17 @@ class AddFriendsSheet extends ConsumerStatefulWidget {
 }
 
 class _AddFriendsSheetState extends ConsumerState<AddFriendsSheet> {
-  int _tabIndex = 0; // 0 = Friends List, 1 = Search/User ID
+  late int _tabIndex;
   final _searchController = TextEditingController();
   final Set<String> _selectedIds = {};
   List<UserModel> _searchResults = [];
   bool _searching = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _tabIndex = widget.initialTab.clamp(0, 2);
+  }
 
   @override
   void dispose() {
@@ -60,23 +71,47 @@ class _AddFriendsSheetState extends ConsumerState<AddFriendsSheet> {
     if (q.isEmpty) return;
     setState(() => _searching = true);
     try {
-      final results =
-          await ref.read(friendServiceProvider).searchByUsername(q);
+      final results = await ref.read(friendServiceProvider).search(q);
       setState(() => _searchResults = results);
     } catch (_) {}
     setState(() => _searching = false);
+  }
+
+  Future<void> _sendRequest(UserModel target) async {
+    final me = FirebaseAuth.instance.currentUser;
+    if (me == null) return;
+    try {
+      await ref.read(friendServiceProvider).sendRequest(
+            fromUserId: me.uid,
+            toUserId: target.userId,
+            fromDisplayName: me.displayName ?? 'Someone',
+          );
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Friend request sent to ${target.displayName}')),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Could not send request: $e')),
+        );
+      }
+    }
   }
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final friends = ref.watch(friendsListProvider);
+    final incomingCount = ref.watch(incomingRequestCountProvider);
     final currentUid = FirebaseAuth.instance.currentUser?.uid ?? '';
 
     return DraggableScrollableSheet(
       initialChildSize: 0.85,
       minChildSize: 0.5,
       maxChildSize: 0.95,
+      expand: false,
       builder: (context, scrollController) => Container(
         decoration: const BoxDecoration(
           color: Color(0xFF1A1A1C),
@@ -98,7 +133,7 @@ class _AddFriendsSheetState extends ConsumerState<AddFriendsSheet> {
             ),
             const SizedBox(height: 16),
 
-            // Tab toggle
+            // 3-tab segmented control
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 24),
               child: Container(
@@ -110,14 +145,20 @@ class _AddFriendsSheetState extends ConsumerState<AddFriendsSheet> {
                 child: Row(
                   children: [
                     _Tab(
-                      label: 'Friends List',
+                      label: 'Friends',
                       isActive: _tabIndex == 0,
                       onTap: () => setState(() => _tabIndex = 0),
                     ),
                     _Tab(
-                      label: 'Search / User ID',
+                      label: 'Search',
                       isActive: _tabIndex == 1,
                       onTap: () => setState(() => _tabIndex = 1),
+                    ),
+                    _Tab(
+                      label: 'Requests',
+                      badge: incomingCount,
+                      isActive: _tabIndex == 2,
+                      onTap: () => setState(() => _tabIndex = 2),
                     ),
                   ],
                 ),
@@ -125,88 +166,64 @@ class _AddFriendsSheetState extends ConsumerState<AddFriendsSheet> {
             ),
             const SizedBox(height: 16),
 
-            // Search bar
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 24),
-              child: TextField(
-                controller: _searchController,
-                onSubmitted: (_) => _tabIndex == 1 ? _search() : null,
-                decoration: InputDecoration(
-                  hintText: _tabIndex == 0
-                      ? 'Search your friends...'
-                      : 'Enter @username or User ID (e.g. #U4X92)',
-                  prefixIcon:
-                      const Icon(Icons.search, color: AppColors.outline),
-                ),
-              ),
-            ),
-            const SizedBox(height: 12),
-
-            // List
             Expanded(
-              child: _tabIndex == 0
-                  ? _FriendsList(
-                      friends: friends.valueOrNull ?? [],
-                      selectedIds: _selectedIds,
-                      currentUid: currentUid,
-                      onToggle: _toggleSelect,
-                      scrollController: scrollController,
-                    )
-                  : _SearchList(
-                      results: _searchResults,
-                      searching: _searching,
-                      selectedIds: _selectedIds,
-                      currentUid: currentUid,
-                      onToggle: _toggleSelect,
-                      scrollController: scrollController,
-                    ),
+              child: switch (_tabIndex) {
+                0 => _FriendsListTab(
+                    friends: friends.valueOrNull ?? [],
+                    selectedIds: _selectedIds,
+                    currentUid: currentUid,
+                    allowSelect: widget.allowSelect,
+                    onToggle: _toggleSelect,
+                    scrollController: scrollController,
+                  ),
+                1 => _SearchTab(
+                    searchController: _searchController,
+                    results: _searchResults,
+                    searching: _searching,
+                    currentUid: currentUid,
+                    onSearch: _search,
+                    onSendRequest: _sendRequest,
+                    scrollController: scrollController,
+                  ),
+                _ => _RequestsTab(scrollController: scrollController),
+              },
             ),
 
-            // Bottom confirm
-            Container(
-              padding: const EdgeInsets.fromLTRB(24, 12, 24, 32),
-              decoration: BoxDecoration(
-                gradient: LinearGradient(
-                  begin: Alignment.topCenter,
-                  end: Alignment.bottomCenter,
-                  colors: [
-                    const Color(0xFF1A1A1C).withValues(alpha: 0),
-                    const Color(0xFF1A1A1C),
-                  ],
+            // Bottom confirm bar (only for selection mode on Friends tab)
+            if (widget.allowSelect && _tabIndex == 0)
+              Container(
+                padding: const EdgeInsets.fromLTRB(24, 12, 24, 32),
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.topCenter,
+                    end: Alignment.bottomCenter,
+                    colors: [
+                      const Color(0xFF1A1A1C).withValues(alpha: 0),
+                      const Color(0xFF1A1A1C),
+                    ],
+                  ),
+                ),
+                child: SizedBox(
+                  width: double.infinity,
+                  height: 52,
+                  child: FilledButton(
+                    onPressed: _selectedIds.isEmpty
+                        ? null
+                        : () {
+                            final allUsers = <UserModel>[
+                              ...(friends.valueOrNull ?? <UserModel>[]),
+                              ..._searchResults,
+                            ];
+                            final selected = allUsers
+                                .where((u) => _selectedIds.contains(u.userId))
+                                .toList();
+                            widget.onConfirm?.call(selected);
+                            Navigator.pop(context);
+                          },
+                    child: Text(widget.confirmLabel),
+                  ),
                 ),
               ),
-              child: Column(
-                children: [
-                  SizedBox(
-                    width: double.infinity,
-                    height: 52,
-                    child: FilledButton(
-                      onPressed: _selectedIds.isEmpty
-                          ? null
-                          : () {
-                              // Resolve selected IDs to UserModel objects
-                              final allUsers = [
-                                ...(friends.valueOrNull ?? []),
-                                ..._searchResults,
-                              ];
-                              final selected = allUsers
-                                  .where(
-                                      (u) => _selectedIds.contains(u.userId))
-                                  .toList();
-                              widget.onConfirm?.call(selected);
-                              Navigator.pop(context);
-                            },
-                      child: Text(widget.confirmLabel),
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-                  Text("They'll receive an invite notification",
-                      style: theme.textTheme.labelSmall?.copyWith(
-                          color: AppColors.onSurfaceVariant,
-                          letterSpacing: 1)),
-                ],
-              ),
-            ),
           ],
         ),
       ),
@@ -214,16 +231,25 @@ class _AddFriendsSheetState extends ConsumerState<AddFriendsSheet> {
   }
 }
 
+// =============================================================================
+// Tab button
+// =============================================================================
 class _Tab extends StatelessWidget {
   final String label;
+  final int badge;
   final bool isActive;
   final VoidCallback onTap;
 
-  const _Tab(
-      {required this.label, required this.isActive, required this.onTap});
+  const _Tab({
+    required this.label,
+    this.badge = 0,
+    required this.isActive,
+    required this.onTap,
+  });
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
     return Expanded(
       child: GestureDetector(
         onTap: onTap,
@@ -233,13 +259,37 @@ class _Tab extends StatelessWidget {
             color: isActive ? AppColors.primary : Colors.transparent,
             borderRadius: BorderRadius.circular(20),
           ),
-          child: Center(
-            child: Text(label,
-                style: Theme.of(context).textTheme.labelMedium?.copyWith(
-                      color:
-                          isActive ? AppColors.onPrimary : AppColors.onSurfaceVariant,
-                      fontWeight: FontWeight.w700,
-                    )),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Text(label,
+                  style: theme.textTheme.labelMedium?.copyWith(
+                    color: isActive
+                        ? AppColors.onPrimary
+                        : AppColors.onSurfaceVariant,
+                    fontWeight: FontWeight.w700,
+                    fontSize: 12,
+                  )),
+              if (badge > 0) ...[
+                const SizedBox(width: 4),
+                Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+                  decoration: BoxDecoration(
+                    color: isActive ? AppColors.onPrimary : AppColors.error,
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Text(
+                    '$badge',
+                    style: TextStyle(
+                      fontSize: 9,
+                      fontWeight: FontWeight.w900,
+                      color: isActive ? AppColors.primary : Colors.white,
+                    ),
+                  ),
+                ),
+              ],
+            ],
           ),
         ),
       ),
@@ -247,17 +297,22 @@ class _Tab extends StatelessWidget {
   }
 }
 
-class _FriendsList extends StatelessWidget {
+// =============================================================================
+// Tab 1: Friends List
+// =============================================================================
+class _FriendsListTab extends StatelessWidget {
   final List<UserModel> friends;
   final Set<String> selectedIds;
   final String currentUid;
+  final bool allowSelect;
   final void Function(UserModel) onToggle;
   final ScrollController scrollController;
 
-  const _FriendsList({
+  const _FriendsListTab({
     required this.friends,
     required this.selectedIds,
     required this.currentUid,
+    required this.allowSelect,
     required this.onToggle,
     required this.scrollController,
   });
@@ -266,12 +321,15 @@ class _FriendsList extends StatelessWidget {
   Widget build(BuildContext context) {
     if (friends.isEmpty) {
       return Center(
-        child: Text('No friends yet. Use the Search tab to find people.',
-            style: Theme.of(context)
-                .textTheme
-                .bodySmall
-                ?.copyWith(color: AppColors.onSurfaceVariant),
-            textAlign: TextAlign.center),
+        child: Padding(
+          padding: const EdgeInsets.all(32),
+          child: Text('No friends yet. Use the Search tab to find people.',
+              style: Theme.of(context)
+                  .textTheme
+                  .bodySmall
+                  ?.copyWith(color: AppColors.onSurfaceVariant),
+              textAlign: TextAlign.center),
+        ),
       );
     }
     return ListView.builder(
@@ -283,79 +341,267 @@ class _FriendsList extends StatelessWidget {
         if (f.userId == currentUid) return const SizedBox();
         return _UserRow(
           user: f,
-          isSelected: selectedIds.contains(f.userId),
-          onTap: () => onToggle(f),
+          selected: selectedIds.contains(f.userId),
+          showSelect: allowSelect,
+          onTap: allowSelect ? () => onToggle(f) : null,
         );
       },
     );
   }
 }
 
-class _SearchList extends StatelessWidget {
+// =============================================================================
+// Tab 2: Search
+// =============================================================================
+class _SearchTab extends StatelessWidget {
+  final TextEditingController searchController;
   final List<UserModel> results;
   final bool searching;
-  final Set<String> selectedIds;
   final String currentUid;
-  final void Function(UserModel) onToggle;
+  final VoidCallback onSearch;
+  final Future<void> Function(UserModel) onSendRequest;
   final ScrollController scrollController;
 
-  const _SearchList({
+  const _SearchTab({
+    required this.searchController,
     required this.results,
     required this.searching,
-    required this.selectedIds,
     required this.currentUid,
-    required this.onToggle,
+    required this.onSearch,
+    required this.onSendRequest,
     required this.scrollController,
   });
 
   @override
   Widget build(BuildContext context) {
-    if (searching) {
-      return const Center(
-          child: CircularProgressIndicator(color: AppColors.primary));
-    }
-    if (results.isEmpty) {
-      return Center(
-        child: Text('Search for users above',
-            style: Theme.of(context)
-                .textTheme
-                .bodySmall
-                ?.copyWith(color: AppColors.onSurfaceVariant)),
-      );
-    }
-    return ListView.builder(
-      controller: scrollController,
-      padding: const EdgeInsets.symmetric(horizontal: 24),
-      itemCount: results.length,
-      itemBuilder: (_, i) {
-        final u = results[i];
-        if (u.userId == currentUid) return const SizedBox();
-        return _UserRow(
-          user: u,
-          isSelected: selectedIds.contains(u.userId),
-          onTap: () => onToggle(u),
+    return Column(
+      children: [
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 24),
+          child: TextField(
+            controller: searchController,
+            onSubmitted: (_) => onSearch(),
+            decoration: InputDecoration(
+              hintText: 'Enter @username or #CODE',
+              prefixIcon: const Icon(Icons.search, color: AppColors.outline),
+              suffixIcon: IconButton(
+                icon: const Icon(Icons.arrow_forward, size: 20),
+                onPressed: onSearch,
+              ),
+            ),
+          ),
+        ),
+        const SizedBox(height: 12),
+        Expanded(
+          child: searching
+              ? const Center(
+                  child: CircularProgressIndicator(color: AppColors.primary))
+              : results.isEmpty
+                  ? Center(
+                      child: Padding(
+                        padding: const EdgeInsets.all(32),
+                        child: Text('Search by username or user code',
+                            style: Theme.of(context)
+                                .textTheme
+                                .bodySmall
+                                ?.copyWith(color: AppColors.onSurfaceVariant)),
+                      ),
+                    )
+                  : ListView.builder(
+                      controller: scrollController,
+                      padding: const EdgeInsets.symmetric(horizontal: 24),
+                      itemCount: results.length,
+                      itemBuilder: (_, i) {
+                        final u = results[i];
+                        if (u.userId == currentUid) return const SizedBox();
+                        return _UserRow(
+                          user: u,
+                          showSelect: false,
+                          trailing: FilledButton.icon(
+                            icon: const Icon(Icons.person_add, size: 16),
+                            label: const Text('Request'),
+                            onPressed: () => onSendRequest(u),
+                            style: FilledButton.styleFrom(
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 12, vertical: 8),
+                            ),
+                          ),
+                        );
+                      },
+                    ),
+        ),
+      ],
+    );
+  }
+}
+
+// =============================================================================
+// Tab 3: Incoming Requests (Accept / Reject)
+// =============================================================================
+class _RequestsTab extends ConsumerWidget {
+  final ScrollController scrollController;
+
+  const _RequestsTab({required this.scrollController});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final theme = Theme.of(context);
+    final requests = ref.watch(incomingRequestProfilesProvider);
+
+    return requests.when(
+      loading: () => const Center(
+          child: CircularProgressIndicator(color: AppColors.primary)),
+      error: (_, __) => const Center(child: Text('Could not load requests')),
+      data: (list) {
+        if (list.isEmpty) {
+          return Center(
+            child: Padding(
+              padding: const EdgeInsets.all(32),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(Icons.inbox,
+                      size: 48,
+                      color: AppColors.onSurfaceVariant
+                          .withValues(alpha: 0.4)),
+                  const SizedBox(height: 12),
+                  Text('No pending requests',
+                      style: theme.textTheme.bodyMedium
+                          ?.copyWith(color: AppColors.onSurfaceVariant),
+                      textAlign: TextAlign.center),
+                ],
+              ),
+            ),
+          );
+        }
+        return ListView.builder(
+          controller: scrollController,
+          padding: const EdgeInsets.symmetric(horizontal: 24),
+          itemCount: list.length,
+          itemBuilder: (_, i) {
+            final item = list[i];
+            return _RequestRow(
+              user: item.user,
+              relationshipId: item.rel.relationshipId,
+            );
+          },
         );
       },
     );
   }
 }
 
+class _RequestRow extends ConsumerStatefulWidget {
+  final UserModel user;
+  final String relationshipId;
+
+  const _RequestRow({required this.user, required this.relationshipId});
+
+  @override
+  ConsumerState<_RequestRow> createState() => _RequestRowState();
+}
+
+class _RequestRowState extends ConsumerState<_RequestRow> {
+  bool _processing = false;
+
+  Future<void> _accept() async {
+    setState(() => _processing = true);
+    try {
+      await ref.read(friendServiceProvider).acceptRequest(widget.relationshipId);
+    } catch (_) {}
+    if (mounted) setState(() => _processing = false);
+  }
+
+  Future<void> _reject() async {
+    setState(() => _processing = true);
+    try {
+      await ref.read(friendServiceProvider).rejectRequest(widget.relationshipId);
+    } catch (_) {}
+    if (mounted) setState(() => _processing = false);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 10),
+      child: Row(
+        children: [
+          AvatarCircle(
+            radius: 26,
+            imageUrl: widget.user.avatarURL,
+            initials: widget.user.displayName.isNotEmpty
+                ? widget.user.displayName[0].toUpperCase()
+                : '?',
+            borderColor: AppColors.primary.withValues(alpha: 0.2),
+            borderWidth: 2,
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(widget.user.displayName,
+                    style: theme.textTheme.titleSmall
+                        ?.copyWith(fontWeight: FontWeight.w700)),
+                Text(widget.user.userCode,
+                    style: theme.textTheme.labelSmall
+                        ?.copyWith(color: AppColors.onSurfaceVariant)),
+              ],
+            ),
+          ),
+          if (_processing)
+            const SizedBox(
+              width: 18,
+              height: 18,
+              child:
+                  CircularProgressIndicator(strokeWidth: 2, color: AppColors.primary),
+            )
+          else ...[
+            IconButton(
+              onPressed: _reject,
+              icon: const Icon(Icons.close, color: AppColors.error, size: 20),
+              tooltip: 'Reject',
+            ),
+            FilledButton.icon(
+              onPressed: _accept,
+              icon: const Icon(Icons.check, size: 16),
+              label: const Text('Accept'),
+              style: FilledButton.styleFrom(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+// =============================================================================
+// Shared user row
+// =============================================================================
 class _UserRow extends StatelessWidget {
   final UserModel user;
-  final bool isSelected;
-  final VoidCallback onTap;
+  final bool selected;
+  final bool showSelect;
+  final VoidCallback? onTap;
+  final Widget? trailing;
 
   const _UserRow({
     required this.user,
-    required this.isSelected,
-    required this.onTap,
+    this.selected = false,
+    this.showSelect = true,
+    this.onTap,
+    this.trailing,
   });
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     return Padding(
-      padding: const EdgeInsets.only(bottom: 8),
+      padding: const EdgeInsets.only(bottom: 10),
       child: Row(
         children: [
           AvatarCircle(
@@ -376,48 +622,53 @@ class _UserRow extends StatelessWidget {
                     style: theme.textTheme.titleSmall
                         ?.copyWith(fontWeight: FontWeight.w700)),
                 Text(
-                  'Level ${user.level} \u00b7 Rank #${user.rank}',
+                  user.userCode.isNotEmpty
+                      ? '${user.userCode} · Level ${user.level}'
+                      : 'Level ${user.level} · Rank #${user.rank}',
                   style: theme.textTheme.bodySmall
                       ?.copyWith(color: AppColors.onSurfaceVariant),
                 ),
               ],
             ),
           ),
-          GestureDetector(
-            onTap: onTap,
-            child: isSelected
-                ? Container(
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 14, vertical: 8),
-                    decoration: BoxDecoration(
-                      color: AppColors.success.withValues(alpha: 0.1),
-                      borderRadius: BorderRadius.circular(20),
-                      border: Border.all(
-                          color: AppColors.success.withValues(alpha: 0.3)),
+          if (trailing != null)
+            trailing!
+          else if (showSelect)
+            GestureDetector(
+              onTap: onTap,
+              child: selected
+                  ? Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 14, vertical: 8),
+                      decoration: BoxDecoration(
+                        color: AppColors.success.withValues(alpha: 0.1),
+                        borderRadius: BorderRadius.circular(20),
+                        border: Border.all(
+                            color: AppColors.success.withValues(alpha: 0.3)),
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(Icons.check_circle,
+                              size: 16, color: AppColors.success),
+                          const SizedBox(width: 4),
+                          Text('Added',
+                              style: theme.textTheme.labelSmall?.copyWith(
+                                  color: AppColors.success,
+                                  fontWeight: FontWeight.w700)),
+                        ],
+                      ),
+                    )
+                  : Container(
+                      padding: const EdgeInsets.all(10),
+                      decoration: BoxDecoration(
+                        color: AppColors.primaryBrand,
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child:
+                          const Icon(Icons.add, size: 18, color: Colors.white),
                     ),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Icon(Icons.check_circle,
-                            size: 16, color: AppColors.success),
-                        const SizedBox(width: 4),
-                        Text('Added',
-                            style: theme.textTheme.labelSmall?.copyWith(
-                                color: AppColors.success,
-                                fontWeight: FontWeight.w700)),
-                      ],
-                    ),
-                  )
-                : Container(
-                    padding: const EdgeInsets.all(10),
-                    decoration: BoxDecoration(
-                      color: AppColors.primaryBrand,
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                    child: const Icon(Icons.add,
-                        size: 18, color: Colors.white),
-                  ),
-          ),
+            ),
         ],
       ),
     );

@@ -1,3 +1,4 @@
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -5,6 +6,7 @@ import 'package:go_router/go_router.dart';
 import '../../config/colors.dart';
 import '../../models/clan_model.dart';
 import '../../providers/clan_provider.dart';
+import '../../sheets/add_friends_sheet.dart';
 import '../../widgets/avatar_circle.dart';
 import '../../widgets/dual_fill_bar.dart';
 import '../../widgets/glass_card.dart';
@@ -24,7 +26,12 @@ class ClanDashboardView extends ConsumerWidget {
       padding: const EdgeInsets.fromLTRB(20, 8, 20, 120),
       children: [
         // ===== SOLDIERS SECTION =====
-        _SoldiersSection(members: members, clanCode: clan?.clanIdCode ?? ''),
+        _SoldiersSection(
+          members: members,
+          clanId: clan?.clanId ?? '',
+          clanCode: clan?.clanIdCode ?? '',
+          pendingInvites: clan?.pendingInviteIds ?? const [],
+        ),
 
         const SizedBox(height: 28),
 
@@ -88,14 +95,60 @@ class ClanDashboardView extends ConsumerWidget {
 // =============================================================================
 // Soldiers section
 // =============================================================================
-class _SoldiersSection extends StatelessWidget {
+class _SoldiersSection extends ConsumerWidget {
   final List<ClanMember> members;
+  final String clanId;
   final String clanCode;
+  final List<String> pendingInvites;
 
-  const _SoldiersSection({required this.members, required this.clanCode});
+  const _SoldiersSection({
+    required this.members,
+    required this.clanId,
+    required this.clanCode,
+    required this.pendingInvites,
+  });
+
+  void _openAddMembers(BuildContext context, WidgetRef ref) {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (_) => AddFriendsSheet(
+        multiSelect: true,
+        confirmLabel: 'Send Invites',
+        onConfirm: (selected) async {
+          if (selected.isEmpty || clanId.isEmpty) return;
+          final me = FirebaseAuth.instance.currentUser;
+          if (me == null) return;
+          try {
+            await ref.read(clanServiceProvider).inviteMembers(
+                  clanId: clanId,
+                  captainId: me.uid,
+                  userIds: selected.map((u) => u.userId).toList(),
+                );
+            if (context.mounted) {
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(
+                  content: Text(
+                    'Invites sent to ${selected.length} user${selected.length == 1 ? '' : 's'}',
+                  ),
+                ),
+              );
+            }
+          } catch (e) {
+            if (context.mounted) {
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(content: Text('Failed: $e')),
+              );
+            }
+          }
+        },
+      ),
+    );
+  }
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final theme = Theme.of(context);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -148,14 +201,39 @@ class _SoldiersSection extends StatelessWidget {
               child: _MemberRow(member: m),
             )),
 
+        // Pending invites hint
+        if (pendingInvites.isNotEmpty) ...[
+          const SizedBox(height: 8),
+          Container(
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: AppColors.amber.withValues(alpha: 0.1),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: AppColors.amber.withValues(alpha: 0.2)),
+            ),
+            child: Row(
+              children: [
+                Icon(Icons.hourglass_top,
+                    size: 16, color: AppColors.amber),
+                const SizedBox(width: 8),
+                Text(
+                  '${pendingInvites.length} pending invite${pendingInvites.length == 1 ? '' : 's'}',
+                  style: theme.textTheme.labelSmall?.copyWith(
+                    color: AppColors.amber,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+
         // Add members button
         const SizedBox(height: 8),
         SizedBox(
           width: double.infinity,
           child: OutlinedButton.icon(
-            onPressed: () {
-              // TODO: Open Add Friends sheet in multi-select mode
-            },
+            onPressed: () => _openAddMembers(context, ref),
             icon: const Icon(Icons.group_add, size: 16),
             label: const Text('+ Add Members'),
             style: OutlinedButton.styleFrom(

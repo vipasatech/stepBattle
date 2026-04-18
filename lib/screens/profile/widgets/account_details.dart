@@ -1,8 +1,9 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
 import '../../../config/colors.dart';
 import '../../../models/user_model.dart';
 
-/// Account details section — email, phone, connected health app.
+/// Account details section — email, phone (if set), connected health app.
 class AccountDetails extends StatelessWidget {
   final UserModel user;
 
@@ -11,6 +12,8 @@ class AccountDetails extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final healthLabel = Platform.isIOS ? 'Apple Health' : 'Health Connect';
+    final hasPhone = user.phone != null && user.phone!.isNotEmpty;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -32,41 +35,56 @@ class AccountDetails extends StatelessWidget {
                 label: 'Email',
                 value: user.email,
               ),
-              const SizedBox(height: 16),
-              _AccountRow(
-                icon: Icons.phone,
-                label: 'Phone',
-                value: user.phone ?? '+91 XXXXXXXXXX',
-              ),
+              if (hasPhone) ...[
+                const SizedBox(height: 16),
+                _AccountRow(
+                  icon: Icons.phone,
+                  label: 'Phone',
+                  value: user.phone!,
+                ),
+              ],
               const SizedBox(height: 16),
               Row(
                 children: [
                   Icon(Icons.sync, size: 20, color: AppColors.outline),
                   const SizedBox(width: 12),
-                  Text('Connected to',
-                      style: theme.textTheme.bodyMedium
-                          ?.copyWith(color: AppColors.onSurfaceVariant)),
-                  const Spacer(),
-                  Container(
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 12, vertical: 6),
-                    decoration: BoxDecoration(
-                      color: AppColors.secondaryContainer.withValues(alpha: 0.2),
-                      borderRadius: BorderRadius.circular(20),
-                      border: Border.all(
-                          color: AppColors.primary.withValues(alpha: 0.3)),
-                    ),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Icon(Icons.health_and_safety,
-                            size: 14, color: AppColors.primary),
-                        const SizedBox(width: 4),
-                        Text('Apple Health',
-                            style: theme.textTheme.labelSmall?.copyWith(
+                  Expanded(
+                    child: Text('Connected',
+                        style: theme.textTheme.bodyMedium
+                            ?.copyWith(color: AppColors.onSurfaceVariant)),
+                  ),
+                  const SizedBox(width: 8),
+                  Flexible(
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 10, vertical: 5),
+                      decoration: BoxDecoration(
+                        color: AppColors.secondaryContainer
+                            .withValues(alpha: 0.2),
+                        borderRadius: BorderRadius.circular(20),
+                        border: Border.all(
+                            color: AppColors.primary.withValues(alpha: 0.3)),
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(Icons.health_and_safety,
+                              size: 12, color: AppColors.primary),
+                          const SizedBox(width: 4),
+                          Flexible(
+                            child: Text(
+                              healthLabel,
+                              style: theme.textTheme.labelSmall?.copyWith(
                                 color: AppColors.primary,
-                                fontWeight: FontWeight.w700)),
-                      ],
+                                fontWeight: FontWeight.w700,
+                                fontSize: 10,
+                              ),
+                              overflow: TextOverflow.ellipsis,
+                              maxLines: 1,
+                            ),
+                          ),
+                        ],
+                      ),
                     ),
                   ),
                 ],
@@ -100,10 +118,17 @@ class _AccountRow extends StatelessWidget {
         Text(label,
             style: theme.textTheme.bodyMedium
                 ?.copyWith(color: AppColors.onSurfaceVariant)),
-        const Spacer(),
-        Text(value,
+        const SizedBox(width: 12),
+        Expanded(
+          child: Text(
+            value,
             style: theme.textTheme.bodyMedium
-                ?.copyWith(fontWeight: FontWeight.w500)),
+                ?.copyWith(fontWeight: FontWeight.w500),
+            textAlign: TextAlign.right,
+            overflow: TextOverflow.ellipsis,
+            maxLines: 1,
+          ),
+        ),
       ],
     );
   }

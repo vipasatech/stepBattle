@@ -26,6 +26,7 @@ class BattleCard extends StatelessWidget {
       BattleStatus.pending => _ScheduledCard(battle: battle, onTap: onTap),
       BattleStatus.completed => _CompletedCard(
           battle: battle, currentUserId: currentUserId, onTap: onTap),
+      BattleStatus.cancelled => const SizedBox.shrink(),
     };
   }
 }

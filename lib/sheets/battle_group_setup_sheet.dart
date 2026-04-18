@@ -5,12 +5,15 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../config/colors.dart';
 import '../config/constants.dart';
 import '../models/battle_model.dart';
+import '../models/user_model.dart';
 import '../providers/battle_provider.dart';
+import '../providers/friend_provider.dart';
 import '../services/battle_service.dart';
 import '../widgets/avatar_circle.dart';
 import '../widgets/bottom_sheet_handle.dart';
 
-/// Group battle setup — add up to 10 participants, then create.
+/// Group battle setup — invite up to 10 participants (friends OR strangers).
+/// Creates a pending battle invite; battle starts when all accept.
 class BattleGroupSetupSheet extends ConsumerStatefulWidget {
   const BattleGroupSetupSheet({super.key});
 
@@ -22,7 +25,9 @@ class BattleGroupSetupSheet extends ConsumerStatefulWidget {
 class _BattleGroupSetupSheetState
     extends ConsumerState<BattleGroupSetupSheet> {
   final _searchController = TextEditingController();
-  final List<_FriendSlot> _addedFriends = [];
+  final List<UserModel> _invited = [];
+  List<UserModel> _searchResults = [];
+  bool _searching = false;
   bool _creating = false;
 
   final _battleCode = BattleService.generateBattleCode();
@@ -33,8 +38,38 @@ class _BattleGroupSetupSheetState
     super.dispose();
   }
 
+  bool _isInvited(String userId) =>
+      _invited.any((u) => u.userId == userId);
+
+  void _toggleInvite(UserModel user) {
+    setState(() {
+      if (_isInvited(user.userId)) {
+        _invited.removeWhere((u) => u.userId == user.userId);
+      } else {
+        if (_invited.length <
+            AppConstants.maxGroupBattleParticipants - 1) {
+          _invited.add(user);
+        }
+      }
+    });
+  }
+
+  Future<void> _search() async {
+    final q = _searchController.text.trim();
+    if (q.isEmpty) {
+      setState(() => _searchResults = []);
+      return;
+    }
+    setState(() => _searching = true);
+    try {
+      final results = await ref.read(friendServiceProvider).search(q);
+      setState(() => _searchResults = results);
+    } catch (_) {}
+    setState(() => _searching = false);
+  }
+
   Future<void> _createBattle() async {
-    if (_addedFriends.isEmpty) return;
+    if (_invited.isEmpty) return;
     setState(() => _creating = true);
 
     try {
@@ -45,9 +80,10 @@ class _BattleGroupSetupSheetState
           displayName: me.displayName ?? 'You',
           avatarURL: me.photoURL,
         ),
-        ..._addedFriends.map((f) => BattleParticipant(
-              userId: f.id,
-              displayName: f.name,
+        ..._invited.map((u) => BattleParticipant(
+              userId: u.userId,
+              displayName: u.displayName,
+              avatarURL: u.avatarURL,
             )),
       ];
 
@@ -57,7 +93,13 @@ class _BattleGroupSetupSheetState
             durationDays: 1,
             createdBy: me.uid,
           );
-      if (mounted) Navigator.pop(context);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+              content: Text('Invites sent! Battle starts when all accept.')),
+        );
+        Navigator.pop(context);
+      }
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context)
@@ -68,26 +110,19 @@ class _BattleGroupSetupSheetState
     }
   }
 
-  void _addFriend(String id, String name, String initials) {
-    if (_addedFriends.length >= AppConstants.maxGroupBattleParticipants - 1) {
-      return;
-    }
-    if (_addedFriends.any((f) => f.id == id)) return;
-    setState(() => _addedFriends.add(_FriendSlot(id: id, name: name, initials: initials)));
-  }
-
-  void _removeFriend(String id) {
-    setState(() => _addedFriends.removeWhere((f) => f.id == id));
-  }
-
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final friends = ref.watch(friendsListProvider).valueOrNull ?? [];
+    final currentUid = FirebaseAuth.instance.currentUser?.uid ?? '';
+    final slotsLeft =
+        AppConstants.maxGroupBattleParticipants - 1 - _invited.length;
 
     return DraggableScrollableSheet(
-      initialChildSize: 0.85,
+      initialChildSize: 0.9,
       minChildSize: 0.5,
       maxChildSize: 0.95,
+      expand: false,
       builder: (context, scrollController) => Container(
         decoration: const BoxDecoration(
           color: AppColors.surfaceContainer,
@@ -96,6 +131,7 @@ class _BattleGroupSetupSheetState
         child: Column(
           children: [
             const BottomSheetHandle(),
+
             // Header
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 24),
@@ -126,121 +162,131 @@ class _BattleGroupSetupSheetState
                       ),
                     ],
                   ),
-                  Icon(Icons.settings, color: AppColors.primary),
+                  Text(
+                    '${_invited.length + 1} / ${AppConstants.maxGroupBattleParticipants}',
+                    style: theme.textTheme.titleMedium?.copyWith(
+                      color: AppColors.primary,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
                 ],
               ),
             ),
             const SizedBox(height: 16),
 
-            // Scrollable content
             Expanded(
               child: ListView(
                 controller: scrollController,
                 padding: const EdgeInsets.symmetric(horizontal: 24),
                 children: [
-                  // Participants section
-                  Container(
-                    padding: const EdgeInsets.all(20),
-                    decoration: BoxDecoration(
-                      color: AppColors.background,
-                      borderRadius: BorderRadius.circular(20),
-                      border: Border.all(
-                          color: AppColors.primary.withValues(alpha: 0.2)),
-                      boxShadow: [
-                        BoxShadow(
-                            color: AppColors.primary.withValues(alpha: 0.05),
-                            blurRadius: 20),
-                      ],
+                  // Invited participants chips
+                  if (_invited.isNotEmpty) ...[
+                    Text('INVITED',
+                        style: theme.textTheme.labelSmall?.copyWith(
+                            color: AppColors.onSurfaceVariant,
+                            letterSpacing: 2)),
+                    const SizedBox(height: 10),
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 8,
+                      children: _invited
+                          .map((u) => _InvitedChip(
+                                user: u,
+                                onRemove: () => _toggleInvite(u),
+                              ))
+                          .toList(),
                     ),
-                    child: Column(
-                      children: [
-                        // You (host, locked)
-                        _ParticipantRow(
-                          initials: 'YOU',
-                          name: 'You',
-                          subtitle: 'Host',
-                          trailing: Container(
-                            padding: const EdgeInsets.symmetric(
-                                horizontal: 10, vertical: 4),
-                            decoration: BoxDecoration(
-                              color: AppColors.success.withValues(alpha: 0.1),
-                              borderRadius: BorderRadius.circular(12),
-                              border: Border.all(
-                                  color:
-                                      AppColors.success.withValues(alpha: 0.2)),
-                            ),
-                            child: Text('Ready',
-                                style: theme.textTheme.labelSmall?.copyWith(
-                                    color: AppColors.success,
-                                    fontWeight: FontWeight.w900)),
-                          ),
-                        ),
-                        const SizedBox(height: 12),
-
-                        // Added friends
-                        ..._addedFriends.map((f) => Padding(
-                              padding: const EdgeInsets.only(bottom: 12),
-                              child: _ParticipantRow(
-                                initials: f.initials,
-                                name: f.name,
-                                subtitle: 'Invited',
-                                trailing: GestureDetector(
-                                  onTap: () => _removeFriend(f.id),
-                                  child: const Icon(Icons.close,
-                                      color: AppColors.error, size: 18),
-                                ),
-                              ),
-                            )),
-
-                        // Empty slots
-                        if (_addedFriends.length <
-                            AppConstants.maxGroupBattleParticipants - 1) ...[
-                          _EmptySlot(onTap: () {
-                            // TODO: Open Add Friends sheet multi-select
-                          }),
-                          const SizedBox(height: 8),
-                          _EmptySlot(onTap: () {}),
-                        ],
-
-                        const SizedBox(height: 8),
-                        Text(
-                          'ADD UP TO ${AppConstants.maxGroupBattleParticipants} PARTICIPANTS',
-                          style: theme.textTheme.labelSmall?.copyWith(
-                            color: AppColors.outline,
-                            letterSpacing: 2,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                  const SizedBox(height: 20),
+                    const SizedBox(height: 20),
+                  ],
 
                   // Search
                   TextField(
                     controller: _searchController,
+                    onSubmitted: (_) => _search(),
+                    onChanged: (v) {
+                      if (v.isEmpty) setState(() => _searchResults = []);
+                    },
                     decoration: InputDecoration(
-                      hintText: 'Search by name or username',
+                      hintText: 'Search by name or #CODE',
                       prefixIcon:
                           const Icon(Icons.search, color: AppColors.outline),
-                      filled: true,
-                      fillColor: Colors.white.withValues(alpha: 0.05),
+                      suffixIcon: IconButton(
+                        icon: const Icon(Icons.arrow_forward, size: 20),
+                        onPressed: _search,
+                      ),
                     ),
                   ),
-                  const SizedBox(height: 20),
+                  const SizedBox(height: 16),
+
+                  // Search results
+                  if (_searching)
+                    const Center(
+                        child: Padding(
+                      padding: EdgeInsets.all(16),
+                      child: CircularProgressIndicator(
+                          color: AppColors.primary),
+                    ))
+                  else if (_searchResults.isNotEmpty) ...[
+                    Text('SEARCH RESULTS',
+                        style: theme.textTheme.labelSmall?.copyWith(
+                            color: AppColors.onSurfaceVariant,
+                            letterSpacing: 2)),
+                    const SizedBox(height: 10),
+                    ..._searchResults
+                        .where((u) => u.userId != currentUid)
+                        .map((u) => _UserResultRow(
+                              user: u,
+                              isInvited: _isInvited(u.userId),
+                              canAdd: slotsLeft > 0 || _isInvited(u.userId),
+                              onTap: () => _toggleInvite(u),
+                            )),
+                    const SizedBox(height: 20),
+                  ],
 
                   // Suggested friends
-                  Text('Suggested Friends',
+                  Text('SUGGESTED FRIENDS',
                       style: theme.textTheme.labelSmall?.copyWith(
                           color: AppColors.onSurfaceVariant,
                           letterSpacing: 2)),
-                  const SizedBox(height: 12),
+                  const SizedBox(height: 10),
 
-                  ..._buildSuggested(theme),
+                  if (friends.isEmpty)
+                    Container(
+                      padding: const EdgeInsets.all(16),
+                      decoration: BoxDecoration(
+                        color: AppColors.surfaceContainerLow,
+                        borderRadius: BorderRadius.circular(16),
+                      ),
+                      child: Row(
+                        children: [
+                          Icon(Icons.info_outline,
+                              size: 18,
+                              color: AppColors.onSurfaceVariant),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: Text(
+                              'No friends yet. Use search to invite anyone by username or code.',
+                              style: theme.textTheme.bodySmall?.copyWith(
+                                  color: AppColors.onSurfaceVariant),
+                            ),
+                          ),
+                        ],
+                      ),
+                    )
+                  else
+                    ...friends.map((u) => _UserResultRow(
+                          user: u,
+                          isInvited: _isInvited(u.userId),
+                          canAdd: slotsLeft > 0 || _isInvited(u.userId),
+                          onTap: () => _toggleInvite(u),
+                        )),
+
+                  const SizedBox(height: 20),
                 ],
               ),
             ),
 
-            // Bottom actions
+            // Bottom CTA
             Container(
               padding: const EdgeInsets.fromLTRB(24, 16, 24, 32),
               decoration: BoxDecoration(
@@ -257,47 +303,25 @@ class _BattleGroupSetupSheetState
                 children: [
                   SizedBox(
                     width: double.infinity,
-                    height: 50,
-                    child: OutlinedButton.icon(
-                      onPressed: () {
-                        // TODO: System share sheet with battle code
-                      },
-                      icon: const Icon(Icons.share, size: 18),
-                      label: const Text('Invite Friends'),
-                      style: OutlinedButton.styleFrom(
-                        side: const BorderSide(color: AppColors.primary),
-                        foregroundColor: AppColors.primary,
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: 10),
-                  SizedBox(
-                    width: double.infinity,
-                    height: 50,
+                    height: 56,
                     child: FilledButton(
-                      onPressed: _addedFriends.isNotEmpty && !_creating
-                          ? _createBattle
-                          : null,
-                      style: FilledButton.styleFrom(
-                        disabledBackgroundColor:
-                            AppColors.surfaceContainerHighest,
-                        disabledForegroundColor: AppColors.onSurfaceVariant,
-                      ),
+                      onPressed:
+                          _invited.isNotEmpty && !_creating ? _createBattle : null,
                       child: _creating
                           ? const SizedBox(
                               width: 20,
                               height: 20,
                               child: CircularProgressIndicator(
                                   strokeWidth: 2, color: Colors.white))
-                          : const Text('Create Battle'),
+                          : const Text('Send Battle Invites'),
                     ),
                   ),
                   const SizedBox(height: 6),
                   Text(
                     'Battle starts when all participants accept',
                     style: theme.textTheme.labelSmall?.copyWith(
-                        color: AppColors.onSurfaceVariant),
-                    textAlign: TextAlign.center,
+                      color: AppColors.onSurfaceVariant,
+                    ),
                   ),
                 ],
               ),
@@ -307,164 +331,135 @@ class _BattleGroupSetupSheetState
       ),
     );
   }
-
-  List<Widget> _buildSuggested(ThemeData theme) {
-    final suggestions = [
-      ('Marcus_Bolt', 'MB', 'Rank #42 · 12.4k Avg Steps', AppColors.primary),
-      ('Sarah_Sprint', 'SS', 'Rank #12 · 15.1k Avg Steps', AppColors.tertiary),
-      ('Leo.Steps', 'LS', 'Rank #89 · 10.8k Avg Steps', AppColors.secondary),
-    ];
-
-    return suggestions.map((s) {
-      final isAdded = _addedFriends.any((f) => f.name == s.$1);
-      return Padding(
-        padding: const EdgeInsets.only(bottom: 8),
-        child: Container(
-          padding: const EdgeInsets.all(14),
-          decoration: BoxDecoration(
-            color: isAdded
-                ? AppColors.surfaceContainer
-                : AppColors.surfaceContainerLow,
-            borderRadius: BorderRadius.circular(16),
-          ),
-          child: Row(
-            children: [
-              AvatarCircle(radius: 22, initials: s.$2, borderColor: s.$4),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(s.$1,
-                        style: theme.textTheme.titleSmall
-                            ?.copyWith(fontWeight: FontWeight.w700)),
-                    Text(s.$3, style: theme.textTheme.bodySmall),
-                  ],
-                ),
-              ),
-              GestureDetector(
-                onTap: isAdded
-                    ? null
-                    : () => _addFriend('placeholder_${s.$1}', s.$1, s.$2),
-                child: Container(
-                  width: 36,
-                  height: 36,
-                  decoration: BoxDecoration(
-                    color: isAdded ? AppColors.success : AppColors.primaryBrand,
-                    borderRadius: BorderRadius.circular(10),
-                  ),
-                  child: Icon(
-                    isAdded ? Icons.check : Icons.add,
-                    color: Colors.white,
-                    size: 20,
-                  ),
-                ),
-              ),
-            ],
-          ),
-        ),
-      );
-    }).toList();
-  }
 }
 
-class _ParticipantRow extends StatelessWidget {
-  final String initials;
-  final String name;
-  final String subtitle;
-  final Widget trailing;
+// =============================================================================
+// Invited chip
+// =============================================================================
+class _InvitedChip extends StatelessWidget {
+  final UserModel user;
+  final VoidCallback onRemove;
 
-  const _ParticipantRow({
-    required this.initials,
-    required this.name,
-    required this.subtitle,
-    required this.trailing,
-  });
+  const _InvitedChip({required this.user, required this.onRemove});
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     return Container(
-      padding: const EdgeInsets.all(12),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
       decoration: BoxDecoration(
-        color: AppColors.surfaceContainerHigh,
-        borderRadius: BorderRadius.circular(14),
-        border:
-            Border.all(color: AppColors.primary.withValues(alpha: 0.1)),
+        color: AppColors.primaryBrand.withValues(alpha: 0.15),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: AppColors.primary.withValues(alpha: 0.3)),
       ),
       child: Row(
+        mainAxisSize: MainAxisSize.min,
         children: [
           AvatarCircle(
-              radius: 22, initials: initials, borderColor: AppColors.primary),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(name,
-                    style: theme.textTheme.titleSmall
-                        ?.copyWith(fontWeight: FontWeight.w700)),
-                Text(subtitle,
-                    style: theme.textTheme.labelSmall
-                        ?.copyWith(color: AppColors.secondary)),
-              ],
-            ),
+            radius: 12,
+            imageUrl: user.avatarURL,
+            initials: user.displayName.isNotEmpty
+                ? user.displayName[0].toUpperCase()
+                : '?',
+            borderColor: AppColors.primary,
           ),
-          trailing,
+          const SizedBox(width: 6),
+          Text(user.displayName,
+              style: theme.textTheme.labelSmall
+                  ?.copyWith(fontWeight: FontWeight.w700)),
+          const SizedBox(width: 4),
+          GestureDetector(
+            onTap: onRemove,
+            child: const Icon(Icons.close,
+                size: 14, color: AppColors.error),
+          ),
         ],
       ),
     );
   }
 }
 
-class _EmptySlot extends StatelessWidget {
+// =============================================================================
+// Search / friend row
+// =============================================================================
+class _UserResultRow extends StatelessWidget {
+  final UserModel user;
+  final bool isInvited;
+  final bool canAdd;
   final VoidCallback onTap;
-  const _EmptySlot({required this.onTap});
+
+  const _UserResultRow({
+    required this.user,
+    required this.isInvited,
+    required this.canAdd,
+    required this.onTap,
+  });
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    return GestureDetector(
-      onTap: onTap,
-      child: Container(
-        padding: const EdgeInsets.all(14),
-        decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(14),
-          border: Border.all(
-            color: AppColors.outlineVariant.withValues(alpha: 0.3),
-            width: 2,
-            strokeAlign: BorderSide.strokeAlignInside,
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: GestureDetector(
+        onTap: canAdd ? onTap : null,
+        child: Container(
+          padding: const EdgeInsets.all(14),
+          decoration: BoxDecoration(
+            color: isInvited
+                ? AppColors.primaryBrand.withValues(alpha: 0.1)
+                : AppColors.surfaceContainerLow,
+            borderRadius: BorderRadius.circular(16),
           ),
-        ),
-        child: Row(
-          children: [
-            Container(
-              width: 44,
-              height: 44,
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                color: AppColors.surfaceContainerLow,
-                border: Border.all(
-                    color: AppColors.outlineVariant.withValues(alpha: 0.2)),
+          child: Row(
+            children: [
+              AvatarCircle(
+                radius: 22,
+                imageUrl: user.avatarURL,
+                initials: user.displayName.isNotEmpty
+                    ? user.displayName[0].toUpperCase()
+                    : '?',
+                borderColor: AppColors.primary.withValues(alpha: 0.2),
               ),
-              child: const Icon(Icons.person_add,
-                  color: AppColors.onSurfaceVariant, size: 20),
-            ),
-            const SizedBox(width: 12),
-            Text('+ Add Friend',
-                style: theme.textTheme.bodyMedium
-                    ?.copyWith(color: AppColors.onSurfaceVariant)),
-          ],
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(user.displayName,
+                        style: theme.textTheme.titleSmall
+                            ?.copyWith(fontWeight: FontWeight.w700)),
+                    Text(
+                      user.userCode.isNotEmpty
+                          ? '${user.userCode} · Level ${user.level}'
+                          : 'Level ${user.level}',
+                      style: theme.textTheme.labelSmall?.copyWith(
+                        color: AppColors.onSurfaceVariant,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              Container(
+                width: 36,
+                height: 36,
+                decoration: BoxDecoration(
+                  color: isInvited
+                      ? AppColors.success
+                      : (canAdd
+                          ? AppColors.primaryBrand
+                          : AppColors.surfaceContainerHigh),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: Icon(
+                  isInvited ? Icons.check : Icons.add,
+                  color: canAdd ? Colors.white : AppColors.onSurfaceVariant,
+                  size: 20,
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );
   }
-}
-
-class _FriendSlot {
-  final String id;
-  final String name;
-  final String initials;
-  const _FriendSlot(
-      {required this.id, required this.name, required this.initials});
 }

@@ -39,3 +39,15 @@ final isClanCaptainProvider = Provider<bool>((ref) {
   if (uid == null || clan == null) return false;
   return clan.captainId == uid;
 });
+
+/// Stream of clans where the current user has a pending invite.
+final incomingClanInvitesProvider = StreamProvider<List<ClanModel>>((ref) {
+  final uid = ref.watch(authStateProvider).valueOrNull?.uid;
+  if (uid == null) return Stream.value([]);
+  return ref.read(clanServiceProvider).watchIncomingClanInvites(uid);
+});
+
+/// Count of incoming clan invites for badge display.
+final incomingClanInviteCountProvider = Provider<int>((ref) {
+  return ref.watch(incomingClanInvitesProvider).valueOrNull?.length ?? 0;
+});

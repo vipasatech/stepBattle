@@ -1,8 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 import '../../config/colors.dart';
 import '../../models/mission_model.dart';
 import '../../providers/mission_provider.dart';
+import '../../providers/stats_provider.dart';
+import '../../providers/user_provider.dart';
 import '../../sheets/mission_detail_sheet.dart';
 import '../../widgets/avatar_circle.dart';
 import 'widgets/daily_mission_card.dart';
@@ -14,6 +17,10 @@ class MissionsScreen extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final theme = Theme.of(context);
+    final profile = ref.watch(userProfileProvider).valueOrNull;
+    final missionStats = ref.watch(missionStatsProvider);
+    final streak = profile?.currentStreak ?? 0;
+    final initials = _initials(profile?.displayName);
 
     return Scaffold(
       appBar: AppBar(
@@ -25,7 +32,7 @@ class MissionsScreen extends ConsumerWidget {
           ),
         ),
         actions: [
-          // XP today pill
+          // XP today pill (real)
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
             decoration: BoxDecoration(
@@ -35,7 +42,7 @@ class MissionsScreen extends ConsumerWidget {
               borderRadius: BorderRadius.circular(20),
             ),
             child: Text(
-              '300 XP today',
+              '${missionStats.xpEarnedToday} XP today',
               style: theme.textTheme.labelSmall?.copyWith(
                 color: AppColors.primary,
                 fontWeight: FontWeight.w700,
@@ -43,7 +50,7 @@ class MissionsScreen extends ConsumerWidget {
             ),
           ),
           const SizedBox(width: 8),
-          // Streak
+          // Streak (real)
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
             decoration: BoxDecoration(
@@ -56,23 +63,37 @@ class MissionsScreen extends ConsumerWidget {
                 Icon(Icons.local_fire_department,
                     color: AppColors.errorDim, size: 18),
                 const SizedBox(width: 4),
-                Text('9',
+                Text('$streak',
                     style: theme.textTheme.titleSmall
                         ?.copyWith(fontWeight: FontWeight.w700)),
               ],
             ),
           ),
           const SizedBox(width: 8),
-          const AvatarCircle(
+          GestureDetector(
+            onTap: () => context.push('/profile'),
+            child: AvatarCircle(
               radius: 16,
-              initials: '?',
+              imageUrl: profile?.avatarURL,
+              initials: initials,
               borderColor: AppColors.outlineVariant,
-              borderWidth: 1),
+              borderWidth: 1,
+            ),
+          ),
           const SizedBox(width: 16),
         ],
       ),
       body: const _MissionsBody(),
     );
+  }
+
+  static String _initials(String? name) {
+    if (name == null || name.isEmpty) return '?';
+    final parts = name.trim().split(' ');
+    if (parts.length >= 2) {
+      return '${parts[0][0]}${parts[1][0]}'.toUpperCase();
+    }
+    return name[0].toUpperCase();
   }
 }
 

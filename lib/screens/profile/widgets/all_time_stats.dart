@@ -1,16 +1,19 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../config/colors.dart';
 import '../../../models/user_model.dart';
+import '../../../providers/stats_provider.dart';
 
 /// "All Time" stats — 2x2 grid: Total XP, Battles, Best Streak, Total Steps.
-class AllTimeStats extends StatelessWidget {
+class AllTimeStats extends ConsumerWidget {
   final UserModel user;
 
   const AllTimeStats({super.key, required this.user});
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final theme = Theme.of(context);
+    final battleStats = ref.watch(battleStatsProvider);
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -38,11 +41,11 @@ class AllTimeStats extends StatelessWidget {
                         fontWeight: FontWeight.w700),
                     children: [
                       TextSpan(
-                          text: '4W',
+                          text: '${battleStats.totalWon}W',
                           style: TextStyle(color: AppColors.primary)),
                       const TextSpan(text: ' / '),
                       TextSpan(
-                          text: '3L',
+                          text: '${battleStats.totalLost}L',
                           style: TextStyle(color: AppColors.errorDim)),
                     ],
                   ),

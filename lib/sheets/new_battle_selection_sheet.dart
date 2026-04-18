@@ -25,8 +25,10 @@ class _NewBattleSelectionSheetState extends State<NewBattleSelectionSheet> {
         color: AppColors.surfaceContainer,
         borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
       ),
-      padding: const EdgeInsets.fromLTRB(24, 0, 24, 32),
-      child: Column(
+      child: SingleChildScrollView(
+        padding: EdgeInsets.fromLTRB(
+            24, 0, 24, 32 + MediaQuery.of(context).padding.bottom),
+        child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
           const BottomSheetHandle(),
@@ -87,6 +89,7 @@ class _NewBattleSelectionSheetState extends State<NewBattleSelectionSheet> {
             ),
           ),
         ],
+        ),
       ),
     );
   }

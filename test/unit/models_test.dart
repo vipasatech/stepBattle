@@ -14,6 +14,7 @@ void main() {
     test('toFirestore produces all required fields', () {
       final user = UserModel(
         userId: 'u1',
+        userCode: '#TEST1',
         displayName: 'TestUser',
         email: 'test@test.com',
         level: 5,
@@ -46,6 +47,7 @@ void main() {
     test('copyWith preserves unchanged fields', () {
       final user = UserModel(
         userId: 'u1',
+        userCode: '#TEST2',
         displayName: 'OldName',
         email: 'test@test.com',
         createdAt: DateTime(2025, 1, 1),
@@ -76,6 +78,7 @@ void main() {
         xpReward: 200,
         winnerId: null,
         createdBy: 'u1',
+        createdAt: DateTime(2025, 1, 1),
       );
 
       final map = battle.toFirestore();
@@ -101,6 +104,7 @@ void main() {
         durationDays: 1,
         xpReward: 200,
         createdBy: 'u1',
+        createdAt: DateTime(2025, 1, 1),
       );
 
       expect(battle.opponentFor('u1')?.displayName, 'Them');
@@ -120,6 +124,7 @@ void main() {
         durationDays: 1,
         xpReward: 200,
         createdBy: 'u1',
+        createdAt: DateTime(2025, 1, 1),
       );
 
       expect(battle.participantFor('u1')?.currentSteps, 5000);
@@ -137,6 +142,7 @@ void main() {
         durationDays: 1,
         xpReward: 200,
         createdBy: 'u1',
+        createdAt: DateTime(2025, 1, 1),
       );
 
       expect(battle.shortId, '#ABC1');
@@ -153,6 +159,7 @@ void main() {
         durationDays: 1,
         xpReward: 200,
         createdBy: 'u1',
+        createdAt: DateTime(2025, 1, 1),
       );
 
       expect(battle.timeRemaining, Duration.zero);

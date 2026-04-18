@@ -10,6 +10,11 @@ class HealthService {
   bool _isAuthorized = false;
   bool get isAuthorized => _isAuthorized;
 
+  /// Last successful step reading for today.
+  /// Keyed by yyyy-MM-dd so we reset at midnight.
+  int _lastKnownTodaySteps = 0;
+  String _lastKnownDate = '';
+
   /// Types we need access to.
   static const List<HealthDataType> _readTypes = [
     HealthDataType.STEPS,
@@ -58,26 +63,55 @@ class HealthService {
   // ---------------------------------------------------------------------------
 
   /// Get total step count for today.
+  ///
+  /// If Health Connect throws (e.g. app in background, which requires
+  /// READ_HEALTH_DATA_IN_BACKGROUND permission we don't have), returns the
+  /// last known value for today to prevent UI flicker to 0.
+  /// Also ensures steps never decrease intra-day (monotonic).
   Future<int> getTodaySteps() async {
     final now = DateTime.now();
     final midnight = DateTime(now.year, now.month, now.day);
-    return _getSteps(midnight, now);
+    final todayKey = DateFormat('yyyy-MM-dd').format(now);
+
+    // Reset cache if date changed (new day)
+    if (_lastKnownDate != todayKey) {
+      _lastKnownTodaySteps = 0;
+      _lastKnownDate = todayKey;
+    }
+
+    final fetched = await _tryGetSteps(midnight, now);
+    if (fetched == null) {
+      // Fetch failed (background restriction, offline, etc.) — keep last value.
+      return _lastKnownTodaySteps;
+    }
+
+    // Steps can only go up during a day. Ignore any reading that's lower
+    // than what we've already seen today (avoids weird Samsung/Health Connect
+    // transient readings that flicker to 0).
+    if (fetched < _lastKnownTodaySteps) {
+      return _lastKnownTodaySteps;
+    }
+
+    _lastKnownTodaySteps = fetched;
+    return fetched;
   }
 
   /// Get step count for a specific date.
   Future<int> getStepsForDate(DateTime date) async {
     final start = DateTime(date.year, date.month, date.day);
     final end = start.add(const Duration(days: 1)).subtract(const Duration(seconds: 1));
-    return _getSteps(start, end);
+    final fetched = await _tryGetSteps(start, end);
+    return fetched ?? 0;
   }
 
-  /// Get step count between two date-times.
-  Future<int> _getSteps(DateTime start, DateTime end) async {
+  /// Get step count between two date-times. Returns null on error so callers
+  /// can decide how to handle transient failures (vs confusing them with 0).
+  Future<int?> _tryGetSteps(DateTime start, DateTime end) async {
     try {
       final steps = await _health.getTotalStepsInInterval(start, end);
       return steps ?? 0;
     } catch (_) {
-      return 0;
+      return null;
     }
   }
 

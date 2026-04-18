@@ -50,3 +50,18 @@ final battleDetailProvider =
     StreamProvider.family<BattleModel?, String>((ref, battleId) {
   return ref.read(battleServiceProvider).watchBattle(battleId);
 });
+
+/// Stream of pending battle invites for the current user (they haven't accepted yet).
+final incomingBattleInvitesProvider =
+    StreamProvider<List<BattleModel>>((ref) {
+  final user = ref.watch(authStateProvider).valueOrNull;
+  if (user == null) return Stream.value([]);
+  return ref
+      .read(battleServiceProvider)
+      .watchIncomingInvites(user.uid);
+});
+
+/// Count of unread battle invites for badge display.
+final incomingBattleInviteCountProvider = Provider<int>((ref) {
+  return ref.watch(incomingBattleInvitesProvider).valueOrNull?.length ?? 0;
+});

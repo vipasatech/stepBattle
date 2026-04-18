@@ -2,7 +2,9 @@ import 'dart:async';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../models/step_log_model.dart';
 import '../services/health_service.dart';
+import '../services/mission_service.dart';
 import '../services/step_service.dart';
+import '../services/xp_service.dart';
 import 'auth_provider.dart';
 
 /// Health service singleton.
@@ -10,9 +12,13 @@ final healthServiceProvider = Provider<HealthService>((ref) {
   return HealthService();
 });
 
-/// Step service singleton.
+/// Step service singleton — depends on MissionService and XPService
+/// for fan-out propagation.
 final stepServiceProvider = Provider<StepService>((ref) {
-  return StepService();
+  return StepService(
+    missionService: MissionService(),
+    xpService: XPService(),
+  );
 });
 
 /// Whether health permissions have been granted.
@@ -21,13 +27,22 @@ final healthPermissionProvider = FutureProvider<bool>((ref) {
 });
 
 /// Today's step count from the device health store (local, polled).
-/// Refreshes every 60 seconds while the app is in the foreground.
+/// Emits immediately, then refreshes every 60 seconds.
+/// `HealthService.getTodaySteps()` is monotonic within a day and never
+/// returns 0 once a real reading has been captured, so the UI won't
+/// flicker even when Health Connect blocks background reads.
 final localTodayStepsProvider = StreamProvider<int>((ref) {
   final healthService = ref.read(healthServiceProvider);
 
-  return Stream.periodic(const Duration(seconds: 60), (i) => i)
-      .asyncMap((i) => healthService.getTodaySteps())
-      .distinct();
+  Stream<int> stream() async* {
+    // Emit first value immediately (no 60s wait on cold start)
+    yield await healthService.getTodaySteps();
+    await for (final _ in Stream.periodic(const Duration(seconds: 60))) {
+      yield await healthService.getTodaySteps();
+    }
+  }
+
+  return stream().distinct();
 });
 
 /// Today's calories (from health store or estimated).
