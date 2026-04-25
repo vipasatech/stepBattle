@@ -22,6 +22,14 @@
           }
         },
         {
+          "client_id": "83248241496-mr0kk2d7big7tggml9ocm9au22dg6tls.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.stepbattle.stepbattle",
+            "certificate_hash": "a5bb9894bef57b5093e7df9d5b54f1f1c2059a9c"
+          }
+        },
+        {
           "client_id": "83248241496-4n9qridmt2ao0p8iohaagoprs3v2dt74.apps.googleusercontent.com",
           "client_type": 3
         }
