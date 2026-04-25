@@ -127,7 +127,12 @@ class _BattlesBody extends ConsumerWidget {
               const SizedBox(height: 12),
               ...active.map((b) => Padding(
                     padding: const EdgeInsets.only(bottom: 12),
-                    child: BattleCard(battle: b, currentUserId: uid),
+                    child: BattleCard(
+                      battle: b,
+                      currentUserId: uid,
+                      onTap: () =>
+                          context.push('/battle-ground/${b.battleId}'),
+                    ),
                   )),
               const SizedBox(height: 24),
             ],
@@ -153,7 +158,12 @@ class _BattlesBody extends ConsumerWidget {
               const SizedBox(height: 12),
               ...completed.map((b) => Padding(
                     padding: const EdgeInsets.only(bottom: 12),
-                    child: BattleCard(battle: b, currentUserId: uid),
+                    child: BattleCard(
+                      battle: b,
+                      currentUserId: uid,
+                      onTap: () =>
+                          context.push('/battle-ground/${b.battleId}'),
+                    ),
                   )),
             ],
           ],

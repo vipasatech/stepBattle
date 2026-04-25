@@ -10,6 +10,7 @@ import '../providers/battle_provider.dart';
 import '../providers/friend_provider.dart';
 import '../services/battle_service.dart';
 import '../widgets/avatar_circle.dart';
+import '../widgets/battle_duration_picker.dart';
 import '../widgets/bottom_sheet_handle.dart';
 
 /// Group battle setup — invite up to 10 participants (friends OR strangers).
@@ -29,6 +30,7 @@ class _BattleGroupSetupSheetState
   List<UserModel> _searchResults = [];
   bool _searching = false;
   bool _creating = false;
+  DateTime? _endTime;
 
   final _battleCode = BattleService.generateBattleCode();
 
@@ -70,6 +72,8 @@ class _BattleGroupSetupSheetState
 
   Future<void> _createBattle() async {
     if (_invited.isEmpty) return;
+    final endTime = _endTime;
+    if (endTime == null) return;
     setState(() => _creating = true);
 
     try {
@@ -90,7 +94,7 @@ class _BattleGroupSetupSheetState
       await ref.read(battleServiceProvider).createBattle(
             type: BattleType.group,
             participants: participants,
-            durationDays: 1,
+            endTime: endTime,
             createdBy: me.uid,
           );
       if (mounted) {
@@ -179,6 +183,14 @@ class _BattleGroupSetupSheetState
                 controller: scrollController,
                 padding: const EdgeInsets.symmetric(horizontal: 24),
                 children: [
+                  // Duration picker
+                  BattleDurationPicker(
+                    onChanged: (dt) {
+                      _endTime = dt;
+                    },
+                  ),
+                  const SizedBox(height: 20),
+
                   // Invited participants chips
                   if (_invited.isNotEmpty) ...[
                     Text('INVITED',

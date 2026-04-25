@@ -6,6 +6,7 @@ import '../screens/shell/main_shell.dart';
 import '../screens/home/home_screen.dart';
 import '../screens/battles/battles_screen.dart';
 import '../screens/battles/pending_battles_screen.dart';
+import '../screens/battle_ground/battle_ground_screen.dart';
 import '../screens/missions/missions_screen.dart';
 import '../screens/clan/clan_screen.dart';
 import '../screens/clan/clan_details_screen.dart';
@@ -72,6 +73,16 @@ final routerProvider = Provider<GoRouter>((ref) {
         path: '/profile',
         name: 'profile',
         builder: (context, state) => const ProfileScreen(),
+      ),
+
+      // Battle Ground — full-screen immersive arena for an active battle.
+      GoRoute(
+        parentNavigatorKey: _rootNavigatorKey,
+        path: '/battle-ground/:id',
+        name: 'battleGround',
+        builder: (context, state) => BattleGroundScreen(
+          battleId: state.pathParameters['id']!,
+        ),
       ),
 
       // Main app shell with 5 tabs

@@ -41,6 +41,7 @@ class ActiveBattleCard extends ConsumerWidget {
         if (activeBattle != null)
           // State A: Active battle
           _ActiveState(
+            battleId: activeBattle.battleId,
             opponentName:
                 activeBattle.opponentFor(uid)?.displayName ?? 'Opponent',
             yourSteps:
@@ -67,12 +68,14 @@ class ActiveBattleCard extends ConsumerWidget {
 }
 
 class _ActiveState extends StatelessWidget {
+  final String battleId;
   final String opponentName;
   final int yourSteps;
   final int opponentSteps;
   final String timeLeft;
 
   const _ActiveState({
+    required this.battleId,
     required this.opponentName,
     required this.yourSteps,
     required this.opponentSteps,
@@ -112,13 +115,10 @@ class _ActiveState extends StatelessWidget {
           const SizedBox(height: 16),
           SizedBox(
             width: double.infinity,
-            child: OutlinedButton(
-              onPressed: () => context.go('/battles'),
-              style: OutlinedButton.styleFrom(
-                side: BorderSide(
-                    color: AppColors.primary.withValues(alpha: 0.4)),
-              ),
-              child: const Text('View Arena'),
+            child: FilledButton.icon(
+              onPressed: () => context.push('/battle-ground/$battleId'),
+              icon: const Icon(Icons.stadium, size: 18),
+              label: const Text('Enter the Arena'),
             ),
           ),
         ],

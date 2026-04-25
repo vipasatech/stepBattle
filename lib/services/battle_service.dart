@@ -31,14 +31,22 @@ class BattleService {
   /// Create a new battle with pending invites.
   /// Creator is auto-accepted. Recipients receive in-app notifications
   /// and must Accept before battle becomes active.
+  ///
+  /// The battle ends at [endTime]. Whoever leads on steps at that moment
+  /// wins — no target step count. `startTime` is set to `now` as a placeholder
+  /// and replaced with the actual activation moment when all invitees accept.
+  ///
   /// Returns the created battle document ID.
   Future<String> createBattle({
     required BattleType type,
     required List<BattleParticipant> participants,
-    required int durationDays,
+    required DateTime endTime,
     required String createdBy,
   }) async {
     final now = DateTime.now();
+    if (!endTime.isAfter(now)) {
+      throw ArgumentError('endTime must be in the future');
+    }
     final xp = type == BattleType.oneVsOne
         ? AppConstants.xpWin1v1
         : AppConstants.xpWinGroup;
@@ -46,6 +54,12 @@ class BattleService {
     final allIds = participants.map((p) => p.userId).toList();
     // Creator is pre-accepted; everyone else needs to accept
     final acceptedIds = [createdBy];
+
+    // Derived duration (kept on the doc for back-compat with cards that
+    // still read `durationDays`). Rounded up to 1 day minimum so UI that
+    // formats "N-day battle" reads sensibly for short battles too.
+    final diff = endTime.difference(now);
+    final durationDays = diff.inHours >= 24 ? diff.inDays : 1;
 
     final battle = BattleModel(
       battleId: '',
@@ -55,7 +69,7 @@ class BattleService {
       invitedUserIds: allIds,
       acceptedUserIds: acceptedIds,
       startTime: now,
-      endTime: now.add(Duration(days: durationDays)),
+      endTime: endTime,
       durationDays: durationDays,
       xpReward: xp,
       createdBy: createdBy,
@@ -116,10 +130,14 @@ class BattleService {
     };
 
     if (allAccepted) {
+      // Preserve the original duration (picked at creation) from the moment
+      // the battle actually activates — opponent acceptance delay doesn't
+      // eat into the battle window. `endTime - createdAt` captures the
+      // user-chosen length at sub-day precision.
+      final duration = battle.endTime.difference(battle.createdAt);
       updates['status'] = 'active';
       updates['startTime'] = Timestamp.fromDate(now);
-      updates['endTime'] =
-          Timestamp.fromDate(now.add(Duration(days: battle.durationDays)));
+      updates['endTime'] = Timestamp.fromDate(now.add(duration));
 
       // Notify creator that battle started
       await _notifications.add({
@@ -182,11 +200,11 @@ class BattleService {
       if (newInvited.every((id) => newAccepted.contains(id)) &&
           newParticipants.length >= 2) {
         final now = DateTime.now();
+        final duration = battle.endTime.difference(battle.createdAt);
         await _battles.doc(battleId).update({
           'status': 'active',
           'startTime': Timestamp.fromDate(now),
-          'endTime': Timestamp.fromDate(
-              now.add(Duration(days: battle.durationDays))),
+          'endTime': Timestamp.fromDate(now.add(duration)),
         });
       }
     }

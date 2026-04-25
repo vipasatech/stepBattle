@@ -9,6 +9,7 @@ import '../providers/battle_provider.dart';
 import '../providers/friend_provider.dart';
 import '../services/battle_service.dart';
 import '../widgets/avatar_circle.dart';
+import '../widgets/battle_duration_picker.dart';
 import '../widgets/bottom_sheet_handle.dart';
 
 /// 1v1 battle setup — opponent can be ANYONE (friend or stranger via search).
@@ -27,6 +28,7 @@ class _Battle1v1SetupSheetState extends ConsumerState<Battle1v1SetupSheet> {
   List<UserModel> _searchResults = [];
   bool _searching = false;
   bool _creating = false;
+  DateTime? _endTime;
 
   final _battleCode = BattleService.generateBattleCode();
 
@@ -52,6 +54,8 @@ class _Battle1v1SetupSheetState extends ConsumerState<Battle1v1SetupSheet> {
 
   Future<void> _createBattle() async {
     if (_selectedOpponent == null) return;
+    final endTime = _endTime;
+    if (endTime == null) return;
     setState(() => _creating = true);
 
     try {
@@ -70,7 +74,7 @@ class _Battle1v1SetupSheetState extends ConsumerState<Battle1v1SetupSheet> {
             avatarURL: _selectedOpponent!.avatarURL,
           ),
         ],
-        durationDays: 1,
+        endTime: endTime,
         createdBy: me.uid,
       );
       if (mounted) {
@@ -180,6 +184,15 @@ class _Battle1v1SetupSheetState extends ConsumerState<Battle1v1SetupSheet> {
                     ],
                   ),
                   const SizedBox(height: 24),
+
+                  // Duration picker
+                  BattleDurationPicker(
+                    onChanged: (dt) {
+                      // Avoid rebuild loops; just cache the value.
+                      _endTime = dt;
+                    },
+                  ),
+                  const SizedBox(height: 20),
 
                   // Inline search
                   TextField(
