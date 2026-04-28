@@ -5,6 +5,7 @@ import 'package:go_router/go_router.dart';
 import '../../config/colors.dart';
 import '../../providers/auth_provider.dart';
 import '../../providers/step_provider.dart';
+import '../../services/step_source_aggregator.dart';
 import '../../widgets/permission_gate.dart';
 
 /// Main shell with 5-tab bottom nav.
@@ -28,22 +29,51 @@ class _MainShellState extends ConsumerState<MainShell> {
     // 1. Backfill missing user doc fields (userCode, etc.)
     await ref.read(authServiceProvider).ensureUserDataComplete(uid);
 
-    // 2. Force a step sync using current device step count — this pushes
-    //    today's steps to every downstream (step_logs, missions, battles, clan).
+    // 2. Force a step sync using the aggregator (max of native + HC + Fit).
+    //    Pushes today's aggregate to every downstream (step_logs, missions,
+    //    battles, clan) AND writes the per-source hourly breakdown row.
     //    Needed because ref.listen only fires on CHANGE, not on first load.
+    await _syncStepsAllSources(uid);
+  }
+
+  /// Runs the canonical "we just got new step data" pipeline:
+  ///   1. Read all sources (cached if caller already triggered a read).
+  ///   2. Write the per-source hourly snapshot to `source_step_hourly`.
+  ///   3. Push the winning aggregate to `step_logs` + fan-out to
+  ///      missions/battles/clan via [StepService.syncSteps].
+  Future<void> _syncStepsAllSources(String uid) async {
     try {
-      final health = ref.read(healthServiceProvider);
-      final steps = await health.getTodaySteps();
-      if (steps > 0) {
-        await ref.read(stepServiceProvider).syncSteps(
-              userId: uid,
-              steps: steps,
-              source: health.sourceName,
-            );
-      }
+      final aggregator = ref.read(stepAggregatorProvider);
+      // Force a fresh read; this also updates `aggregator.lastReading`
+      // which downstream listeners pick up.
+      final reading = await aggregator.readWithDebug();
+
+      // Always log the source breakdown — even when aggregate is 0.
+      // That's how we detect "every source is empty" devices.
+      await ref
+          .read(sourceStepHourlyLogServiceProvider)
+          .maybeLog(userId: uid, reading: reading);
+
+      if (reading.aggregate <= 0) return;
+
+      final healthService = ref.read(healthServiceProvider);
+      final source = _winningSourceLabel(reading, healthService.sourceName);
+      await ref.read(stepServiceProvider).syncSteps(
+            userId: uid,
+            steps: reading.aggregate,
+            source: source,
+          );
     } catch (_) {
-      // Health not authorized or offline — ignore silently.
+      // Sync failures should never crash the UI shell.
     }
+  }
+
+  String _winningSourceLabel(StepReading r, String hcLabel) {
+    if (r.aggregate <= 0) return 'none';
+    final fit = r.googleFitSteps ?? -1;
+    if (fit >= r.aggregate && fit > 0) return 'google_fit';
+    if (r.healthConnectSteps == r.aggregate) return hcLabel;
+    return 'native_pedometer';
   }
 
   @override
@@ -57,8 +87,9 @@ class _MainShellState extends ConsumerState<MainShell> {
     }
 
     // Auto-sync step count to Firestore whenever local device reading changes.
-    // This fans out to: step_logs, users.totalStepsAllTime,
-    // user_mission_progress, active battles, clan members.
+    // Fans out to: step_logs, users.totalStepsAllTime,
+    // user_mission_progress, active battles, clan members AND writes the
+    // per-source hourly breakdown (`source_step_hourly`) for analytics.
     ref.listen<AsyncValue<int>>(localTodayStepsProvider, (prev, next) {
       final newSteps = next.valueOrNull;
       if (newSteps == null || newSteps <= 0) return;
@@ -67,11 +98,23 @@ class _MainShellState extends ConsumerState<MainShell> {
       final uid = ref.read(authStateProvider).valueOrNull?.uid;
       if (uid == null) return;
 
+      // Use the cached reading from the aggregator — this is the SAME
+      // reading that produced `newSteps`, guaranteeing the per-source
+      // breakdown logged matches the value the UI just rendered.
+      final reading = ref.read(stepAggregatorProvider).lastReading;
+      if (reading == null) return;
+
+      // Fire-and-forget; failures swallowed inside.
+      ref
+          .read(sourceStepHourlyLogServiceProvider)
+          .maybeLog(userId: uid, reading: reading);
+
       final healthService = ref.read(healthServiceProvider);
+      final source = _winningSourceLabel(reading, healthService.sourceName);
       ref.read(stepServiceProvider).syncSteps(
             userId: uid,
             steps: newSteps,
-            source: healthService.sourceName,
+            source: source,
           );
     });
 

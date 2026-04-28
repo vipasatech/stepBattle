@@ -27,6 +27,7 @@ dependencies:
 
   # Health Data
   health: ^11.1.0
+  pedometer: ^4.0.2
 
   # Permissions
   permission_handler: ^11.3.1
@@ -47,6 +48,12 @@ dependencies:
   cached_network_image: ^3.4.1
   intl: ^0.19.0
   shimmer: ^3.0.0
+
+  # Networking + device fingerprinting (used by Google Fit fallback +
+  # source_step_hourly analytics logs)
+  http: ^1.2.2
+  device_info_plus: ^10.1.2
+  package_info_plus: ^8.0.2
 
 dev_dependencies:
   flutter_test:

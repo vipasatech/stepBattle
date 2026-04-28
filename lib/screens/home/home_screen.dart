@@ -7,6 +7,7 @@ import '../../providers/user_provider.dart';
 import '../../sheets/notifications_sheet.dart';
 import '../../sheets/streak_history_sheet.dart';
 import '../../widgets/avatar_circle.dart';
+import '../../widgets/no_steps_banner.dart';
 import 'widgets/overview_card.dart';
 import 'widgets/stat_pills_row.dart';
 import 'widgets/active_battle_card.dart';
@@ -164,6 +165,11 @@ class _HomeBody extends StatelessWidget {
     return ListView(
       padding: const EdgeInsets.fromLTRB(20, 8, 20, 120),
       children: const [
+        // Auto-diagnostic banner — only renders when every step source
+        // has been failing/empty for 10+ minutes. Self-suppressing if
+        // dismissed or once steps start flowing.
+        NoStepsBanner(),
+
         // Section 1: Overview card + stat pills
         OverviewCard(),
         SizedBox(height: 12),

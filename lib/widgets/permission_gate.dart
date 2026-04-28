@@ -1,6 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 import '../config/colors.dart';
+import '../providers/step_provider.dart';
+import '../screens/onboarding/health_setup_screen.dart';
 import '../services/permission_service.dart';
 
 final permissionServiceProvider =
@@ -50,6 +53,18 @@ class _PermissionGateState extends ConsumerState<PermissionGate>
       _dialogShown = true;
       await _showPermissionDialog(status);
       _dialogShown = false;
+      return;
+    }
+
+    // All permissions granted — push the OEM-aware setup wizard once,
+    // so users (especially on Realme/Motorola) see the per-device toggle
+    // they need to flip. Hive flag prevents re-showing.
+    if (HealthSetupScreen.shouldShowFirstRunWizard()) {
+      if (!mounted) return;
+      // Small delay so the wizard doesn't fight an in-flight grant dialog.
+      await Future<void>.delayed(const Duration(milliseconds: 200));
+      if (!mounted) return;
+      context.push('/profile/health-setup?firstRun=true');
     }
   }
 
@@ -81,6 +96,9 @@ class _PermissionDialogState extends ConsumerState<_PermissionDialog> {
     setState(() => _requesting = true);
     final service = ref.read(permissionServiceProvider);
     await service.requestAll();
+    // ACTIVITY_RECOGNITION may have just been granted — re-arm the native
+    // pedometer subscription so steps start flowing without an app restart.
+    await ref.read(restartNativeStepServiceProvider)();
     if (mounted) Navigator.of(context).pop();
   }
 

@@ -192,7 +192,9 @@ class _UsernameStep extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    return Padding(
+    return SingleChildScrollView(
+      // Scrollable so short-screen devices (Motorola, low-DPI tablets) don't
+      // overflow when the keyboard is up.
       padding: const EdgeInsets.symmetric(horizontal: 24),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -218,6 +220,8 @@ class _UsernameStep extends StatelessWidget {
               prefixIcon: const Icon(Icons.alternate_email, size: 20),
             ),
           ),
+          // Bottom padding so the content can clear the keyboard.
+          SizedBox(height: MediaQuery.of(context).viewInsets.bottom + 24),
         ],
       ),
     );
@@ -237,7 +241,7 @@ class _HealthConnectStep extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    return Padding(
+    return SingleChildScrollView(
       padding: const EdgeInsets.symmetric(horizontal: 24),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -305,6 +309,7 @@ class _HealthConnectStep extends StatelessWidget {
             style: theme.textTheme.bodySmall
                 ?.copyWith(color: AppColors.onSurfaceVariant.withValues(alpha: 0.6)),
           ),
+          const SizedBox(height: 24),
         ],
       ),
     );
@@ -325,7 +330,7 @@ class _GoalStep extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    return Padding(
+    return SingleChildScrollView(
       padding: const EdgeInsets.symmetric(horizontal: 24),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -434,6 +439,7 @@ class _GoalStep extends StatelessWidget {
               ),
             ],
           ),
+          const SizedBox(height: 24),
         ],
       ),
     );

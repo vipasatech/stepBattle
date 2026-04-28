@@ -15,6 +15,12 @@ class HealthService {
   int _lastKnownTodaySteps = 0;
   String _lastKnownDate = '';
 
+  /// One-shot init future. Health Connect's `healthConnectClient` is a
+  /// `lateinit` field that must be set up via `Health().configure()` before
+  /// any other call, otherwise reads throw `UninitializedPropertyAccessException`.
+  /// Cache the future so concurrent first-callers all await the same setup.
+  Future<void>? _configureFuture;
+
   /// Types we need access to.
   static const List<HealthDataType> _readTypes = [
     HealthDataType.STEPS,
@@ -25,15 +31,41 @@ class HealthService {
   // Permissions
   // ---------------------------------------------------------------------------
 
+  /// Lazily configure the platform health client. Idempotent.
+  Future<void> _ensureConfigured() {
+    return _configureFuture ??= _doConfigure();
+  }
+
+  Future<void> _doConfigure() async {
+    try {
+      // No-op on iOS; on Android sets up the platform plumbing.
+      await _health.configure();
+
+      // health: ^11.x quirk — `configure()` does NOT initialize the
+      // Kotlin-side `lateinit var healthConnectClient`. That field is only
+      // set inside `onAttachedToEngine` (which silently no-ops if Health
+      // Connect availability is misdetected at attach time, common on
+      // Samsung One UI) or inside `getHealthConnectSdkStatus`. Calling
+      // status here forces the re-check + lazy `getOrCreate`, so subsequent
+      // step reads don't throw `UninitializedPropertyAccessException`.
+      if (Platform.isAndroid) {
+        try {
+          await _health.getHealthConnectSdkStatus();
+        } catch (_) {
+          // Status probe is best-effort; ignore.
+        }
+      }
+    } catch (_) {
+      // Allow retry on next call by clearing the cached future.
+      _configureFuture = null;
+    }
+  }
+
   /// Request read permissions from the platform health store.
   Future<bool> requestPermissions() async {
     try {
+      await _ensureConfigured();
       final permissions = _readTypes.map((_) => HealthDataAccess.READ).toList();
-
-      // On Android, install Health Connect if needed
-      if (Platform.isAndroid) {
-        await Health().configure();
-      }
 
       final granted = await _health.requestAuthorization(
         _readTypes,
@@ -50,6 +82,7 @@ class HealthService {
   /// Check if permissions have already been granted.
   Future<bool> hasPermissions() async {
     try {
+      await _ensureConfigured();
       final result = await _health.hasPermissions(_readTypes);
       _isAuthorized = result ?? false;
       return _isAuthorized;
@@ -108,6 +141,7 @@ class HealthService {
   /// can decide how to handle transient failures (vs confusing them with 0).
   Future<int?> _tryGetSteps(DateTime start, DateTime end) async {
     try {
+      await _ensureConfigured();
       final steps = await _health.getTotalStepsInInterval(start, end);
       return steps ?? 0;
     } catch (_) {
@@ -143,6 +177,7 @@ class HealthService {
     final now = DateTime.now();
     final midnight = DateTime(now.year, now.month, now.day);
     try {
+      await _ensureConfigured();
       final data = await _health.getHealthDataFromTypes(
         types: [HealthDataType.ACTIVE_ENERGY_BURNED],
         startTime: midnight,

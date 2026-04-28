@@ -1,10 +1,13 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 import '../../config/colors.dart';
 import '../../providers/auth_provider.dart';
 import '../../providers/friend_provider.dart';
+import '../../providers/step_provider.dart';
 import '../../providers/user_provider.dart';
+import '../../services/step_source_aggregator.dart';
 import '../../sheets/add_friends_sheet.dart';
 import '../../sheets/set_goal_sheet.dart';
 import '../../sheets/streak_history_sheet.dart';
@@ -152,6 +155,13 @@ class ProfileScreen extends ConsumerWidget {
                 // Section 5: Account
                 AccountDetails(user: profile),
 
+                const SizedBox(height: 20),
+
+                // Step Sources diagnostic — for users on OEMs where Health
+                // Connect isn't getting fed (Realme/Motorola) so they can
+                // see exactly which source is producing their step count.
+                _StepSourcesTile(),
+
                 const SizedBox(height: 28),
 
                 // Section 6: Sign out
@@ -212,6 +222,111 @@ class ProfileScreen extends ConsumerWidget {
             child: const Text('Sign Out'),
           ),
         ],
+      ),
+    );
+  }
+}
+
+// =============================================================================
+// Step Sources tiles — diagnostics + setup guide
+// =============================================================================
+class _StepSourcesTile extends ConsumerWidget {
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final reading =
+        ref.watch(stepAggregatorProvider).lastReading;
+    final winner = _winnerLabel(reading);
+
+    return Column(
+      children: [
+        _ProfileLinkTile(
+          icon: Icons.directions_walk,
+          title: 'How my steps are tracked',
+          subtitle: winner == null
+              ? 'See per-source live values and diagnose 0-step issues'
+              : 'Source: $winner — tap for live values',
+          route: '/profile/step-sources',
+        ),
+        const SizedBox(height: 8),
+        _ProfileLinkTile(
+          icon: Icons.tune,
+          title: 'Step tracking setup guide',
+          subtitle:
+              'Tailored instructions for your phone — Samsung, Realme, etc.',
+          route: '/profile/health-setup',
+        ),
+      ],
+    );
+  }
+
+  String? _winnerLabel(StepReading? r) {
+    if (r == null || r.aggregate <= 0) return null;
+    final fit = r.googleFitSteps ?? -1;
+    if (fit >= r.aggregate && fit > 0) return 'Google Fit';
+    if (r.healthConnectSteps == r.aggregate) return 'Health Connect';
+    return 'Phone hardware sensor';
+  }
+}
+
+class _ProfileLinkTile extends StatelessWidget {
+  final IconData icon;
+  final String title;
+  final String subtitle;
+  final String route;
+
+  const _ProfileLinkTile({
+    required this.icon,
+    required this.title,
+    required this.subtitle,
+    required this.route,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: () => context.push(route),
+        borderRadius: BorderRadius.circular(16),
+        child: Container(
+          padding: const EdgeInsets.all(14),
+          decoration: BoxDecoration(
+            color: AppColors.surfaceContainerLow,
+            borderRadius: BorderRadius.circular(16),
+            border:
+                Border.all(color: Colors.white.withValues(alpha: 0.05)),
+          ),
+          child: Row(
+            children: [
+              Container(
+                width: 40,
+                height: 40,
+                decoration: BoxDecoration(
+                  color: AppColors.primary.withValues(alpha: 0.12),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: Icon(icon, color: AppColors.primary),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(title,
+                        style: theme.textTheme.titleSmall
+                            ?.copyWith(fontWeight: FontWeight.w700)),
+                    Text(subtitle,
+                        style: theme.textTheme.labelSmall?.copyWith(
+                            color: AppColors.onSurfaceVariant)),
+                  ],
+                ),
+              ),
+              const Icon(Icons.chevron_right,
+                  color: AppColors.onSurfaceVariant),
+            ],
+          ),
+        ),
       ),
     );
   }

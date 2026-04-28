@@ -121,5 +121,23 @@ service cloud.firestore {
       allow read: if request.auth != null;
       allow write: if false; // Only Cloud Functions
     }
+
+    // =========================================================================
+    // SOURCE STEP HOURLY  (per-source step breakdown, hourly buckets)
+    // Doc id format: {userId}_{yyyy-MM-dd-HH UTC}
+    // Required composite index:
+    //   collection: source_step_hourly
+    //   fields: userId asc, hourStart desc
+    // =========================================================================
+    match /source_step_hourly/{logId} {
+      // A user can read only their own hourly logs.
+      allow read: if request.auth != null
+        && resource.data.userId == request.auth.uid;
+      // A user can create / upsert their own logs.
+      allow create, update: if request.auth != null
+        && request.resource.data.userId == request.auth.uid;
+      // No client-side deletion (analytics retention is handled server-side).
+      allow delete: if false;
+    }
   }
 }

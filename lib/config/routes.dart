@@ -15,7 +15,9 @@ import '../screens/auth/login_screen.dart';
 import '../screens/auth/onboarding_screen.dart';
 import '../screens/clan_battle/create_clan_battle_screen.dart';
 import '../screens/clan_battle/join_clan_battle_screen.dart';
+import '../screens/onboarding/health_setup_screen.dart';
 import '../screens/profile/profile_screen.dart';
+import '../screens/profile/step_sources_screen.dart';
 
 final GlobalKey<NavigatorState> _rootNavigatorKey = GlobalKey<NavigatorState>();
 
@@ -73,6 +75,28 @@ final routerProvider = Provider<GoRouter>((ref) {
         path: '/profile',
         name: 'profile',
         builder: (context, state) => const ProfileScreen(),
+      ),
+
+      // Step source diagnostics (developer / support screen)
+      GoRoute(
+        parentNavigatorKey: _rootNavigatorKey,
+        path: '/profile/step-sources',
+        name: 'stepSources',
+        builder: (context, state) => const StepSourcesScreen(),
+      ),
+
+      // OEM-aware step tracking setup wizard. Reachable from the
+      // post-permission auto-show, the Home "Steps not flowing" banner,
+      // and the Profile setup tile.
+      GoRoute(
+        parentNavigatorKey: _rootNavigatorKey,
+        path: '/profile/health-setup',
+        name: 'healthSetup',
+        builder: (context, state) {
+          final firstRun =
+              (state.uri.queryParameters['firstRun'] ?? 'false') == 'true';
+          return HealthSetupScreen(isFirstRun: firstRun);
+        },
       ),
 
       // Battle Ground — full-screen immersive arena for an active battle.

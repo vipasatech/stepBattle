@@ -44,6 +44,14 @@
                 <action android:name="android.intent.action.MAIN"/>
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
+
+            <!-- Required by Health Connect (Play Store version on Android <14):
+                 the calling app must expose itself as a handler for the
+                 permission-rationale intent, otherwise Health Connect rejects
+                 every permission read with "is not declared!". -->
+            <intent-filter>
+                <action android:name="androidx.health.ACTION_SHOW_PERMISSIONS_RATIONALE"/>
+            </intent-filter>
         </activity>
         <!-- Health Connect permissions activity -->
         <activity-alias

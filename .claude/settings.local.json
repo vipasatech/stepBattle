@@ -21,7 +21,8 @@
       "Bash(flutter devices:*)",
       "Bash(flutter run:*)",
       "Bash(timeout 10 flutter logs)",
-      "Bash(flutter logs:*)"
+      "Bash(flutter logs:*)",
+      "Bash(git check-ignore *)"
     ]
   }
 }
