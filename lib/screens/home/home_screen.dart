@@ -7,6 +7,7 @@ import '../../providers/user_provider.dart';
 import '../../sheets/notifications_sheet.dart';
 import '../../sheets/streak_history_sheet.dart';
 import '../../widgets/avatar_circle.dart';
+import '../../widgets/friends_app_bar_button.dart';
 import '../../widgets/no_steps_banner.dart';
 import 'widgets/overview_card.dart';
 import 'widgets/stat_pills_row.dart';
@@ -39,6 +40,9 @@ class HomeScreen extends ConsumerWidget {
           ],
         ),
         actions: [
+          // Friends hub with badge for pending incoming requests
+          const FriendsAppBarButton(),
+          const SizedBox(width: 8),
           // Notification bell with badge
           _BellButton(unreadCount: unreadCount),
           const SizedBox(width: 8),
@@ -110,6 +114,7 @@ class _BellButton extends StatelessWidget {
       onTap: () => showModalBottomSheet(
         context: context,
         isScrollControlled: true,
+        useRootNavigator: true,
         backgroundColor: Colors.transparent,
         builder: (_) => const NotificationsSheet(),
       ),

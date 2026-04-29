@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../../config/colors.dart';
 import '../../providers/clan_provider.dart';
+import '../../widgets/friends_app_bar_button.dart';
 import 'clan_entry_view.dart';
 import 'clan_dashboard_view.dart';
 
@@ -64,6 +65,10 @@ class ClanScreen extends ConsumerWidget {
                 ],
               ),
         actions: [
+          // Friends hub — discoverable from any tab. Same widget + badge
+          // as the Home AppBar.
+          const FriendsAppBarButton(),
+          const SizedBox(width: 8),
           if (hasClan)
             IconButton(
               icon: const Icon(Icons.settings, color: AppColors.onSurfaceVariant),

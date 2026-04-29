@@ -22,7 +22,8 @@
       "Bash(flutter run:*)",
       "Bash(timeout 10 flutter logs)",
       "Bash(flutter logs:*)",
-      "Bash(git check-ignore *)"
+      "Bash(git check-ignore *)",
+      "Bash(grep -v \"import\\\\|_continue\\\\|^[^:]*:[^:]*:.*//\")"
     ]
   }
 }

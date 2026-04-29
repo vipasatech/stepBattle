@@ -7,25 +7,42 @@ import '../providers/friend_provider.dart';
 import '../widgets/avatar_circle.dart';
 import '../widgets/bottom_sheet_handle.dart';
 
+/// Behavior of the Add Friends sheet.
+enum FriendsSheetMode {
+  /// Pick N people to perform an action on (e.g., invite to a clan).
+  /// Friend rows show a select chip; bottom CTA is enabled when selections exist.
+  picker,
+
+  /// Browse + manage friends. No selection chips, no bottom CTA.
+  /// Friend rows show a kebab menu with "Remove friend".
+  /// Requests tab includes both Incoming (Accept/Reject) and Sent (Cancel).
+  manage,
+}
+
 /// Reusable Add Friends bottom sheet with 3 tabs:
-///   Friends List — accepted friends (multi/single select mode)
-///   Search — by @username or #UserCode
-///   Requests — incoming pending requests with Accept/Reject
+///   Friends — accepted friends. In picker mode shows selection chips;
+///             in manage mode shows a kebab with "Remove friend".
+///   Search  — by @username or #UserCode; tap "Request" to send.
+///   Requests — incoming pending (Accept/Reject); in manage mode also
+///              shows your sent requests (Cancel).
 class AddFriendsSheet extends ConsumerStatefulWidget {
+  final FriendsSheetMode mode;
   final bool multiSelect;
-  final bool allowSelect;
   final String confirmLabel;
   final int initialTab;
   final void Function(List<UserModel> selected)? onConfirm;
 
   const AddFriendsSheet({
     super.key,
+    this.mode = FriendsSheetMode.picker,
     this.multiSelect = true,
-    this.allowSelect = true,
     this.confirmLabel = 'Confirm Selection',
     this.initialTab = 0,
     this.onConfirm,
   });
+
+  /// Whether selection UI should be visible (picker mode + not Requests tab).
+  bool get _allowSelect => mode == FriendsSheetMode.picker;
 
   @override
   ConsumerState<AddFriendsSheet> createState() => _AddFriendsSheetState();
@@ -100,6 +117,52 @@ class _AddFriendsSheetState extends ConsumerState<AddFriendsSheet> {
     }
   }
 
+  Future<void> _removeFriend(UserModel friend) async {
+    final me = FirebaseAuth.instance.currentUser;
+    if (me == null) return;
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: AppColors.surfaceContainerLow,
+        title: Text('Remove ${friend.displayName}?'),
+        content: const Text(
+            'They will no longer appear in your friends list. You can re-add them later.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: AppColors.error),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Remove'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+
+    try {
+      await ref.read(friendServiceProvider).removeFriend(
+            userId: me.uid,
+            friendId: friend.userId,
+          );
+      ref.invalidate(friendsListProvider);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('${friend.displayName} removed from friends')),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Could not remove: $e')),
+        );
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -121,14 +184,18 @@ class _AddFriendsSheetState extends ConsumerState<AddFriendsSheet> {
           children: [
             const BottomSheetHandle(),
 
-            // Title
+            // Title — copy adapts to mode
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 24),
               child: Align(
                 alignment: Alignment.centerLeft,
-                child: Text('Add Friends',
-                    style: theme.textTheme.headlineMedium
-                        ?.copyWith(fontWeight: FontWeight.w700)),
+                child: Text(
+                  widget.mode == FriendsSheetMode.manage
+                      ? 'Friends'
+                      : 'Add Friends',
+                  style: theme.textTheme.headlineMedium
+                      ?.copyWith(fontWeight: FontWeight.w700),
+                ),
               ),
             ),
             const SizedBox(height: 16),
@@ -172,8 +239,11 @@ class _AddFriendsSheetState extends ConsumerState<AddFriendsSheet> {
                     friends: friends.valueOrNull ?? [],
                     selectedIds: _selectedIds,
                     currentUid: currentUid,
-                    allowSelect: widget.allowSelect,
+                    allowSelect: widget._allowSelect,
+                    isManageMode:
+                        widget.mode == FriendsSheetMode.manage,
                     onToggle: _toggleSelect,
+                    onRemove: _removeFriend,
                     scrollController: scrollController,
                   ),
                 1 => _SearchTab(
@@ -185,12 +255,16 @@ class _AddFriendsSheetState extends ConsumerState<AddFriendsSheet> {
                     onSendRequest: _sendRequest,
                     scrollController: scrollController,
                   ),
-                _ => _RequestsTab(scrollController: scrollController),
+                _ => _RequestsTab(
+                    scrollController: scrollController,
+                    showOutgoing:
+                        widget.mode == FriendsSheetMode.manage,
+                  ),
               },
             ),
 
-            // Bottom confirm bar (only for selection mode on Friends tab)
-            if (widget.allowSelect && _tabIndex == 0)
+            // Bottom confirm bar (picker mode on Friends tab only)
+            if (widget._allowSelect && _tabIndex == 0)
               Container(
                 padding: const EdgeInsets.fromLTRB(24, 12, 24, 32),
                 decoration: BoxDecoration(
@@ -305,7 +379,9 @@ class _FriendsListTab extends StatelessWidget {
   final Set<String> selectedIds;
   final String currentUid;
   final bool allowSelect;
+  final bool isManageMode;
   final void Function(UserModel) onToggle;
+  final Future<void> Function(UserModel) onRemove;
   final ScrollController scrollController;
 
   const _FriendsListTab({
@@ -313,7 +389,9 @@ class _FriendsListTab extends StatelessWidget {
     required this.selectedIds,
     required this.currentUid,
     required this.allowSelect,
+    required this.isManageMode,
     required this.onToggle,
+    required this.onRemove,
     required this.scrollController,
   });
 
@@ -344,8 +422,40 @@ class _FriendsListTab extends StatelessWidget {
           selected: selectedIds.contains(f.userId),
           showSelect: allowSelect,
           onTap: allowSelect ? () => onToggle(f) : null,
+          trailing: isManageMode
+              ? _FriendKebab(onRemove: () => onRemove(f))
+              : null,
         );
       },
+    );
+  }
+}
+
+class _FriendKebab extends StatelessWidget {
+  final VoidCallback onRemove;
+  const _FriendKebab({required this.onRemove});
+
+  @override
+  Widget build(BuildContext context) {
+    return PopupMenuButton<String>(
+      icon: const Icon(Icons.more_vert, color: AppColors.onSurfaceVariant),
+      color: AppColors.surfaceContainerHigh,
+      onSelected: (v) {
+        if (v == 'remove') onRemove();
+      },
+      itemBuilder: (_) => const [
+        PopupMenuItem(
+          value: 'remove',
+          child: Row(
+            children: [
+              Icon(Icons.person_remove, size: 18, color: AppColors.error),
+              SizedBox(width: 10),
+              Text('Remove friend',
+                  style: TextStyle(color: AppColors.error)),
+            ],
+          ),
+        ),
+      ],
     );
   }
 }
@@ -436,72 +546,217 @@ class _SearchTab extends StatelessWidget {
 }
 
 // =============================================================================
-// Tab 3: Incoming Requests (Accept / Reject)
+// Tab 3: Requests
+//   Always: Incoming (Accept / Reject)
+//   When showOutgoing: also Sent (Cancel) — manage mode only
 // =============================================================================
 class _RequestsTab extends ConsumerWidget {
   final ScrollController scrollController;
+  final bool showOutgoing;
 
-  const _RequestsTab({required this.scrollController});
+  const _RequestsTab({
+    required this.scrollController,
+    required this.showOutgoing,
+  });
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final theme = Theme.of(context);
-    final requests = ref.watch(incomingRequestProfilesProvider);
+    final incoming = ref.watch(incomingRequestProfilesProvider);
+    final outgoing = ref.watch(outgoingRequestProfilesProvider);
 
-    return requests.when(
-      loading: () => const Center(
-          child: CircularProgressIndicator(color: AppColors.primary)),
-      error: (_, __) => const Center(child: Text('Could not load requests')),
-      data: (list) {
-        if (list.isEmpty) {
-          return Center(
-            child: Padding(
-              padding: const EdgeInsets.all(32),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Icon(Icons.inbox,
-                      size: 48,
-                      color: AppColors.onSurfaceVariant
-                          .withValues(alpha: 0.4)),
-                  const SizedBox(height: 12),
-                  Text('No pending requests',
-                      style: theme.textTheme.bodyMedium
-                          ?.copyWith(color: AppColors.onSurfaceVariant),
-                      textAlign: TextAlign.center),
-                ],
-              ),
-            ),
-          );
-        }
-        return ListView.builder(
-          controller: scrollController,
-          padding: const EdgeInsets.symmetric(horizontal: 24),
-          itemCount: list.length,
-          itemBuilder: (_, i) {
-            final item = list[i];
-            return _RequestRow(
+    if (incoming.isLoading || (showOutgoing && outgoing.isLoading)) {
+      return const Center(
+          child: CircularProgressIndicator(color: AppColors.primary));
+    }
+    if (incoming.hasError || (showOutgoing && outgoing.hasError)) {
+      return const Center(child: Text('Could not load requests'));
+    }
+
+    final incomingList = incoming.valueOrNull ?? [];
+    final outgoingList = showOutgoing ? (outgoing.valueOrNull ?? []) : const [];
+
+    if (incomingList.isEmpty && outgoingList.isEmpty) {
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.all(32),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(Icons.inbox,
+                  size: 48,
+                  color: AppColors.onSurfaceVariant
+                      .withValues(alpha: 0.4)),
+              const SizedBox(height: 12),
+              Text('No pending requests',
+                  style: theme.textTheme.bodyMedium
+                      ?.copyWith(color: AppColors.onSurfaceVariant),
+                  textAlign: TextAlign.center),
+            ],
+          ),
+        ),
+      );
+    }
+
+    return ListView(
+      controller: scrollController,
+      padding: const EdgeInsets.symmetric(horizontal: 24),
+      children: [
+        if (incomingList.isNotEmpty) ...[
+          _SectionLabel(label: 'INCOMING', count: incomingList.length),
+          for (final item in incomingList)
+            _IncomingRequestRow(
               user: item.user,
               relationshipId: item.rel.relationshipId,
-            );
-          },
-        );
-      },
+            ),
+        ],
+        if (showOutgoing && outgoingList.isNotEmpty) ...[
+          const SizedBox(height: 16),
+          _SectionLabel(label: 'SENT', count: outgoingList.length),
+          for (final item in outgoingList)
+            _OutgoingRequestRow(
+              user: item.user,
+              relationshipId: item.rel.relationshipId,
+            ),
+        ],
+      ],
     );
   }
 }
 
-class _RequestRow extends ConsumerStatefulWidget {
+class _SectionLabel extends StatelessWidget {
+  final String label;
+  final int count;
+  const _SectionLabel({required this.label, required this.count});
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Padding(
+      padding: const EdgeInsets.only(top: 4, bottom: 10),
+      child: Row(
+        children: [
+          Text(label,
+              style: theme.textTheme.labelSmall?.copyWith(
+                color: AppColors.onSurfaceVariant,
+                letterSpacing: 1.5,
+                fontWeight: FontWeight.w800,
+              )),
+          const SizedBox(width: 6),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+            decoration: BoxDecoration(
+              color: AppColors.primary.withValues(alpha: 0.15),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Text('$count',
+                style: theme.textTheme.labelSmall?.copyWith(
+                  color: AppColors.primary,
+                  fontWeight: FontWeight.w900,
+                  fontSize: 10,
+                )),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _OutgoingRequestRow extends ConsumerStatefulWidget {
   final UserModel user;
   final String relationshipId;
 
-  const _RequestRow({required this.user, required this.relationshipId});
+  const _OutgoingRequestRow({
+    required this.user,
+    required this.relationshipId,
+  });
 
   @override
-  ConsumerState<_RequestRow> createState() => _RequestRowState();
+  ConsumerState<_OutgoingRequestRow> createState() =>
+      _OutgoingRequestRowState();
 }
 
-class _RequestRowState extends ConsumerState<_RequestRow> {
+class _OutgoingRequestRowState extends ConsumerState<_OutgoingRequestRow> {
+  bool _processing = false;
+
+  Future<void> _cancel() async {
+    setState(() => _processing = true);
+    try {
+      await ref
+          .read(friendServiceProvider)
+          .cancelRequest(widget.relationshipId);
+    } catch (_) {}
+    if (mounted) setState(() => _processing = false);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 10),
+      child: Row(
+        children: [
+          AvatarCircle(
+            radius: 22,
+            imageUrl: widget.user.avatarURL,
+            initials: widget.user.displayName.isNotEmpty
+                ? widget.user.displayName[0].toUpperCase()
+                : '?',
+            borderColor: AppColors.outlineVariant,
+            borderWidth: 1,
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(widget.user.displayName,
+                    style: theme.textTheme.titleSmall
+                        ?.copyWith(fontWeight: FontWeight.w700)),
+                Text('Waiting for response',
+                    style: theme.textTheme.labelSmall
+                        ?.copyWith(color: AppColors.onSurfaceVariant)),
+              ],
+            ),
+          ),
+          if (_processing)
+            const SizedBox(
+              width: 18,
+              height: 18,
+              child: CircularProgressIndicator(
+                  strokeWidth: 2, color: AppColors.primary),
+            )
+          else
+            OutlinedButton(
+              onPressed: _cancel,
+              style: OutlinedButton.styleFrom(
+                side: BorderSide(
+                    color: AppColors.error.withValues(alpha: 0.4)),
+                foregroundColor: AppColors.error,
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+              ),
+              child: const Text('Cancel'),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+class _IncomingRequestRow extends ConsumerStatefulWidget {
+  final UserModel user;
+  final String relationshipId;
+
+  const _IncomingRequestRow(
+      {required this.user, required this.relationshipId});
+
+  @override
+  ConsumerState<_IncomingRequestRow> createState() =>
+      _IncomingRequestRowState();
+}
+
+class _IncomingRequestRowState extends ConsumerState<_IncomingRequestRow> {
   bool _processing = false;
 
   Future<void> _accept() async {

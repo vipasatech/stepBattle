@@ -99,6 +99,10 @@ class _NewBattleSelectionSheetState extends State<NewBattleSelectionSheet> {
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
+      // Same reason as the parent selection sheet: push to root navigator
+      // so the "Send Battle Invite" CTA at the bottom of the setup sheet
+      // sits above the shell's bottom nav instead of being hidden behind it.
+      useRootNavigator: true,
       backgroundColor: Colors.transparent,
       builder: (_) => _selected == 0
           ? const Battle1v1SetupSheet()

@@ -65,6 +65,10 @@ class _BattlesScreenState extends ConsumerState<BattlesScreen> {
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
+      // Push to root navigator so the sheet covers the shell's bottom nav.
+      // Without this, the CTA at the bottom of the setup sheets is hidden
+      // behind the floating nav (extendBody: true on the shell scaffold).
+      useRootNavigator: true,
       backgroundColor: Colors.transparent,
       builder: (_) => const NewBattleSelectionSheet(),
     );
@@ -176,6 +180,7 @@ class _BattlesBody extends ConsumerWidget {
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
+      useRootNavigator: true,
       backgroundColor: Colors.transparent,
       builder: (_) => const NewBattleSelectionSheet(),
     );

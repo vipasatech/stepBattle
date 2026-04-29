@@ -137,8 +137,8 @@ class ProfileScreen extends ConsumerWidget {
 
                 const SizedBox(height: 20),
 
-                // Pending Requests section (only if count > 0)
-                _PendingRequestsSection(),
+                // Friends — live count + pending badge, opens Friends Hub
+                _FriendsTile(),
 
                 const SizedBox(height: 28),
 
@@ -402,66 +402,111 @@ class _YourCodeSection extends StatelessWidget {
 }
 
 // =============================================================================
-// Pending Requests section — visible only when count > 0
+// Friends tile — live friends count + pending badge.
+// Tap opens the Friends Hub on the Friends tab (or Requests if pending).
 // =============================================================================
-class _PendingRequestsSection extends ConsumerWidget {
+class _FriendsTile extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final count = ref.watch(incomingRequestCountProvider);
-    if (count == 0) return const SizedBox();
-
     final theme = Theme.of(context);
-    return GestureDetector(
-      onTap: () => showModalBottomSheet(
-        context: context,
-        isScrollControlled: true,
-        backgroundColor: Colors.transparent,
-        builder: (_) => const AddFriendsSheet(
-          initialTab: 2, // Requests tab
-          allowSelect: false,
+    final friendCount = ref.watch(friendsListProvider).valueOrNull?.length ?? 0;
+    final pendingCount = ref.watch(incomingRequestCountProvider);
+
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(16),
+        onTap: () => showModalBottomSheet(
+          context: context,
+          isScrollControlled: true,
+          useRootNavigator: true,
+          backgroundColor: Colors.transparent,
+          builder: (_) => AddFriendsSheet(
+            mode: FriendsSheetMode.manage,
+            // Land on Requests when there's something to act on; otherwise
+            // start on the Friends list.
+            initialTab: pendingCount > 0 ? 2 : 0,
+          ),
         ),
-      ),
-      child: Container(
-        padding: const EdgeInsets.all(16),
-        decoration: BoxDecoration(
-          color: AppColors.primary.withValues(alpha: 0.1),
-          borderRadius: BorderRadius.circular(16),
-          border: Border.all(color: AppColors.primary.withValues(alpha: 0.2)),
-        ),
-        child: Row(
-          children: [
-            Container(
-              padding:
-                  const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-              decoration: BoxDecoration(
-                color: AppColors.error,
-                borderRadius: BorderRadius.circular(20),
+        child: Container(
+          padding: const EdgeInsets.all(14),
+          decoration: BoxDecoration(
+            color: AppColors.surfaceContainerLow,
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(
+              color: pendingCount > 0
+                  ? AppColors.primary.withValues(alpha: 0.4)
+                  : Colors.white.withValues(alpha: 0.05),
+              width: pendingCount > 0 ? 1.5 : 1,
+            ),
+          ),
+          child: Row(
+            children: [
+              Container(
+                width: 40,
+                height: 40,
+                decoration: BoxDecoration(
+                  color: AppColors.primary.withValues(alpha: 0.12),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: const Icon(Icons.group, color: AppColors.primary),
               ),
-              child: Text(
-                '$count',
-                style: const TextStyle(
-                  color: Colors.white,
-                  fontWeight: FontWeight.w900,
-                  fontSize: 13,
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text('Friends',
+                        style: theme.textTheme.titleSmall
+                            ?.copyWith(fontWeight: FontWeight.w700)),
+                    Text(
+                      _subtitle(friendCount, pendingCount),
+                      style: theme.textTheme.labelSmall?.copyWith(
+                        color: pendingCount > 0
+                            ? AppColors.primary
+                            : AppColors.onSurfaceVariant,
+                        fontWeight: pendingCount > 0
+                            ? FontWeight.w700
+                            : FontWeight.w500,
+                      ),
+                    ),
+                  ],
                 ),
               ),
-            ),
-            const SizedBox(width: 14),
-            Expanded(
-              child: Text(
-                count == 1
-                    ? 'Pending Friend Request'
-                    : 'Pending Friend Requests',
-                style: theme.textTheme.titleSmall?.copyWith(
-                  color: AppColors.primary,
-                  fontWeight: FontWeight.w700,
+              if (pendingCount > 0) ...[
+                Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  decoration: BoxDecoration(
+                    color: AppColors.primary,
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: Text(
+                    pendingCount > 9 ? '9+' : '$pendingCount',
+                    style: const TextStyle(
+                      color: AppColors.onPrimary,
+                      fontWeight: FontWeight.w900,
+                      fontSize: 11,
+                    ),
+                  ),
                 ),
-              ),
-            ),
-            Icon(Icons.chevron_right, color: AppColors.primary),
-          ],
+                const SizedBox(width: 8),
+              ],
+              const Icon(Icons.chevron_right,
+                  color: AppColors.onSurfaceVariant),
+            ],
+          ),
         ),
       ),
     );
+  }
+
+  static String _subtitle(int friends, int pending) {
+    if (pending > 0) {
+      return '$friends friend${friends == 1 ? '' : 's'} • '
+          '$pending pending request${pending == 1 ? '' : 's'}';
+    }
+    if (friends == 0) return 'No friends yet • tap to add';
+    return '$friends friend${friends == 1 ? '' : 's'}';
   }
 }
