@@ -24,7 +24,7 @@ final dailyProgressProvider =
     StreamProvider<List<UserMissionProgress>>((ref) {
   final user = ref.watch(authStateProvider).valueOrNull;
   if (user == null) return Stream.value([]);
-  return ref.read(missionServiceProvider).watchDailyProgress(user.uid);
+  return ref.read(missionServiceProvider).watchDailyProgress(user.id);
 });
 
 /// Stream of weekly mission progress for current user.
@@ -32,14 +32,14 @@ final weeklyProgressProvider =
     StreamProvider<List<UserMissionProgress>>((ref) {
   final user = ref.watch(authStateProvider).valueOrNull;
   if (user == null) return Stream.value([]);
-  return ref.read(missionServiceProvider).watchWeeklyProgress(user.uid);
+  return ref.read(missionServiceProvider).watchWeeklyProgress(user.id);
 });
 
 /// Number of daily missions completed today.
 final completedDailyCountProvider = FutureProvider<int>((ref) async {
   final user = ref.watch(authStateProvider).valueOrNull;
   if (user == null) return 0;
-  return ref.read(missionServiceProvider).completedDailyCount(user.uid);
+  return ref.read(missionServiceProvider).completedDailyCount(user.id);
 });
 
 /// Helper: find progress for a specific mission from the progress list.

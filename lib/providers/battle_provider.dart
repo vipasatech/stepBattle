@@ -1,6 +1,7 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../models/battle_model.dart';
 import '../services/battle_service.dart';
+import '../utils/realtime_retry.dart';
 import 'auth_provider.dart';
 
 /// Battle service singleton.
@@ -8,11 +9,30 @@ final battleServiceProvider = Provider<BattleService>((ref) {
   return BattleService();
 });
 
+/// True when at least one of the realtime battle streams is currently
+/// in retry/backoff mode. Surfaced as a "Reconnecting…" pill on the
+/// Battles tab so users don't see raw exception text.
+final battlesReconnectingProvider = StateProvider<bool>((ref) => false);
+
 /// Stream of all battles for the current user (all statuses, sorted by time).
+///
+/// Wrapped with [retryingRealtimeStream] so transient Supabase realtime
+/// failures (channel timeouts, websocket drops) auto-retry with backoff
+/// instead of putting the StreamProvider into an error state. The error
+/// state is what was rendering "RealtimeSubscribeException(timedOut)"
+/// directly in the BattlesScreen empty state.
 final allBattlesProvider = StreamProvider<List<BattleModel>>((ref) {
   final user = ref.watch(authStateProvider).valueOrNull;
-  if (user == null) return Stream.value([]);
-  return ref.read(battleServiceProvider).watchAllBattles(user.uid);
+  if (user == null) return Stream.value(const <BattleModel>[]);
+
+  final service = ref.read(battleServiceProvider);
+  return retryingRealtimeStream<List<BattleModel>>(
+    factory: () => service.watchAllBattles(user.id),
+    debugLabel: 'allBattles',
+    onReconnectingChanged: (reconnecting) {
+      ref.read(battlesReconnectingProvider.notifier).state = reconnecting;
+    },
+  );
 });
 
 /// Active battles only.
@@ -48,17 +68,29 @@ final lastCompletedBattleProvider = Provider<BattleModel?>((ref) {
 /// Stream a single battle by ID (for battle detail / live view).
 final battleDetailProvider =
     StreamProvider.family<BattleModel?, String>((ref, battleId) {
-  return ref.read(battleServiceProvider).watchBattle(battleId);
+  final service = ref.read(battleServiceProvider);
+  return retryingRealtimeStream<BattleModel?>(
+    factory: () => service.watchBattle(battleId),
+    debugLabel: 'battleDetail:$battleId',
+    onReconnectingChanged: (reconnecting) {
+      ref.read(battlesReconnectingProvider.notifier).state = reconnecting;
+    },
+  );
 });
 
 /// Stream of pending battle invites for the current user (they haven't accepted yet).
 final incomingBattleInvitesProvider =
     StreamProvider<List<BattleModel>>((ref) {
   final user = ref.watch(authStateProvider).valueOrNull;
-  if (user == null) return Stream.value([]);
-  return ref
-      .read(battleServiceProvider)
-      .watchIncomingInvites(user.uid);
+  if (user == null) return Stream.value(const <BattleModel>[]);
+  final service = ref.read(battleServiceProvider);
+  return retryingRealtimeStream<List<BattleModel>>(
+    factory: () => service.watchIncomingInvites(user.id),
+    debugLabel: 'incomingInvites',
+    onReconnectingChanged: (reconnecting) {
+      ref.read(battlesReconnectingProvider.notifier).state = reconnecting;
+    },
+  );
 });
 
 /// Count of unread battle invites for badge display.

@@ -26,10 +26,12 @@ void main() {
     expect(find.text('StepBattle'), findsOneWidget);
   });
 
-  test('Design tokens match DESIGN.md spec values', () {
+  test('Design tokens match Violet Kinetic palette', () {
     expect(AppColors.background, const Color(0xFF0E0E10));
-    expect(AppColors.primary, const Color(0xFF84ADFF));
-    expect(AppColors.primaryBrand, const Color(0xFF1A73E8));
+    // Vivid violet — accents, icons, rings.
+    expect(AppColors.primary, const Color(0xFFA855F7));
+    // Deeper violet — solid CTAs, brand wordmarks.
+    expect(AppColors.primaryBrand, const Color(0xFF7C3AED));
     expect(AppColors.onSurface, const Color(0xFFFEFBFE));
     expect(AppColors.surfaceContainerHighest, const Color(0xFF252528));
     expect(AppColors.gold, const Color(0xFFFFD700));

@@ -79,6 +79,30 @@
         { "fieldPath": "userId", "order": "ASCENDING" },
         { "fieldPath": "hourStart", "order": "DESCENDING" }
       ]
+    },
+    {
+      "collectionGroup": "users",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "countryCode", "order": "ASCENDING" },
+        { "fieldPath": "totalXP", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "users",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "stateName", "order": "ASCENDING" },
+        { "fieldPath": "totalXP", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "users",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "districtName", "order": "ASCENDING" },
+        { "fieldPath": "totalXP", "order": "DESCENDING" }
+      ]
     }
   ],
   "fieldOverrides": []

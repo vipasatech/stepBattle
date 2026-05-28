@@ -88,6 +88,54 @@ class SourceStepHourlyLog {
   static String docIdFor({required String userId, required DateTime t}) =>
       '${userId}_${hourKeyFor(t)}';
 
+  /// Payload for `public.source_step_hourly` upsert.
+  Map<String, dynamic> toSupabaseRow() => {
+        'user_id': userId,
+        'hour_start': hourStart.toUtc().toIso8601String(),
+        'hour_key': hourKey,
+        'native_steps': nativeSteps,
+        'health_connect_steps': healthConnectSteps,
+        'google_fit_steps': googleFitSteps,
+        'aggregate': aggregateSteps,
+        'winning_source': winningSource,
+        'native_error': nativeError,
+        'health_connect_error': healthConnectError,
+        'google_fit_error': googleFitError,
+        'device_manufacturer': deviceManufacturer,
+        'device_model': deviceModel,
+        'android_version': androidVersion,
+        'app_version': appVersion,
+        'updated_at': updatedAt.toUtc().toIso8601String(),
+      };
+
+  /// Build from a Supabase `public.source_step_hourly` row.
+  factory SourceStepHourlyLog.fromSupabaseRow(Map<String, dynamic> d) {
+    DateTime parseTs(Object? raw) {
+      if (raw == null) return DateTime.now();
+      return DateTime.tryParse(raw.toString()) ?? DateTime.now();
+    }
+
+    return SourceStepHourlyLog(
+      userId: d['user_id'] as String? ?? '',
+      hourStart: parseTs(d['hour_start']),
+      hourKey: d['hour_key'] as String? ?? '',
+      nativeSteps: (d['native_steps'] as num?)?.toInt() ?? 0,
+      healthConnectSteps: (d['health_connect_steps'] as num?)?.toInt() ?? 0,
+      googleFitSteps: (d['google_fit_steps'] as num?)?.toInt(),
+      aggregateSteps: (d['aggregate'] as num?)?.toInt() ?? 0,
+      winningSource: d['winning_source'] as String? ?? 'none',
+      nativeError: d['native_error'] as String?,
+      healthConnectError: d['health_connect_error'] as String?,
+      googleFitError: d['google_fit_error'] as String?,
+      deviceManufacturer: d['device_manufacturer'] as String? ?? '',
+      deviceModel: d['device_model'] as String? ?? '',
+      androidVersion: d['android_version'] as String? ?? '',
+      appVersion: d['app_version'] as String? ?? '',
+      createdAt: parseTs(d['created_at']),
+      updatedAt: parseTs(d['updated_at']),
+    );
+  }
+
   Map<String, dynamic> toFirestore() => {
         'userId': userId,
         'hourStart': Timestamp.fromDate(hourStart),

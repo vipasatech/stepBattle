@@ -1,50 +1,71 @@
-import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
+
+import '../utils/app_logger.dart';
 
 /// Handles FCM push notifications: permissions, token, foreground/background.
 class NotificationService {
   final FirebaseMessaging _messaging;
-  final FirebaseFirestore _firestore;
+  final SupabaseClient _supabase;
 
   NotificationService({
     FirebaseMessaging? messaging,
-    FirebaseFirestore? firestore,
+    SupabaseClient? supabase,
   })  : _messaging = messaging ?? FirebaseMessaging.instance,
-        _firestore = firestore ?? FirebaseFirestore.instance;
+        _supabase = supabase ?? Supabase.instance.client;
 
   // ---------------------------------------------------------------------------
   // Permissions
   // ---------------------------------------------------------------------------
 
   Future<bool> requestPermission() async {
+    AppLogger.notification.i('requestPermission:start');
     final settings = await _messaging.requestPermission(
       alert: true,
       badge: true,
       sound: true,
       provisional: false,
     );
-    return settings.authorizationStatus == AuthorizationStatus.authorized;
+    final granted =
+        settings.authorizationStatus == AuthorizationStatus.authorized;
+    AppLogger.notification.i('requestPermission:done',
+        fields: {'status': settings.authorizationStatus.name, 'granted': granted});
+    return granted;
   }
 
   // ---------------------------------------------------------------------------
   // Token management
   // ---------------------------------------------------------------------------
 
-  /// Save the FCM token to the user's Firestore document.
+  /// Save the FCM token to the user's profile row.
   Future<void> saveToken(String userId) async {
-    final token = await _messaging.getToken();
-    if (token != null) {
-      await _firestore.collection('users').doc(userId).update({
-        'fcmToken': token,
+    try {
+      final token = await _messaging.getToken();
+      AppLogger.notification.i('saveToken', fields: {
+        'userId': userId,
+        'hasToken': token != null,
+        'tokenPrefix': token != null && token.length > 8
+            ? '${token.substring(0, 8)}...'
+            : null,
       });
-    }
+      if (token != null) {
+        await _supabase
+            .from('profiles')
+            .update({'fcm_token': token}).eq('id', userId);
+      }
 
-    // Listen for token refresh
-    _messaging.onTokenRefresh.listen((newToken) {
-      _firestore.collection('users').doc(userId).update({
-        'fcmToken': newToken,
+      // Listen for token refresh and persist the new one.
+      _messaging.onTokenRefresh.listen((newToken) {
+        AppLogger.notification.i('tokenRefresh', fields: {'userId': userId});
+        _supabase
+            .from('profiles')
+            .update({'fcm_token': newToken}).eq('id', userId);
       });
-    });
+    } catch (e, s) {
+      AppLogger.notification.e('saveToken:failed',
+          fields: {'userId': userId}, error: e, stack: s);
+      rethrow;
+    }
   }
 
   // ---------------------------------------------------------------------------

@@ -65,6 +65,10 @@ class _BattleGroundScreenState extends ConsumerState<BattleGroundScreen>
   // Lane Y-positions for up to 6 runners
   final List<double> _laneY = [];
 
+  // Guard so we only fire the battle-completion RPC once per screen lifetime
+  // when the endTime crosses while this view is open.
+  bool _completionRequested = false;
+
   @override
   void initState() {
     super.initState();
@@ -207,7 +211,7 @@ class _BattleGroundScreenState extends ConsumerState<BattleGroundScreen>
   @override
   Widget build(BuildContext context) {
     final battleAsync = ref.watch(battleDetailProvider(widget.battleId));
-    final uid = ref.watch(authStateProvider).valueOrNull?.uid ?? '';
+    final uid = ref.watch(authStateProvider).valueOrNull?.id ?? '';
 
     return Scaffold(
       backgroundColor: Colors.black,
@@ -227,6 +231,16 @@ class _BattleGroundScreenState extends ConsumerState<BattleGroundScreen>
               child: Text('Battle not found',
                   style: TextStyle(color: Colors.white)),
             );
+          }
+          // If endTime crossed while this screen is open, ask the service to
+          // finalize. Fire-and-forget — the live stream re-renders once the
+          // doc flips to completed.
+          if (!_completionRequested &&
+              battle.status == BattleStatus.active &&
+              !DateTime.now().isBefore(battle.endTime) &&
+              uid.isNotEmpty) {
+            _completionRequested = true;
+            ref.read(battleServiceProvider).completeExpiredBattles(uid);
           }
           return LayoutBuilder(
             builder: (ctx, c) {

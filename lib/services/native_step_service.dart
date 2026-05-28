@@ -131,6 +131,28 @@ class NativeStepService {
     return todaySteps;
   }
 
+  /// Recompute the persisted baseline so that today's value will match
+  /// [trustedTodaySteps] on the next read. Used by the aggregator when
+  /// it detects native has drifted far above HC (corrupt baseline /
+  /// silent reboot detection failure).
+  ///
+  /// The math: today = preRebootDelta + (latestCumulative − baseline).
+  /// We want today == trustedTodaySteps, so
+  /// baseline = latestCumulative − (trustedTodaySteps − preRebootDelta).
+  ///
+  /// We clear `preRebootDelta` to 0 to start fresh — the trusted source
+  /// already incorporates any reboot-era walking it could observe.
+  void repairBaselineFromTrustedSource({required int trustedTodaySteps}) {
+    if (!_hasReading) return; // No latest cumulative yet — nothing to anchor.
+    final c = _latestCumulative;
+    final today = DateFormat('yyyy-MM-dd').format(DateTime.now());
+    final newBaseline = c - trustedTodaySteps;
+    _box.put(_kBaseline, newBaseline < 0 ? 0 : newBaseline);
+    _box.put(_kLastDate, today);
+    _box.put(_kLastCumulative, c);
+    _box.put(_kPreRebootDelta, 0);
+  }
+
   /// Snapshot of internal state for the debug screen.
   Map<String, Object?> debugSnapshot() => {
         'available': _hasReading,

@@ -30,6 +30,28 @@ class LeaderboardEntry {
     );
   }
 
+  /// Build from a Supabase `leaderboard_snapshots` row (precomputed) OR
+  /// a `profiles` row (used for friends + geo-scoped boards, ranked
+  /// client-side by query order). Both shapes share the same field names
+  /// once snake_case is mapped — rank is optional since it isn't stored
+  /// on profiles.
+  factory LeaderboardEntry.fromSupabaseRow(
+    Map<String, dynamic> d, {
+    int? overrideRank,
+  }) {
+    return LeaderboardEntry(
+      // From profiles the PK is `id`; from leaderboard_snapshots it's `user_id`.
+      userId: (d['user_id'] ?? d['id']) as String? ?? '',
+      displayName: d['display_name'] as String? ?? '',
+      avatarURL: d['avatar_url'] as String?,
+      totalXP: (d['total_xp'] as num?)?.toInt() ?? 0,
+      rank: overrideRank ?? (d['rank'] as num?)?.toInt() ?? 0,
+      updatedAt:
+          DateTime.tryParse(d['updated_at']?.toString() ?? '') ??
+              DateTime.now(),
+    );
+  }
+
   Map<String, dynamic> toFirestore() => {
         'displayName': displayName,
         'avatarURL': avatarURL,

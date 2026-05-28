@@ -5,6 +5,7 @@ import '../../../providers/step_provider.dart';
 import '../../../providers/user_provider.dart';
 import '../../../widgets/glass_card.dart';
 import '../../../widgets/progress_bar.dart';
+import '../../../widgets/shimmer_loader.dart';
 
 /// The hero overview card on Home — shows level, today's steps, XP delta,
 /// and progress bar toward the next level.
@@ -15,7 +16,7 @@ class OverviewCard extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final theme = Theme.of(context);
     final profile = ref.watch(userProfileProvider).valueOrNull;
-    final todaySteps = ref.watch(todayStepsProvider);
+    final todayStepsAsync = ref.watch(todayStepsAsyncProvider);
     final level = ref.watch(userLevelProvider);
     final progress = ref.watch(levelProgressProvider);
     final xpToNext = ref.watch(xpToNextLevelProvider);
@@ -48,14 +49,31 @@ class OverviewCard extends ConsumerWidget {
 
           const SizedBox(height: 20),
 
-          // Step count — massive display per design system
+          // Step count — massive display per design system. Shimmer
+          // skeleton while neither pedometer nor Supabase has produced a
+          // value yet (avoids the misleading "0" cold-start flash).
           Center(
-            child: Text(
-              _formatNumber(todaySteps),
-              style: theme.textTheme.displayLarge?.copyWith(
-                fontSize: 56,
-                color: AppColors.onSurface,
-                height: 1.0,
+            child: todayStepsAsync.when(
+              data: (steps) => Text(
+                _formatNumber(steps),
+                style: theme.textTheme.displayLarge?.copyWith(
+                  fontSize: 56,
+                  color: AppColors.onSurface,
+                  height: 1.0,
+                ),
+              ),
+              loading: () => const ShimmerLoader(
+                width: 200,
+                height: 56,
+                borderRadius: 12,
+              ),
+              error: (_, __) => Text(
+                '—',
+                style: theme.textTheme.displayLarge?.copyWith(
+                  fontSize: 56,
+                  color: AppColors.onSurfaceVariant,
+                  height: 1.0,
+                ),
               ),
             ),
           ),

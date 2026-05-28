@@ -10,6 +10,7 @@ import '../../providers/user_provider.dart';
 import '../../services/step_source_aggregator.dart';
 import '../../sheets/add_friends_sheet.dart';
 import '../../sheets/set_goal_sheet.dart';
+import '../../sheets/set_home_sheet.dart';
 import '../../sheets/streak_history_sheet.dart';
 import 'widgets/user_identity_section.dart';
 import 'widgets/this_week_stats.dart';
@@ -156,6 +157,11 @@ class ProfileScreen extends ConsumerWidget {
                 AccountDetails(user: profile),
 
                 const SizedBox(height: 20),
+
+                // Home district — view + change. Surfaces unset state too.
+                _HomeDistrictTile(),
+
+                const SizedBox(height: 8),
 
                 // Step Sources diagnostic — for users on OEMs where Health
                 // Connect isn't getting fed (Realme/Motorola) so they can
@@ -329,6 +335,107 @@ class _ProfileLinkTile extends StatelessWidget {
         ),
       ),
     );
+  }
+}
+
+// =============================================================================
+// Home district tile — shows current home (or unset state with Set CTA).
+// Tap opens [SetHomeSheet] for both first-time setup and changes.
+// =============================================================================
+class _HomeDistrictTile extends ConsumerWidget {
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final theme = Theme.of(context);
+    final user = ref.watch(userProfileProvider).valueOrNull;
+    if (user == null) return const SizedBox();
+    final hasHome = user.hasHome;
+
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(16),
+        onTap: () => _open(context),
+        child: Container(
+          padding: const EdgeInsets.all(14),
+          decoration: BoxDecoration(
+            color: AppColors.surfaceContainerLow,
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(
+              color: hasHome
+                  ? Colors.white.withValues(alpha: 0.05)
+                  : AppColors.amber.withValues(alpha: 0.4),
+              width: hasHome ? 1 : 1.5,
+            ),
+          ),
+          child: Row(
+            children: [
+              Container(
+                width: 40,
+                height: 40,
+                decoration: BoxDecoration(
+                  color: (hasHome ? AppColors.primary : AppColors.amber)
+                      .withValues(alpha: 0.12),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: Icon(
+                  hasHome ? Icons.home : Icons.home_outlined,
+                  color: hasHome ? AppColors.primary : AppColors.amber,
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      hasHome ? 'Home district' : 'Set home district',
+                      style: theme.textTheme.titleSmall
+                          ?.copyWith(fontWeight: FontWeight.w700),
+                    ),
+                    Text(
+                      hasHome
+                          ? _summary(user)
+                          : 'Unlock local leaderboards + the cinematic map',
+                      style: theme.textTheme.labelSmall?.copyWith(
+                        color: hasHome
+                            ? AppColors.onSurfaceVariant
+                            : AppColors.amber,
+                        fontWeight:
+                            hasHome ? FontWeight.w500 : FontWeight.w700,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const Icon(Icons.chevron_right,
+                  color: AppColors.onSurfaceVariant),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  void _open(BuildContext context) {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      useRootNavigator: true,
+      backgroundColor: Colors.transparent,
+      builder: (_) => const SetHomeSheet(),
+    );
+  }
+
+  String _summary(user) {
+    final district = user.districtName as String?;
+    final state = user.stateName as String?;
+    final country = user.countryName as String?;
+    final parts = <String>[
+      if (district != null && district.isNotEmpty) district,
+      if (state != null && state.isNotEmpty) state,
+      if (country != null && country.isNotEmpty) country,
+    ];
+    return parts.join(' · ');
   }
 }
 

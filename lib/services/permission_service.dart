@@ -1,5 +1,6 @@
 import 'package:health/health.dart';
 import 'package:permission_handler/permission_handler.dart';
+import '../utils/app_logger.dart';
 
 /// Central permission manager.
 /// - Health Connect (steps, calories) — via `health` package
@@ -19,23 +20,35 @@ class PermissionService {
     final notifications = await Permission.notification.isGranted;
     final activity = await Permission.activityRecognition.isGranted;
 
-    return PermissionSummary(
+    final summary = PermissionSummary(
       health: health,
       notifications: notifications,
       activityRecognition: activity,
     );
+    AppLogger.permission.i('checkAll', fields: {
+      'health': health,
+      'notifications': notifications,
+      'activityRecognition': activity,
+      'allGranted': summary.allGranted,
+    });
+    return summary;
   }
 
   /// Request all permissions in sequence. Shows native OS dialogs.
   Future<PermissionSummary> requestAll() async {
+    AppLogger.permission.i('requestAll:start');
     // 1. Activity recognition (Android 10+) — required for steps
     if (!await Permission.activityRecognition.isGranted) {
-      await Permission.activityRecognition.request();
+      final status = await Permission.activityRecognition.request();
+      AppLogger.permission
+          .i('activityRecognition:request', fields: {'status': status.name});
     }
 
     // 2. Notifications (Android 13+)
     if (!await Permission.notification.isGranted) {
-      await Permission.notification.request();
+      final status = await Permission.notification.request();
+      AppLogger.permission
+          .i('notification:request', fields: {'status': status.name});
     }
 
     // 3. Health Connect — triggers in-app permission dialog
@@ -61,8 +74,11 @@ class PermissionService {
         _healthTypes,
         permissions: permissions,
       );
+      AppLogger.permission
+          .i('health:request', fields: {'granted': granted});
       return granted;
-    } catch (_) {
+    } catch (e, s) {
+      AppLogger.permission.e('health:request:failed', error: e, stack: s);
       return false;
     }
   }

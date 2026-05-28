@@ -1,9 +1,9 @@
-import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../config/colors.dart';
 import '../models/leaderboard_entry_model.dart';
+import '../providers/auth_provider.dart';
 import '../providers/friend_provider.dart';
 import '../widgets/avatar_circle.dart';
 import '../widgets/bottom_sheet_handle.dart';
@@ -37,11 +37,13 @@ class _PublicProfileSheetState extends ConsumerState<PublicProfileSheet> {
   Future<void> _addFriend() async {
     setState(() => _addingFriend = true);
     try {
-      final me = FirebaseAuth.instance.currentUser!;
+      final me = ref.read(currentUserProvider).valueOrNull;
+      if (me == null) return;
       await ref.read(friendServiceProvider).sendRequest(
-            fromUserId: me.uid,
+            fromUserId: me.userId,
             toUserId: widget.entry.userId,
-            fromDisplayName: me.displayName ?? 'Someone',
+            fromDisplayName:
+                me.displayName.isEmpty ? 'Someone' : me.displayName,
           );
       setState(() => _isFriend = true);
     } catch (_) {}

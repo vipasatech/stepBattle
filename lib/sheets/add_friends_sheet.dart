@@ -1,8 +1,9 @@
-import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 import '../config/colors.dart';
 import '../models/user_model.dart';
+import '../providers/auth_provider.dart';
 import '../providers/friend_provider.dart';
 import '../widgets/avatar_circle.dart';
 import '../widgets/bottom_sheet_handle.dart';
@@ -95,13 +96,14 @@ class _AddFriendsSheetState extends ConsumerState<AddFriendsSheet> {
   }
 
   Future<void> _sendRequest(UserModel target) async {
-    final me = FirebaseAuth.instance.currentUser;
+    final me = ref.read(currentUserProvider).valueOrNull;
     if (me == null) return;
     try {
       await ref.read(friendServiceProvider).sendRequest(
-            fromUserId: me.uid,
+            fromUserId: me.userId,
             toUserId: target.userId,
-            fromDisplayName: me.displayName ?? 'Someone',
+            fromDisplayName:
+                me.displayName.isEmpty ? 'Someone' : me.displayName,
           );
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -118,7 +120,7 @@ class _AddFriendsSheetState extends ConsumerState<AddFriendsSheet> {
   }
 
   Future<void> _removeFriend(UserModel friend) async {
-    final me = FirebaseAuth.instance.currentUser;
+    final me = Supabase.instance.client.auth.currentUser;
     if (me == null) return;
 
     final confirmed = await showDialog<bool>(
@@ -145,7 +147,7 @@ class _AddFriendsSheetState extends ConsumerState<AddFriendsSheet> {
 
     try {
       await ref.read(friendServiceProvider).removeFriend(
-            userId: me.uid,
+            userId: me.id,
             friendId: friend.userId,
           );
       ref.invalidate(friendsListProvider);
@@ -168,7 +170,7 @@ class _AddFriendsSheetState extends ConsumerState<AddFriendsSheet> {
     final theme = Theme.of(context);
     final friends = ref.watch(friendsListProvider);
     final incomingCount = ref.watch(incomingRequestCountProvider);
-    final currentUid = FirebaseAuth.instance.currentUser?.uid ?? '';
+    final currentUid = Supabase.instance.client.auth.currentUser?.id ?? '';
 
     return DraggableScrollableSheet(
       initialChildSize: 0.85,
@@ -254,6 +256,12 @@ class _AddFriendsSheetState extends ConsumerState<AddFriendsSheet> {
                     onSearch: _search,
                     onSendRequest: _sendRequest,
                     scrollController: scrollController,
+                    // Picker-mode params: surface the same "+ Select"
+                    // selection chip the Friends tab uses, alongside the
+                    // friend-request action.
+                    allowSelect: widget._allowSelect,
+                    selectedIds: _selectedIds,
+                    onToggleSelect: _toggleSelect,
                   ),
                 _ => _RequestsTab(
                     scrollController: scrollController,
@@ -263,8 +271,10 @@ class _AddFriendsSheetState extends ConsumerState<AddFriendsSheet> {
               },
             ),
 
-            // Bottom confirm bar (picker mode on Friends tab only)
-            if (widget._allowSelect && _tabIndex == 0)
+            // Bottom confirm bar — picker mode, on Friends OR Search tab
+            // (the Requests tab still hides it since incoming requests are
+            // resolved with their own per-row Accept/Reject actions).
+            if (widget._allowSelect && _tabIndex != 2)
               Container(
                 padding: const EdgeInsets.fromLTRB(24, 12, 24, 32),
                 decoration: BoxDecoration(
@@ -472,6 +482,15 @@ class _SearchTab extends StatelessWidget {
   final Future<void> Function(UserModel) onSendRequest;
   final ScrollController scrollController;
 
+  /// True when the sheet is in picker mode (e.g., opened from "Select
+  /// Opponent" in the battle setup). Adds a primary "+ Select" chip to
+  /// each row, alongside the friend-request button — so the user can
+  /// pick someone they're not yet friends with AND optionally send them
+  /// a friend request from the same row.
+  final bool allowSelect;
+  final Set<String> selectedIds;
+  final void Function(UserModel) onToggleSelect;
+
   const _SearchTab({
     required this.searchController,
     required this.results,
@@ -480,6 +499,9 @@ class _SearchTab extends StatelessWidget {
     required this.onSearch,
     required this.onSendRequest,
     required this.scrollController,
+    this.allowSelect = false,
+    this.selectedIds = const {},
+    required this.onToggleSelect,
   });
 
   @override
@@ -524,23 +546,213 @@ class _SearchTab extends StatelessWidget {
                       itemBuilder: (_, i) {
                         final u = results[i];
                         if (u.userId == currentUid) return const SizedBox();
+                        // Picker mode: small friend-request icon + big
+                        // "Select" chip. Manage mode: just the full
+                        // three-state friend-request button.
+                        final trailing = allowSelect
+                            ? _PickerSearchTrailing(
+                                user: u,
+                                isSelected:
+                                    selectedIds.contains(u.userId),
+                                onToggleSelect: () => onToggleSelect(u),
+                                onSendRequest: onSendRequest,
+                              )
+                            : _RequestButton(
+                                target: u,
+                                onSend: onSendRequest,
+                              );
                         return _UserRow(
                           user: u,
                           showSelect: false,
-                          trailing: FilledButton.icon(
-                            icon: const Icon(Icons.person_add, size: 16),
-                            label: const Text('Request'),
-                            onPressed: () => onSendRequest(u),
-                            style: FilledButton.styleFrom(
-                              padding: const EdgeInsets.symmetric(
-                                  horizontal: 12, vertical: 8),
-                            ),
-                          ),
+                          trailing: trailing,
                         );
                       },
                     ),
         ),
       ],
+    );
+  }
+}
+
+// =============================================================================
+// Dual-action search-row trailing (picker mode only)
+//
+// Renders a primary "+ Select" / "✓ Selected" chip and a small icon-sized
+// friend-request button to its left. Both actions are independent — selecting
+// for a battle doesn't auto-send a friend request, and vice versa.
+// =============================================================================
+class _PickerSearchTrailing extends ConsumerStatefulWidget {
+  final UserModel user;
+  final bool isSelected;
+  final VoidCallback onToggleSelect;
+  final Future<void> Function(UserModel) onSendRequest;
+
+  const _PickerSearchTrailing({
+    required this.user,
+    required this.isSelected,
+    required this.onToggleSelect,
+    required this.onSendRequest,
+  });
+
+  @override
+  ConsumerState<_PickerSearchTrailing> createState() =>
+      _PickerSearchTrailingState();
+}
+
+class _PickerSearchTrailingState
+    extends ConsumerState<_PickerSearchTrailing> {
+  bool _sendingFriend = false;
+
+  Future<void> _sendFriendRequest() async {
+    setState(() => _sendingFriend = true);
+    try {
+      await widget.onSendRequest(widget.user);
+    } finally {
+      if (mounted) setState(() => _sendingFriend = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final friendIds = ref.watch(acceptedFriendIdsProvider);
+    final outgoing =
+        ref.watch(outgoingRequestsProvider).valueOrNull ?? const [];
+    final isFriend = friendIds.contains(widget.user.userId);
+    final hasPending =
+        outgoing.any((r) => r.toUserId == widget.user.userId);
+
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        // Compact friend-request indicator. Three derived states match the
+        // bigger _RequestButton — kept icon-only here to leave room for
+        // the primary Select chip.
+        if (isFriend)
+          _SmallChip(
+            icon: Icons.check,
+            tooltip: 'Already friends',
+            background: AppColors.success.withValues(alpha: 0.15),
+            foreground: AppColors.success,
+            onTap: null,
+          )
+        else if (hasPending)
+          _SmallChip(
+            icon: Icons.schedule,
+            tooltip: 'Request sent',
+            background: AppColors.surfaceContainerHigh,
+            foreground: AppColors.onSurfaceVariant,
+            onTap: null,
+          )
+        else if (_sendingFriend)
+          const SizedBox(
+            width: 36,
+            height: 36,
+            child: Center(
+              child: SizedBox(
+                width: 16,
+                height: 16,
+                child: CircularProgressIndicator(
+                    strokeWidth: 2, color: AppColors.primary),
+              ),
+            ),
+          )
+        else
+          _SmallChip(
+            icon: Icons.person_add,
+            tooltip: 'Send friend request',
+            background: AppColors.surfaceContainerHigh,
+            foreground: AppColors.primary,
+            onTap: _sendFriendRequest,
+          ),
+        const SizedBox(width: 8),
+
+        // Primary "Select" pill — same look as the Friends tab's chip
+        // so users can tell this is the action that confirms picking
+        // this person as the opponent / battle invitee.
+        GestureDetector(
+          onTap: widget.onToggleSelect,
+          child: widget.isSelected
+              ? Container(
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: 14, vertical: 8),
+                  decoration: BoxDecoration(
+                    color: AppColors.success.withValues(alpha: 0.15),
+                    borderRadius: BorderRadius.circular(20),
+                    border: Border.all(
+                        color: AppColors.success.withValues(alpha: 0.4)),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(Icons.check_circle,
+                          size: 16, color: AppColors.success),
+                      const SizedBox(width: 4),
+                      Text('Selected',
+                          style: theme.textTheme.labelSmall?.copyWith(
+                            color: AppColors.success,
+                            fontWeight: FontWeight.w700,
+                          )),
+                    ],
+                  ),
+                )
+              : Container(
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: 14, vertical: 8),
+                  decoration: BoxDecoration(
+                    color: AppColors.primaryBrand,
+                    borderRadius: BorderRadius.circular(20),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Icon(Icons.add, size: 16, color: Colors.white),
+                      const SizedBox(width: 4),
+                      Text('Select',
+                          style: theme.textTheme.labelSmall?.copyWith(
+                            color: Colors.white,
+                            fontWeight: FontWeight.w700,
+                          )),
+                    ],
+                  ),
+                ),
+        ),
+      ],
+    );
+  }
+}
+
+class _SmallChip extends StatelessWidget {
+  final IconData icon;
+  final String tooltip;
+  final Color background;
+  final Color foreground;
+  final VoidCallback? onTap;
+
+  const _SmallChip({
+    required this.icon,
+    required this.tooltip,
+    required this.background,
+    required this.foreground,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Tooltip(
+      message: tooltip,
+      child: GestureDetector(
+        onTap: onTap,
+        child: Container(
+          width: 36,
+          height: 36,
+          decoration: BoxDecoration(
+            color: background,
+            borderRadius: BorderRadius.circular(12),
+          ),
+          child: Icon(icon, size: 18, color: foreground),
+        ),
+      ),
     );
   }
 }
@@ -925,6 +1137,127 @@ class _UserRow extends StatelessWidget {
                     ),
             ),
         ],
+      ),
+    );
+  }
+}
+
+// =============================================================================
+// Three-state request button (used in the Search tab)
+//
+//   Friends   — already accepted; disabled, success-green
+//   Sent      — outgoing pending request; disabled
+//   Accept    — they sent us; one-tap accept from search
+//   Request   — default; tap to send
+//
+// State is computed from the user's own friends array and the live
+// incoming/outgoing relationship streams, so the row updates instantly when
+// the recipient accepts.
+// =============================================================================
+class _RequestButton extends ConsumerStatefulWidget {
+  final UserModel target;
+  final Future<void> Function(UserModel) onSend;
+
+  const _RequestButton({required this.target, required this.onSend});
+
+  @override
+  ConsumerState<_RequestButton> createState() => _RequestButtonState();
+}
+
+class _RequestButtonState extends ConsumerState<_RequestButton> {
+  bool _processing = false;
+
+  Future<void> _send() async {
+    setState(() => _processing = true);
+    try {
+      await widget.onSend(widget.target);
+    } finally {
+      if (mounted) setState(() => _processing = false);
+    }
+  }
+
+  Future<void> _acceptInbound(String relationshipId) async {
+    setState(() => _processing = true);
+    try {
+      await ref.read(friendServiceProvider).acceptRequest(relationshipId);
+    } catch (_) {}
+    if (mounted) setState(() => _processing = false);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final friendIds = ref.watch(acceptedFriendIdsProvider);
+    final outgoing = ref.watch(outgoingRequestsProvider).valueOrNull ?? const [];
+    final incoming = ref.watch(incomingRequestsProvider).valueOrNull ?? const [];
+
+    if (_processing) {
+      return const SizedBox(
+        width: 36,
+        height: 36,
+        child: Center(
+          child: SizedBox(
+            width: 18,
+            height: 18,
+            child: CircularProgressIndicator(
+                strokeWidth: 2, color: AppColors.primary),
+          ),
+        ),
+      );
+    }
+
+    final isFriend = friendIds.contains(widget.target.userId);
+    if (isFriend) {
+      return FilledButton.icon(
+        icon: const Icon(Icons.check, size: 16),
+        label: const Text('Friends'),
+        onPressed: null,
+        style: FilledButton.styleFrom(
+          backgroundColor: AppColors.success.withValues(alpha: 0.18),
+          disabledBackgroundColor: AppColors.success.withValues(alpha: 0.18),
+          foregroundColor: AppColors.success,
+          disabledForegroundColor: AppColors.success,
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        ),
+      );
+    }
+
+    final inboundRel = incoming
+        .where((r) => r.fromUserId == widget.target.userId)
+        .firstOrNull;
+    if (inboundRel != null) {
+      return FilledButton.icon(
+        icon: const Icon(Icons.check, size: 16),
+        label: const Text('Accept'),
+        onPressed: () => _acceptInbound(inboundRel.relationshipId),
+        style: FilledButton.styleFrom(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        ),
+      );
+    }
+
+    final hasOutgoing =
+        outgoing.any((r) => r.toUserId == widget.target.userId);
+    if (hasOutgoing) {
+      return FilledButton.icon(
+        icon: const Icon(Icons.schedule, size: 16),
+        label: const Text('Sent'),
+        onPressed: null,
+        style: FilledButton.styleFrom(
+          backgroundColor: AppColors.surfaceContainerHigh,
+          disabledBackgroundColor: AppColors.surfaceContainerHigh,
+          foregroundColor: AppColors.onSurfaceVariant,
+          disabledForegroundColor: AppColors.onSurfaceVariant,
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        ),
+      );
+    }
+
+    return FilledButton.icon(
+      icon: const Icon(Icons.person_add, size: 16),
+      label: const Text('Request'),
+      onPressed: _send,
+      style: FilledButton.styleFrom(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
       ),
     );
   }

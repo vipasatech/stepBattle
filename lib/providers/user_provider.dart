@@ -9,13 +9,12 @@ final xpServiceProvider = Provider<XPService>((ref) {
   return XPService();
 });
 
-/// The current user's Firestore profile (re-exported from auth for convenience).
-/// Use this in UI to get level, XP, streak, rank, goal, etc.
+/// The current user's profile row from Supabase (re-exported from auth for
+/// convenience). Use this in UI to get level, XP, streak, goal, etc.
 final userProfileProvider = StreamProvider<UserModel?>((ref) {
-  final authState = ref.watch(authStateProvider);
-  final user = authState.valueOrNull;
+  final user = ref.watch(authStateProvider).valueOrNull;
   if (user == null) return Stream.value(null);
-  return ref.read(authServiceProvider).watchUser(user.uid);
+  return ref.read(authServiceProvider).watchProfile(user.id);
 });
 
 /// Current level derived from user profile.

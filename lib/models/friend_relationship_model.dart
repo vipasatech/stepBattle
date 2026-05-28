@@ -29,6 +29,19 @@ class FriendRelationship {
     );
   }
 
+  /// Build from a Supabase `public.friend_relationships` row.
+  factory FriendRelationship.fromSupabaseRow(Map<String, dynamic> d) {
+    return FriendRelationship(
+      relationshipId: d['id'] as String? ?? '',
+      fromUserId: d['from_user_id'] as String? ?? '',
+      toUserId: d['to_user_id'] as String? ?? '',
+      status: _parseStatus(d['status'] as String? ?? 'pending'),
+      createdAt:
+          DateTime.tryParse(d['created_at']?.toString() ?? '') ??
+              DateTime.now(),
+    );
+  }
+
   Map<String, dynamic> toFirestore() => {
         'fromUserId': fromUserId,
         'toUserId': toUserId,

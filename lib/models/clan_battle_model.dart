@@ -64,6 +64,47 @@ class ClanBattleModel {
     return '${r.inMinutes}m left';
   }
 
+  /// Build from a Supabase `clan_battles` row joined with its
+  /// `clan_battle_teams` rows (PostgREST nested select).
+  ///
+  /// Expected select shape:
+  ///   `select('*, clan_battle_teams(*)')`
+  factory ClanBattleModel.fromSupabaseRow(Map<String, dynamic> d) {
+    DateTime parseTs(Object? raw) =>
+        DateTime.tryParse(raw?.toString() ?? '') ?? DateTime.now();
+
+    final teams =
+        (d['clan_battle_teams'] as List<dynamic>? ?? const []).cast<Map>();
+    ClanBattleTeam teamFor(String label) {
+      final t = teams.firstWhere(
+        (t) => (t as Map<String, dynamic>)['team_label'] == label,
+        orElse: () => <String, dynamic>{},
+      );
+      if (t.isEmpty) {
+        return const ClanBattleTeam(clanId: '', clanName: '');
+      }
+      final m = t as Map<String, dynamic>;
+      return ClanBattleTeam(
+        clanId: m['clan_id'] as String? ?? '',
+        clanName: m['clan_name'] as String? ?? '',
+        totalSteps: (m['total_steps'] as num?)?.toInt() ?? 0,
+      );
+    }
+
+    return ClanBattleModel(
+      clanBattleId: d['id'] as String? ?? '',
+      status: _parseStatus(d['status'] as String? ?? 'pending'),
+      clanA: teamFor('A'),
+      clanB: teamFor('B'),
+      startTime: parseTs(d['start_time']),
+      endTime: parseTs(d['end_time']),
+      durationDays: (d['duration_days'] as num?)?.toInt() ?? 3,
+      battleType: d['battle_type'] as String? ?? 'steps',
+      xpPerMember: (d['xp_per_member'] as num?)?.toInt() ?? 300,
+      winnerClanId: d['winner_clan_id'] as String?,
+    );
+  }
+
   factory ClanBattleModel.fromFirestore(
       DocumentSnapshot<Map<String, dynamic>> doc) {
     final d = doc.data()!;

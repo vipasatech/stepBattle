@@ -25,6 +25,22 @@ class MissionModel {
     required this.difficulty,
   });
 
+  /// Build a MissionModel from a Supabase `public.missions` row. Note that
+  /// the catalog table uses the missionId as the primary key (`id` column),
+  /// not a generated uuid — matches the Firestore docId convention.
+  factory MissionModel.fromSupabaseRow(Map<String, dynamic> d) {
+    return MissionModel(
+      missionId: d['id'] as String? ?? '',
+      type: d['type'] == 'weekly' ? MissionType.weekly : MissionType.daily,
+      title: d['title'] as String? ?? '',
+      description: d['description'] as String? ?? '',
+      category: _parseCategory(d['category'] as String? ?? 'steps'),
+      targetValue: (d['target_value'] as num?)?.toInt() ?? 0,
+      xpReward: (d['xp_reward'] as num?)?.toInt() ?? 0,
+      difficulty: d['difficulty'] as String? ?? 'easy',
+    );
+  }
+
   factory MissionModel.fromFirestore(
       DocumentSnapshot<Map<String, dynamic>> doc) {
     final d = doc.data()!;

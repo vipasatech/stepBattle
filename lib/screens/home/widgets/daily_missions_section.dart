@@ -6,6 +6,7 @@ import '../../../models/mission_model.dart';
 import '../../../providers/mission_provider.dart';
 import '../../../sheets/mission_detail_sheet.dart';
 import '../../../widgets/progress_bar.dart';
+import '../../../widgets/shimmer_loader.dart';
 
 /// Daily missions preview on Home — 3 mission rows with progress bars.
 /// Wired to real mission providers.
@@ -16,7 +17,12 @@ class DailyMissionsSection extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final theme = Theme.of(context);
     final missions = ref.watch(dailyMissionsProvider);
-    final progressList = ref.watch(dailyProgressProvider).valueOrNull ?? [];
+    final progressAsync = ref.watch(dailyProgressProvider);
+    final progressList = progressAsync.valueOrNull ?? const [];
+    // Show shimmer when EITHER the mission catalog OR the user's progress
+    // is still loading. Without this the rows render at "0 / 5000" even
+    // when we're really just waiting on the progress stream's first emit.
+    final isLoadingPrimary = missions.isLoading || progressAsync.isLoading;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -36,12 +42,22 @@ class DailyMissionsSection extends ConsumerWidget {
         ),
         const SizedBox(height: 12),
 
-        missions.when(
-          loading: () => const SizedBox(
-            height: 60,
-            child: Center(
-                child:
-                    CircularProgressIndicator(color: AppColors.primary)),
+        if (isLoadingPrimary)
+          Column(
+            children: const [
+              ShimmerCard(),
+              SizedBox(height: 8),
+              ShimmerCard(),
+            ],
+          )
+        else
+          missions.when(
+          loading: () => Column(
+            children: const [
+              ShimmerCard(),
+              SizedBox(height: 8),
+              ShimmerCard(),
+            ],
           ),
           error: (_, __) => const Text('Could not load missions'),
           data: (missionList) {

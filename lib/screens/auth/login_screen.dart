@@ -3,7 +3,10 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../config/colors.dart';
 import '../../providers/auth_provider.dart';
+import '../../utils/network_errors.dart';
+import '../../widgets/app_logo.dart';
 import '../../widgets/glass_card.dart';
+import '../../widgets/no_network_sheet.dart';
 
 class LoginScreen extends ConsumerStatefulWidget {
   const LoginScreen({super.key});
@@ -29,6 +32,20 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
     super.dispose();
   }
 
+  /// Show the no-network sheet on connection/DNS failures. Returns true if
+  /// the user tapped "Try again". Caller decides whether to retry — we
+  /// don't loop here so the user can also tap Dismiss and check network
+  /// settings before retrying.
+  Future<bool> _handleNetworkError(Object error, String action) async {
+    if (!isNetworkError(error)) return false;
+    if (!mounted) return false;
+    final retry = await showNoNetworkSheet(
+      context,
+      subtitle: "Couldn't $action. Connect to Wi-Fi or mobile data and try again.",
+    );
+    return retry == true;
+  }
+
   Future<void> _signInWithGoogle() async {
     setState(() {
       _loading = true;
@@ -37,7 +54,13 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
     try {
       await ref.read(authServiceProvider).signInWithGoogle();
     } catch (e) {
-      setState(() => _error = 'Google sign-in failed. Please try again.');
+      if (await _handleNetworkError(e, 'sign in with Google')) {
+        if (mounted) setState(() => _loading = false);
+        return _signInWithGoogle();
+      }
+      if (mounted) {
+        setState(() => _error = 'Google sign-in failed. Please try again.');
+      }
     } finally {
       if (mounted) setState(() => _loading = false);
     }
@@ -51,7 +74,13 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
     try {
       await ref.read(authServiceProvider).signInWithApple();
     } catch (e) {
-      setState(() => _error = 'Apple sign-in failed. Please try again.');
+      if (await _handleNetworkError(e, 'sign in with Apple')) {
+        if (mounted) setState(() => _loading = false);
+        return _signInWithApple();
+      }
+      if (mounted) {
+        setState(() => _error = 'Apple sign-in failed. Please try again.');
+      }
     } finally {
       if (mounted) setState(() => _loading = false);
     }
@@ -76,9 +105,16 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
         await authService.signInWithEmail(email, password);
       }
     } catch (e) {
-      setState(() => _error = _isSignUp
-          ? 'Sign up failed. Please try again.'
-          : 'Invalid email or password.');
+      if (await _handleNetworkError(
+          e, _isSignUp ? 'create your account' : 'sign in')) {
+        if (mounted) setState(() => _loading = false);
+        return _signInWithEmail();
+      }
+      if (mounted) {
+        setState(() => _error = _isSignUp
+            ? 'Sign up failed. Please try again.'
+            : 'Invalid email or password.');
+      }
     } finally {
       if (mounted) setState(() => _loading = false);
     }
@@ -97,7 +133,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
               const SizedBox(height: 60),
 
               // Logo + branding
-              Icon(Icons.bolt, color: AppColors.primaryBrand, size: 56),
+              const AppLogo(size: 96),
               const SizedBox(height: 16),
               Text(
                 'StepBattle',

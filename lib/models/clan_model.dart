@@ -34,6 +34,20 @@ class ClanMember {
         stepsToday: m['stepsToday'] as int? ?? 0,
       );
 
+  /// Build from a `clan_members` row with a joined `profiles(...)` embed.
+  /// PostgREST nested-select shape used by `ClanService.watchMembers`:
+  ///   `select('user_id, role, steps_today, profiles!inner(display_name, avatar_url)')`
+  factory ClanMember.fromSupabaseRow(Map<String, dynamic> d) {
+    final profile = d['profiles'] as Map<String, dynamic>?;
+    return ClanMember(
+      userId: d['user_id'] as String? ?? '',
+      displayName: profile?['display_name'] as String? ?? '',
+      avatarURL: profile?['avatar_url'] as String?,
+      role: d['role'] as String? ?? 'soldier',
+      stepsToday: (d['steps_today'] as num?)?.toInt() ?? 0,
+    );
+  }
+
   Map<String, dynamic> toMap() => {
         'userId': userId,
         'displayName': displayName,
@@ -100,6 +114,53 @@ class ClanModel {
     if (adminIds.contains(userId)) return 'admin';
     if (memberIds.contains(userId)) return 'soldier';
     return 'none';
+  }
+
+  /// Build from a Supabase `clans` row joined with `clan_members` (for
+  /// memberIds + adminIds) and `clan_invites` (for pendingInviteIds).
+  ///
+  /// Expected PostgREST select:
+  ///   `select('*, clan_members(user_id, role), clan_invites(user_id)')`
+  ///
+  /// Both arrays are derived client-side from the embedded rows — the
+  /// Postgres source of truth is normalized, the model is denormalized to
+  /// match the existing UI's contract.
+  factory ClanModel.fromSupabaseRow(Map<String, dynamic> d) {
+    DateTime parseTs(Object? raw) =>
+        DateTime.tryParse(raw?.toString() ?? '') ?? DateTime.now();
+
+    final members =
+        (d['clan_members'] as List<dynamic>? ?? const []).cast<Map>();
+    final invites =
+        (d['clan_invites'] as List<dynamic>? ?? const []).cast<Map>();
+
+    final memberIds = members
+        .map((m) => (m as Map<String, dynamic>)['user_id'] as String? ?? '')
+        .where((id) => id.isNotEmpty)
+        .toList();
+    final adminIds = members
+        .where((m) => (m as Map<String, dynamic>)['role'] == 'admin')
+        .map((m) => (m as Map<String, dynamic>)['user_id'] as String? ?? '')
+        .where((id) => id.isNotEmpty)
+        .toList();
+    final pendingInviteIds = invites
+        .map((i) => (i as Map<String, dynamic>)['user_id'] as String? ?? '')
+        .where((id) => id.isNotEmpty)
+        .toList();
+
+    return ClanModel(
+      clanId: d['id'] as String? ?? '',
+      name: d['name'] as String? ?? '',
+      clanIdCode: d['clan_id_code'] as String? ?? '',
+      captainId: d['captain_id'] as String? ?? '',
+      adminIds: adminIds,
+      memberIds: memberIds,
+      pendingInviteIds: pendingInviteIds,
+      totalClanXP: (d['total_clan_xp'] as num?)?.toInt() ?? 0,
+      activeBattleId: d['active_battle_id'] as String?,
+      createdAt: parseTs(d['created_at']),
+      maxMembers: (d['max_members'] as num?)?.toInt() ?? 10,
+    );
   }
 
   factory ClanModel.fromFirestore(DocumentSnapshot<Map<String, dynamic>> doc) {

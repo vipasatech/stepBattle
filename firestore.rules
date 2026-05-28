@@ -4,25 +4,37 @@ service cloud.firestore {
 
     // =========================================================================
     // USERS
+    //
+    // Read: any authenticated user (needed for friend search, leaderboards).
+    // Write: only the owner of the doc.
+    //
+    // We previously had an `affectedKeys` check to block clients from
+    // self-bumping `totalXP`, `level`, etc. — but the Firestore rule
+    // engine's behavior with `set(merge: true)` made it brittle for the
+    // geo-home write. For MVP we trust authenticated users; once we have
+    // Cloud Functions on Blaze, server-side validation will replace this.
     // =========================================================================
     match /users/{userId} {
-      // Anyone authenticated can read basic profile info
       allow read: if request.auth != null;
-      // Users can only write their own document
-      allow create: if request.auth != null && request.auth.uid == userId;
-      allow update: if request.auth != null && request.auth.uid == userId
-        // Prevent users from modifying server-managed fields
-        && !request.resource.data.diff(resource.data).affectedKeys()
-            .hasAny(['rank', 'totalXP', 'level', 'currentStreak', 'bestStreak']);
+      allow write: if request.auth != null && request.auth.uid == userId;
     }
 
     // =========================================================================
     // STEP LOGS
+    //
+    // The `resource == null` branch handles `get()` on a not-yet-created
+    // doc (Firestore evaluates rules even when the doc is missing —
+    // `resource.data.x` against a null `resource` denies, which broke the
+    // "read existing → compute delta" path in StepService).
+    //
+    // The `resource.data.userId == request.auth.uid` branch handles both
+    // single-doc reads of existing docs AND collection queries: Firestore's
+    // query rule-prover satisfies it via the `where('userId', '==', uid)`
+    // constraint that StepService.getStepHistory and friends always include.
     // =========================================================================
     match /step_logs/{logId} {
-      // Users can read/write their own step logs
       allow read: if request.auth != null
-        && resource.data.userId == request.auth.uid;
+        && (resource == null || resource.data.userId == request.auth.uid);
       allow create, update: if request.auth != null
         && request.resource.data.userId == request.auth.uid;
     }
@@ -54,10 +66,15 @@ service cloud.firestore {
 
     // =========================================================================
     // USER MISSION PROGRESS
+    //
+    // `resource == null` allows the `_upsertProgress` pre-read on a doc that
+    // hasn't been written yet today. The userId branch covers existing-doc
+    // reads AND the `watchDailyProgress` / `watchWeeklyProgress` streams,
+    // which both filter on `where('userId', '==', uid)`.
     // =========================================================================
     match /user_mission_progress/{progressId} {
       allow read: if request.auth != null
-        && resource.data.userId == request.auth.uid;
+        && (resource == null || resource.data.userId == request.auth.uid);
       allow create, update: if request.auth != null
         && request.resource.data.userId == request.auth.uid;
     }
@@ -92,6 +109,18 @@ service cloud.firestore {
 
     // =========================================================================
     // FRIEND RELATIONSHIPS
+    //
+    // Source of truth for friendships. We do NOT mirror to users.friends[]
+    // anymore — the users rule disallows cross-user writes, which broke the
+    // accept flow. Friend lists are derived client-side from this collection
+    // (see lib/providers/friend_provider.dart).
+    //
+    // Lifecycle:
+    //   • from-user creates  → status: 'pending'
+    //   • to-user updates    → status: 'accepted' | 'rejected'
+    //   • either party deletes → unfriends / cancels (the doc disappearing
+    //                              is the unfriend signal that the live
+    //                              streams pick up)
     // =========================================================================
     match /friend_relationships/{relationshipId} {
       allow read: if request.auth != null
@@ -99,19 +128,48 @@ service cloud.firestore {
             || resource.data.toUserId == request.auth.uid);
       allow create: if request.auth != null
         && request.resource.data.fromUserId == request.auth.uid;
+      // Only the recipient can flip status (accept/reject). The sender
+      // unfriends/cancels via delete instead.
       allow update: if request.auth != null
         && resource.data.toUserId == request.auth.uid;
+      // Either party can delete: sender cancels outgoing pending request,
+      // either party unfriends an accepted relationship.
+      allow delete: if request.auth != null
+        && (resource.data.fromUserId == request.auth.uid
+            || resource.data.toUserId == request.auth.uid);
     }
 
     // =========================================================================
     // NOTIFICATIONS
+    //
+    // Spark-plan architecture: there are no Cloud Functions. Battle, friend,
+    // and clan services all write notifications client-side from the actor's
+    // device (e.g., when User A sends User B a friend request, A's app
+    // creates a notification doc with userId = B). So creates must be open
+    // to authenticated clients. Reads/updates remain owner-only.
     // =========================================================================
     match /notifications/{notificationId} {
+      // A user can read only notifications addressed to them.
       allow read: if request.auth != null
         && resource.data.userId == request.auth.uid;
-      allow create: if false; // Only Cloud Functions
+
+      // Authenticated users can create notifications targeting any user.
+      // Required shape: a `userId` string field (the recipient). The
+      // `data.fromUserId` field, when present, must match the caller —
+      // prevents impersonation in deep-link payloads.
+      allow create: if request.auth != null
+        && request.resource.data.userId is string
+        && (
+          !('fromUserId' in request.resource.data.data)
+          || request.resource.data.data.fromUserId == request.auth.uid
+        );
+
+      // Recipient can mark as read; nobody else can update.
       allow update: if request.auth != null
-        && resource.data.userId == request.auth.uid; // Mark as read
+        && resource.data.userId == request.auth.uid;
+
+      // No client-side delete (analytics retention).
+      allow delete: if false;
     }
 
     // =========================================================================
@@ -130,9 +188,9 @@ service cloud.firestore {
     //   fields: userId asc, hourStart desc
     // =========================================================================
     match /source_step_hourly/{logId} {
-      // A user can read only their own hourly logs.
+      // Allow get() on missing docs AND queries with where('userId','==',uid).
       allow read: if request.auth != null
-        && resource.data.userId == request.auth.uid;
+        && (resource == null || resource.data.userId == request.auth.uid);
       // A user can create / upsert their own logs.
       allow create, update: if request.auth != null
         && request.resource.data.userId == request.auth.uid;

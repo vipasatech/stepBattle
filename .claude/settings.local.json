@@ -23,7 +23,14 @@
       "Bash(timeout 10 flutter logs)",
       "Bash(flutter logs:*)",
       "Bash(git check-ignore *)",
-      "Bash(grep -v \"import\\\\|_continue\\\\|^[^:]*:[^:]*:.*//\")"
+      "Bash(grep -v \"import\\\\|_continue\\\\|^[^:]*:[^:]*:.*//\")",
+      "Bash(grep -rn \"Resets in\\\\|08:24:15\\\\|reset.*\\\\\\\\\\\\$\\\\|reset.*\\\\\\\\bin\\\\\\\\b\" lib/screens/home/widgets/)",
+      "Bash(xargs grep -l \"daily_steps\\\\|missions\")",
+      "Bash(powershell -NoProfile -Command \"\\(Get-Item assets\\\\logos\\\\logo.png\\).Length\")",
+      "mcp__claude_ai_Supabase__list_organizations",
+      "mcp__claude_ai_Supabase__list_projects",
+      "Bash(git checkout *)",
+      "Bash(Get-ChildItem -Path \"C:\\\\Users\\\\admin\\\\Desktop\\\\stepBattle\" -Name)"
     ]
   }
 }

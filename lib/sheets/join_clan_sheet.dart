@@ -1,6 +1,6 @@
-import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 import '../config/colors.dart';
 import '../models/clan_model.dart';
 import '../providers/clan_provider.dart';
@@ -42,7 +42,7 @@ class _JoinClanSheetState extends ConsumerState<JoinClanSheet> {
   Future<void> _joinClan(ClanModel clan) async {
     setState(() => _joining = true);
     try {
-      final uid = FirebaseAuth.instance.currentUser!.uid;
+      final uid = Supabase.instance.client.auth.currentUser!.id;
       await ref
           .read(clanServiceProvider)
           .joinClan(clanId: clan.clanId, userId: uid);

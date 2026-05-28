@@ -39,9 +39,11 @@ dependencies:
   hive: ^2.2.3
   hive_flutter: ^1.1.0
 
-  # Maps & Location (deferred to v2)
-  # google_maps_flutter: ^2.10.0
-  # geolocator: ^13.0.2
+  # Maps & Location
+  geolocator: ^13.0.2
+  geocoding: ^3.0.0
+  flutter_map: ^7.0.2
+  latlong2: ^0.9.1
 
   # UI
   google_fonts: ^6.2.1
@@ -55,12 +57,41 @@ dependencies:
   device_info_plus: ^10.1.2
   package_info_plus: ^8.0.2
 
+  # Supabase (running in parallel with Firestore during the migration —
+  # see feature/supabase branch + supabase/migrations/).
+  supabase_flutter: ^2.8.0
+  flutter_dotenv: ^5.2.1
+
 dev_dependencies:
   flutter_test:
     sdk: flutter
   flutter_lints: ^5.0.0
   riverpod_generator: ^2.6.3
   build_runner: ^2.4.14
+  # Generates platform launcher icons from assets/logos/logo_square.png.
+  # Run `dart run flutter_launcher_icons` after editing the config below.
+  flutter_launcher_icons: ^0.14.1
+
+# Launcher-icon generator config. The `image_path` is the source square PNG;
+# the tool produces android/app/src/main/res/mipmap-*/ entries (and iOS
+# equivalents) at build-time. `adaptive_icon_background` is the violet
+# matching our brand for Android 8+ adaptive icons; the foreground reuses
+# the same image so the runner sits on the violet plate.
+flutter_launcher_icons:
+  android: true
+  ios: true
+  image_path: "assets/logos/logo_square.png"
+  min_sdk_android: 21
+  adaptive_icon_background: "#7C3AED"
+  adaptive_icon_foreground: "assets/logos/logo_square.png"
 
 flutter:
   uses-material-design: true
+
+  # Bundled geo boundaries — see assets/geo/README.md.
+  # The placeholder ships an empty IN-districts.geojson; replace with real
+  # data to enable district polygons on the cinematic map for Indian users.
+  assets:
+    - assets/geo/IN-districts.geojson
+    - assets/logos/logo.png
+    - .env

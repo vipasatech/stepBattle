@@ -1,6 +1,6 @@
-import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../config/colors.dart';
 import '../../models/clan_model.dart';
 import '../../providers/clan_provider.dart';
@@ -176,7 +176,7 @@ class _PendingInviteCardState extends ConsumerState<_PendingInviteCard> {
   Future<void> _accept() async {
     setState(() => _busy = true);
     try {
-      final uid = FirebaseAuth.instance.currentUser?.uid;
+      final uid = Supabase.instance.client.auth.currentUser?.id;
       if (uid != null) {
         await ref
             .read(clanServiceProvider)
@@ -189,7 +189,7 @@ class _PendingInviteCardState extends ConsumerState<_PendingInviteCard> {
   Future<void> _reject() async {
     setState(() => _busy = true);
     try {
-      final uid = FirebaseAuth.instance.currentUser?.uid;
+      final uid = Supabase.instance.client.auth.currentUser?.id;
       if (uid != null) {
         await ref
             .read(clanServiceProvider)

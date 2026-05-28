@@ -1,8 +1,8 @@
-import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../config/colors.dart';
 import '../config/constants.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 import '../providers/auth_provider.dart';
 import '../widgets/bottom_sheet_handle.dart';
 
@@ -31,10 +31,10 @@ class _SetGoalSheetState extends ConsumerState<SetGoalSheet> {
   Future<void> _save() async {
     setState(() => _saving = true);
     try {
-      final uid = FirebaseAuth.instance.currentUser!.uid;
+      final uid = Supabase.instance.client.auth.currentUser!.id;
       await ref
           .read(authServiceProvider)
-          .updateUser(uid, {'dailyStepGoal': _goal});
+          .updateProfile(uid, {'daily_step_goal': _goal});
       if (mounted) Navigator.pop(context);
     } catch (e) {
       if (mounted) {

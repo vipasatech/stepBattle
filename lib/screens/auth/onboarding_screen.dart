@@ -1,11 +1,12 @@
-import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../config/colors.dart';
 import '../../config/constants.dart';
 import '../../providers/auth_provider.dart';
 import '../../providers/step_provider.dart';
+import '../../widgets/app_logo.dart';
 import '../../widgets/glass_card.dart';
 import '../../widgets/progress_bar.dart';
 
@@ -61,13 +62,12 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
   Future<void> _completeOnboarding() async {
     setState(() => _submitting = true);
     try {
-      final user = FirebaseAuth.instance.currentUser!;
-      await ref.read(authServiceProvider).createUserDoc(
-            uid: user.uid,
-            email: user.email ?? '',
+      final user = Supabase.instance.client.auth.currentUser!;
+      await ref.read(authServiceProvider).completeOnboarding(
+            userId: user.id,
             displayName: _usernameController.text.trim(),
             dailyStepGoal: _dailyGoal,
-            avatarURL: user.photoURL,
+            avatarUrl: user.userMetadata?['avatar_url'] as String?,
           );
       if (mounted) {
         // Invalidate onboarding check so router redirects to home
@@ -93,9 +93,14 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
       body: SafeArea(
         child: Column(
           children: [
+            // Brand mark — small to keep onboarding focus on the form below.
+            const Padding(
+              padding: EdgeInsets.fromLTRB(24, 16, 24, 8),
+              child: AppLogo(size: 40),
+            ),
             // Progress indicator
             Padding(
-              padding: const EdgeInsets.fromLTRB(24, 16, 24, 0),
+              padding: const EdgeInsets.fromLTRB(24, 0, 24, 0),
               child: StepProgressBar(
                 progress: (_currentPage + 1) / 3,
                 height: 6,

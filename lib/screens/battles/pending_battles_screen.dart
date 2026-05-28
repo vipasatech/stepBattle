@@ -17,7 +17,7 @@ class PendingBattlesScreen extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final pending = ref.watch(scheduledBattlesProvider);
-    final uid = ref.watch(authStateProvider).valueOrNull?.uid ?? '';
+    final uid = ref.watch(authStateProvider).valueOrNull?.id ?? '';
 
     return Scaffold(
       appBar: AppBar(

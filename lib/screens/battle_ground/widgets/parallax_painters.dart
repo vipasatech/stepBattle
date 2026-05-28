@@ -1,6 +1,7 @@
 import 'dart:math' as math;
 import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
+import '../../../config/colors.dart';
 
 /// Time-of-day phase derived from local hour.
 enum DayPhase { dawn, day, dusk, night }
@@ -478,7 +479,7 @@ class TrackPainter extends CustomPainter {
     flag.close();
     canvas.drawPath(
       flag,
-      Paint()..color = const Color(0xFF84ADFF).withValues(alpha: 0.7),
+      Paint()..color = AppColors.primary.withValues(alpha: 0.7),
     );
   }
 

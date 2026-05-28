@@ -27,7 +27,7 @@ class BattleStats {
 
 /// Compute battle stats from the completed battles list.
 final battleStatsProvider = Provider<BattleStats>((ref) {
-  final uid = ref.watch(authStateProvider).valueOrNull?.uid;
+  final uid = ref.watch(authStateProvider).valueOrNull?.id;
   final completed = ref.watch(completedBattlesProvider);
 
   if (uid == null || completed.isEmpty) return const BattleStats();

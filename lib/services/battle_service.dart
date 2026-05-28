@@ -1,21 +1,40 @@
 import 'dart:math';
-import 'package:cloud_firestore/cloud_firestore.dart';
+
+import 'package:intl/intl.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
+
 import '../config/constants.dart';
 import '../models/battle_model.dart';
+import '../models/mission_model.dart';
+import '../utils/app_logger.dart';
+import 'mission_service.dart';
+import 'xp_service.dart';
 
+/// Battles + battle_participants on Supabase.
+///
+/// Time-window scoring (Phase 4) uses the lifetime-counter baseline: on
+/// activation we snapshot each participant's `profiles.total_steps_all_time`
+/// into `battle_participants.start_steps_baseline`. During the active
+/// window `current_steps = total_steps_all_time - start_steps_baseline`
+/// (updated from `StepService._propagateToActiveBattles`). On completion
+/// we set `end_steps_baseline` so the final score is permanently frozen
+/// independent of any future totals.
 class BattleService {
-  final FirebaseFirestore _firestore;
+  final SupabaseClient _supabase;
+  final XPService _xpService;
+  final MissionService _missionService;
 
-  BattleService({FirebaseFirestore? firestore})
-      : _firestore = firestore ?? FirebaseFirestore.instance;
+  BattleService({
+    SupabaseClient? supabase,
+    XPService? xpService,
+    MissionService? missionService,
+  })  : _supabase = supabase ?? Supabase.instance.client,
+        _xpService = xpService ?? XPService(),
+        _missionService = missionService ?? MissionService();
 
-  CollectionReference<Map<String, dynamic>> get _battles =>
-      _firestore.collection('battles');
-
-  CollectionReference<Map<String, dynamic>> get _notifications =>
-      _firestore.collection('notifications');
-
-  /// Generate a short random battle ID for display.
+  /// Generate a short random battle ID for display. (No longer used as
+  /// the primary key — Postgres generates uuids — but kept for short
+  /// display codes if/when we re-introduce them.)
   static String generateBattleCode() {
     const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ0123456789';
     final rng = Random();
@@ -29,248 +48,533 @@ class BattleService {
   // ---------------------------------------------------------------------------
 
   /// Create a new battle with pending invites.
-  /// Creator is auto-accepted. Recipients receive in-app notifications
-  /// and must Accept before battle becomes active.
   ///
-  /// The battle ends at [endTime]. Whoever leads on steps at that moment
-  /// wins — no target step count. `startTime` is set to `now` as a placeholder
-  /// and replaced with the actual activation moment when all invitees accept.
+  /// [startTime] and [endTime] are the user-selected step-counting window.
+  /// When all invitees accept:
+  ///   • if start_time has already passed → the battle activates immediately
+  ///     (baselines snapshot at that moment)
+  ///   • if start_time is in the future → status moves to 'scheduled';
+  ///     [activateScheduledBattles] flips it to 'active' at start_time
   ///
-  /// Returns the created battle document ID.
+  /// Returns the created battle ID.
   Future<String> createBattle({
     required BattleType type,
     required List<BattleParticipant> participants,
+    required DateTime startTime,
     required DateTime endTime,
     required String createdBy,
   }) async {
     final now = DateTime.now();
-    if (!endTime.isAfter(now)) {
-      throw ArgumentError('endTime must be in the future');
+    if (!endTime.isAfter(startTime)) {
+      throw ArgumentError('endTime must be after startTime');
+    }
+    if (startTime.isBefore(now.subtract(const Duration(minutes: 1)))) {
+      // Tolerate small clock skew; reject anything meaningfully in the past.
+      throw ArgumentError('startTime cannot be in the past');
     }
     final xp = type == BattleType.oneVsOne
         ? AppConstants.xpWin1v1
         : AppConstants.xpWinGroup;
 
-    final allIds = participants.map((p) => p.userId).toList();
-    // Creator is pre-accepted; everyone else needs to accept
-    final acceptedIds = [createdBy];
+    try {
+      // 1. Insert the battle row with the user-chosen window.
+      final battleRow = await _supabase
+          .from('battles')
+          .insert({
+            'type': type == BattleType.oneVsOne ? '1v1' : 'group',
+            'status': 'pending',
+            'start_time': startTime.toUtc().toIso8601String(),
+            'end_time': endTime.toUtc().toIso8601String(),
+            'xp_reward': xp,
+            'created_by': createdBy,
+          })
+          .select('id')
+          .single();
+      final battleId = battleRow['id'] as String;
 
-    // Derived duration (kept on the doc for back-compat with cards that
-    // still read `durationDays`). Rounded up to 1 day minimum so UI that
-    // formats "N-day battle" reads sensibly for short battles too.
-    final diff = endTime.difference(now);
-    final durationDays = diff.inHours >= 24 ? diff.inDays : 1;
+      // 2. Insert participants — creator auto-accepted, others pending.
+      final participantRows = participants.map((p) {
+        final isCreator = p.userId == createdBy;
+        return {
+          'battle_id': battleId,
+          'user_id': p.userId,
+          'display_name': p.displayName,
+          'avatar_url': p.avatarURL,
+          'current_steps': 0,
+          'is_winner': false,
+          'invite_status': isCreator ? 'accepted' : 'pending',
+        };
+      }).toList();
+      await _supabase.from('battle_participants').insert(participantRows);
 
-    final battle = BattleModel(
-      battleId: '',
-      type: type,
-      status: BattleStatus.pending,
-      participants: participants,
-      invitedUserIds: allIds,
-      acceptedUserIds: acceptedIds,
-      startTime: now,
-      endTime: endTime,
-      durationDays: durationDays,
-      xpReward: xp,
-      createdBy: createdBy,
-      createdAt: now,
-    );
-
-    final docRef = await _battles.add(battle.toFirestore());
-
-    // Get creator's name for the notification body
-    final creator = participants.firstWhere((p) => p.userId == createdBy);
-    final creatorName = creator.displayName;
-
-    // Fan out in-app notifications to each invitee (except creator)
-    for (final id in allIds) {
-      if (id == createdBy) continue;
-      await _notifications.add({
-        'userId': id,
-        'type': 'battle_invite',
-        'title': 'Battle Invite',
-        'body':
-            '$creatorName challenged you to ${type == BattleType.oneVsOne ? "a 1v1" : "a group"} battle',
-        'data': {
-          'battleId': docRef.id,
-          'fromUserId': createdBy,
-        },
-        'read': false,
-        'createdAt': Timestamp.now(),
+      AppLogger.battle.i('createBattle', fields: {
+        'battleId': battleId,
+        'type': type.name,
+        'createdBy': createdBy,
+        'participantCount': participants.length,
+        'startTime': startTime.toIso8601String(),
+        'endTime': endTime.toIso8601String(),
+        'xpReward': xp,
       });
-    }
 
-    return docRef.id;
+      // 3. Fan out friend-style notifications to each invitee.
+      final creator = participants.firstWhere((p) => p.userId == createdBy);
+      final creatorName = creator.displayName;
+      for (final p in participants) {
+        if (p.userId == createdBy) continue;
+        await _supabase.from('notifications').insert({
+          'user_id': p.userId,
+          'type': 'battle_invite',
+          'title': 'Battle Invite',
+          'body':
+              '$creatorName challenged you to ${type == BattleType.oneVsOne ? "a 1v1" : "a group"} battle',
+          'data': {
+            'battle_id': battleId,
+            'from_user_id': createdBy,
+          },
+        });
+      }
+
+      return battleId;
+    } catch (e, s) {
+      AppLogger.battle
+          .e('createBattle:failed', error: e, stack: s);
+      rethrow;
+    }
   }
 
   // ---------------------------------------------------------------------------
   // Invite responses
   // ---------------------------------------------------------------------------
 
-  /// Accept a battle invite. If all invitees accept, battle becomes active.
   Future<void> acceptInvite({
     required String battleId,
     required String userId,
   }) async {
-    final doc = await _battles.doc(battleId).get();
-    if (!doc.exists) return;
-    final battle = BattleModel.fromFirestore(doc);
+    AppLogger.battle.i('acceptInvite',
+        fields: {'battleId': battleId, 'userId': userId});
+    try {
+      // Mark this participant accepted.
+      await _supabase
+          .from('battle_participants')
+          .update({'invite_status': 'accepted'})
+          .eq('battle_id', battleId)
+          .eq('user_id', userId);
 
-    if (battle.status != BattleStatus.pending) return;
-    if (!battle.invitedUserIds.contains(userId)) return;
-    if (battle.acceptedUserIds.contains(userId)) return;
+      // If everyone is now accepted, either activate immediately (start_time
+      // already passed) or move to 'scheduled' (start_time still future).
+      final battle = await _fetchBattle(battleId);
+      if (battle == null) return;
+      if (battle.status != BattleStatus.pending) return;
+      final allAccepted = battle.participants.every(
+          (p) => p.inviteStatus == ParticipantInviteStatus.accepted);
+      if (!allAccepted) return;
 
-    final newAccepted = [...battle.acceptedUserIds, userId];
-    final allAccepted =
-        battle.invitedUserIds.every((id) => newAccepted.contains(id));
-
-    final now = DateTime.now();
-    final updates = <String, dynamic>{
-      'acceptedUserIds': newAccepted,
-    };
-
-    if (allAccepted) {
-      // Preserve the original duration (picked at creation) from the moment
-      // the battle actually activates — opponent acceptance delay doesn't
-      // eat into the battle window. `endTime - createdAt` captures the
-      // user-chosen length at sub-day precision.
-      final duration = battle.endTime.difference(battle.createdAt);
-      updates['status'] = 'active';
-      updates['startTime'] = Timestamp.fromDate(now);
-      updates['endTime'] = Timestamp.fromDate(now.add(duration));
-
-      // Notify creator that battle started
-      await _notifications.add({
-        'userId': battle.createdBy,
-        'type': 'battle_started',
-        'title': 'Battle Started',
-        'body': 'All participants accepted. Your battle is live!',
-        'data': {'battleId': battleId},
-        'read': false,
-        'createdAt': Timestamp.now(),
-      });
+      if (battle.startTime.isAfter(DateTime.now())) {
+        await _scheduleBattle(battle);
+      } else {
+        await _activateBattle(battle);
+      }
+    } catch (e, s) {
+      AppLogger.battle.e('acceptInvite:failed',
+          fields: {'battleId': battleId, 'userId': userId},
+          error: e,
+          stack: s);
+      rethrow;
     }
-
-    await _battles.doc(battleId).update(updates);
   }
 
-  /// Reject a battle invite. If 1v1, battle is cancelled.
-  /// If group, user is removed from invited/participants.
   Future<void> rejectInvite({
     required String battleId,
     required String userId,
   }) async {
-    final doc = await _battles.doc(battleId).get();
-    if (!doc.exists) return;
-    final battle = BattleModel.fromFirestore(doc);
-    if (battle.status != BattleStatus.pending) return;
+    AppLogger.battle.i('rejectInvite',
+        fields: {'battleId': battleId, 'userId': userId});
+    try {
+      final battle = await _fetchBattle(battleId);
+      if (battle == null) return;
+      if (battle.status != BattleStatus.pending) return;
 
-    if (battle.type == BattleType.oneVsOne) {
-      // 1v1 — reject cancels the whole battle
-      await _battles.doc(battleId).update({'status': 'cancelled'});
+      if (battle.type == BattleType.oneVsOne) {
+        // 1v1 — reject cancels the whole battle.
+        await _supabase
+            .from('battles')
+            .update({'status': 'cancelled'}).eq('id', battleId);
 
-      // Notify creator
-      if (battle.createdBy != userId) {
-        await _notifications.add({
-          'userId': battle.createdBy,
-          'type': 'battle_rejected',
-          'title': 'Battle Declined',
-          'body': 'Your opponent declined the battle',
-          'data': {'battleId': battleId},
-          'read': false,
-          'createdAt': Timestamp.now(),
-        });
+        if (battle.createdBy != userId) {
+          await _supabase.from('notifications').insert({
+            'user_id': battle.createdBy,
+            'type': 'battle_rejected',
+            'title': 'Battle Declined',
+            'body': 'Your opponent declined the battle',
+            'data': {'battle_id': battleId, 'from_user_id': userId},
+          });
+        }
+        return;
       }
-    } else {
-      // Group — remove the user from participants + invited list
-      final newParticipants =
-          battle.participants.where((p) => p.userId != userId).toList();
-      final newInvited =
-          battle.invitedUserIds.where((id) => id != userId).toList();
-      final newAccepted =
-          battle.acceptedUserIds.where((id) => id != userId).toList();
 
-      await _battles.doc(battleId).update({
-        'participants': newParticipants.map((p) => p.toMap()).toList(),
-        'invitedUserIds': newInvited,
-        'acceptedUserIds': newAccepted,
-      });
+      // Group — mark this participant rejected. If the remainder are all
+      // accepted, activate.
+      await _supabase
+          .from('battle_participants')
+          .update({'invite_status': 'rejected'})
+          .eq('battle_id', battleId)
+          .eq('user_id', userId);
 
-      // If all remaining have accepted, activate the battle
-      if (newInvited.every((id) => newAccepted.contains(id)) &&
-          newParticipants.length >= 2) {
-        final now = DateTime.now();
-        final duration = battle.endTime.difference(battle.createdAt);
-        await _battles.doc(battleId).update({
-          'status': 'active',
-          'startTime': Timestamp.fromDate(now),
-          'endTime': Timestamp.fromDate(now.add(duration)),
-        });
+      final refreshed = await _fetchBattle(battleId);
+      if (refreshed == null) return;
+      final accepted = refreshed.participants
+          .where((p) =>
+              p.inviteStatus == ParticipantInviteStatus.accepted)
+          .toList();
+      final pending = refreshed.participants
+          .where((p) =>
+              p.inviteStatus == ParticipantInviteStatus.pending)
+          .toList();
+      if (pending.isEmpty && accepted.length >= 2) {
+        await _activateBattle(refreshed);
       }
+    } catch (e, s) {
+      AppLogger.battle.e('rejectInvite:failed',
+          fields: {'battleId': battleId, 'userId': userId},
+          error: e,
+          stack: s);
+      rethrow;
     }
+  }
+
+  /// All accepted but start_time is still in the future → move to
+  /// 'scheduled'. We DO NOT touch start_time / end_time (the user picked
+  /// them) and DO NOT capture baselines yet — baselines have to reflect
+  /// each player's `total_steps_all_time` at the moment the window opens.
+  Future<void> _scheduleBattle(BattleModel battle) async {
+    AppLogger.battle.i('battleScheduled', fields: {
+      'battleId': battle.battleId,
+      'startsAt': battle.startTime.toIso8601String(),
+    });
+    await _supabase
+        .from('battles')
+        .update({'status': 'scheduled'}).eq('id', battle.battleId);
+
+    await _supabase.from('notifications').insert({
+      'user_id': battle.createdBy,
+      'type': 'battle_started',
+      'title': 'Battle Scheduled',
+      'body':
+          'All players are in. Battle starts at ${_humanTime(battle.startTime)}.',
+      'data': {'battle_id': battle.battleId},
+    });
+  }
+
+  /// Either acceptance arrived after start_time, or the scheduled sweep
+  /// noticed start_time has now passed. Flip to 'active' and snapshot
+  /// every accepted participant's lifetime baseline. The user-chosen
+  /// start_time / end_time are NOT touched — they're the battle window.
+  Future<void> _activateBattle(BattleModel battle) async {
+    AppLogger.battle.i('battleActivated', fields: {
+      'battleId': battle.battleId,
+      'startTime': battle.startTime.toIso8601String(),
+      'endTime': battle.endTime.toIso8601String(),
+    });
+
+    await _supabase
+        .from('battles')
+        .update({'status': 'active'}).eq('id', battle.battleId);
+
+    for (final p in battle.participants) {
+      if (p.inviteStatus != ParticipantInviteStatus.accepted) continue;
+      final profile = await _supabase
+          .from('profiles')
+          .select('total_steps_all_time')
+          .eq('id', p.userId)
+          .maybeSingle();
+      final baseline =
+          (profile?['total_steps_all_time'] as num?)?.toInt() ?? 0;
+      await _supabase
+          .from('battle_participants')
+          .update({
+            'start_steps_baseline': baseline,
+            'current_steps': 0,
+          })
+          .eq('battle_id', battle.battleId)
+          .eq('user_id', p.userId);
+    }
+
+    // Only notify on the "kicked off" transition. If we came from
+    // 'scheduled' the creator already got a "scheduled" notification, but
+    // a "live now" ping is still useful so they know to open the app.
+    await _supabase.from('notifications').insert({
+      'user_id': battle.createdBy,
+      'type': 'battle_started',
+      'title': 'Battle Live',
+      'body': 'Your battle just started. Step it up!',
+      'data': {'battle_id': battle.battleId},
+    });
+  }
+
+  /// Sweep scheduled battles whose start_time has arrived and activate
+  /// them. Called on app launch / Battles tab open, similar to
+  /// [cancelExpiredPendingBattles].
+  Future<void> activateScheduledBattles(String userId) async {
+    final nowIso = DateTime.now().toUtc().toIso8601String();
+    try {
+      final rows = await _supabase
+          .from('battles')
+          .select('*, battle_participants(*)')
+          .eq('status', 'scheduled')
+          .lte('start_time', nowIso);
+
+      int activated = 0;
+      for (final raw in rows as List) {
+        final battle =
+            BattleModel.fromSupabaseRow(raw as Map<String, dynamic>);
+        // Caller's device only fires this for battles it participates in;
+        // RLS update policies cover cross-user baseline writes (see
+        // 0005_co_participant_writes.sql).
+        if (!battle.participants.any((p) => p.userId == userId)) continue;
+        await _activateBattle(battle);
+        activated++;
+      }
+
+      AppLogger.battle.d('activateScheduled:done',
+          fields: {'userId': userId, 'activated': activated});
+    } catch (e, s) {
+      AppLogger.battle.e('activateScheduled:failed',
+          fields: {'userId': userId}, error: e, stack: s);
+      rethrow;
+    }
+  }
+
+  String _humanTime(DateTime t) {
+    final h = t.hour.toString().padLeft(2, '0');
+    final m = t.minute.toString().padLeft(2, '0');
+    return '${t.day}/${t.month} $h:$m';
   }
 
   /// Creator cancels their own pending battle before anyone accepts.
   Future<void> cancelBattle(String battleId) async {
-    final doc = await _battles.doc(battleId).get();
-    if (!doc.exists) return;
-    final data = doc.data()!;
-    if (data['status'] == 'pending') {
-      await _battles.doc(battleId).update({'status': 'cancelled'});
-    }
+    await _supabase
+        .from('battles')
+        .update({'status': 'cancelled'})
+        .eq('id', battleId)
+        .eq('status', 'pending');
   }
 
-  /// Delete a pending battle (creator only). Marks the battle cancelled and
-  /// removes any unread pending-invite notifications for this battle so it
-  /// disappears from invitees' notification trays too.
-  /// Throws [StateError] if the actor isn't the creator or the battle isn't
-  /// in a pending state.
+  /// Delete a pending battle. Marks cancelled, clears battle_invite
+  /// notifications.
   Future<void> deletePendingBattle({
     required String battleId,
     required String actorId,
   }) async {
-    final doc = await _battles.doc(battleId).get();
-    if (!doc.exists) return;
-    final data = doc.data()!;
-    if (data['createdBy'] != actorId) {
+    final battle = await _fetchBattle(battleId);
+    if (battle == null) return;
+    if (battle.createdBy != actorId) {
       throw StateError('Only the creator can delete a pending battle.');
     }
-    if (data['status'] != 'pending') {
+    if (battle.status != BattleStatus.pending) {
       throw StateError('Only pending battles can be deleted.');
     }
 
-    await _battles.doc(battleId).update({'status': 'cancelled'});
+    await _supabase
+        .from('battles')
+        .update({'status': 'cancelled'}).eq('id', battleId);
 
-    // Clean up pending battle_invite notifications for this battle.
-    final notifSnap = await _notifications
-        .where('type', isEqualTo: 'battle_invite')
-        .where('data.battleId', isEqualTo: battleId)
-        .get();
-    for (final n in notifSnap.docs) {
-      await n.reference.delete();
-    }
+    // Drop battle_invite notifications for this battle so they vanish
+    // from invitees' trays. We delete rather than mark read since these
+    // are now actionable only against a cancelled battle.
+    await _supabase
+        .from('notifications')
+        .delete()
+        .eq('type', 'battle_invite')
+        .filter('data->>battle_id', 'eq', battleId);
   }
 
-  /// Auto-cancel all pending battles older than 24h for any user the creator
-  /// is involved in. Called on Battles tab open.
+  /// Auto-cancel pending battles older than 24h that this user created.
+  /// Called on Battles tab open.
   Future<void> cancelExpiredPendingBattles(String userId) async {
-    final cutoff = DateTime.now().subtract(const Duration(hours: 24));
-    final snap = await _battles
-        .where('status', isEqualTo: 'pending')
-        .where('createdBy', isEqualTo: userId)
-        .get();
-
-    for (final doc in snap.docs) {
-      final data = doc.data();
-      final createdAt = (data['createdAt'] as Timestamp?)?.toDate();
-      if (createdAt != null && createdAt.isBefore(cutoff)) {
-        await doc.reference.update({'status': 'cancelled'});
+    final cutoff = DateTime.now()
+        .subtract(const Duration(hours: 24))
+        .toUtc()
+        .toIso8601String();
+    try {
+      final rows = await _supabase
+          .from('battles')
+          .select('id')
+          .eq('status', 'pending')
+          .eq('created_by', userId)
+          .lt('created_at', cutoff);
+      int cancelled = 0;
+      for (final r in rows as List) {
+        final id = (r as Map<String, dynamic>)['id'] as String;
+        await _supabase
+            .from('battles')
+            .update({'status': 'cancelled'}).eq('id', id);
+        cancelled++;
       }
+      AppLogger.battle.d('cancelExpiredPending',
+          fields: {'userId': userId, 'cancelled': cancelled});
+    } catch (e, s) {
+      AppLogger.battle.e('cancelExpiredPending:failed',
+          fields: {'userId': userId}, error: e, stack: s);
+      rethrow;
     }
   }
 
   // ---------------------------------------------------------------------------
-  // Update steps
+  // Auto-complete on endTime
+  // ---------------------------------------------------------------------------
+
+  Future<void> completeExpiredBattles(String userId) async {
+    final nowIso = DateTime.now().toUtc().toIso8601String();
+    final rows = await _supabase
+        .from('battles')
+        .select('*, battle_participants(*)')
+        .eq('status', 'active')
+        .lt('end_time', nowIso);
+
+    int completed = 0;
+    for (final raw in rows as List) {
+      final battle =
+          BattleModel.fromSupabaseRow(raw as Map<String, dynamic>);
+      if (!battle.participants.any((p) => p.userId == userId)) continue;
+
+      // Pick winner: highest current_steps. Ties → no winner.
+      String? winnerId;
+      int topSteps = -1;
+      bool tie = false;
+      for (final p in battle.participants) {
+        if (p.currentSteps > topSteps) {
+          topSteps = p.currentSteps;
+          winnerId = p.userId;
+          tie = false;
+        } else if (p.currentSteps == topSteps) {
+          tie = true;
+        }
+      }
+      if (tie || topSteps <= 0) winnerId = null;
+
+      // Freeze each participant: stamp end_steps_baseline + is_winner.
+      for (final p in battle.participants) {
+        final profile = await _supabase
+            .from('profiles')
+            .select('total_steps_all_time')
+            .eq('id', p.userId)
+            .maybeSingle();
+        final lifetime =
+            (profile?['total_steps_all_time'] as num?)?.toInt() ?? 0;
+        await _supabase
+            .from('battle_participants')
+            .update({
+              'end_steps_baseline': lifetime,
+              'is_winner': p.userId == winnerId,
+            })
+            .eq('battle_id', battle.battleId)
+            .eq('user_id', p.userId);
+      }
+
+      await _supabase
+          .from('battles')
+          .update({'status': 'completed', 'winner_id': winnerId})
+          .eq('id', battle.battleId);
+
+      AppLogger.battle.i('battleCompleted', fields: {
+        'battleId': battle.battleId,
+        'winnerId': winnerId,
+        'topSteps': topSteps,
+        'tie': tie,
+      });
+      completed++;
+
+      // Award XP + bump battle missions for the winner.
+      if (winnerId != null) {
+        await _xpService.awardXP(userId: winnerId, amount: battle.xpReward);
+        await _propagateBattleWinToMissions(winnerId);
+      }
+
+      // Notify all participants.
+      for (final p in battle.participants) {
+        final isWinner = p.userId == winnerId;
+        final body = winnerId == null
+            ? 'Battle ended in a tie'
+            : isWinner
+                ? 'You won the battle! +${battle.xpReward} XP'
+                : 'Battle ended — better luck next time';
+        await _supabase.from('notifications').insert({
+          'user_id': p.userId,
+          'type': 'battle_result',
+          'title': 'Battle Ended',
+          'body': body,
+          'data': {
+            'battle_id': battle.battleId,
+            'winner_id': winnerId,
+          },
+        });
+      }
+    }
+
+    AppLogger.battle.d('completeExpired:done',
+        fields: {'userId': userId, 'completed': completed});
+  }
+
+  Future<void> _propagateBattleWinToMissions(String winnerId) async {
+    final today = DateFormat('yyyy-MM-dd').format(DateTime.now());
+    final weekStart = _weekStart();
+
+    AppLogger.mission.i('propagateBattleWin:start',
+        fields: {'winnerId': winnerId});
+
+    final daily = await _missionService.getDailyMissions();
+    final weekly = await _missionService.getWeeklyMissions();
+
+    Future<void> bump(MissionModel m, String periodStart) async {
+      final existing = await _supabase
+          .from('user_mission_progress')
+          .select('current_value, is_completed')
+          .eq('user_id', winnerId)
+          .eq('mission_id', m.missionId)
+          .eq('period_start', periodStart)
+          .maybeSingle();
+      final priorValue =
+          (existing?['current_value'] as num?)?.toInt() ?? 0;
+      final wasCompleted = existing?['is_completed'] as bool? ?? false;
+      final newValue = priorValue + 1;
+      final nowCompleted = newValue >= m.targetValue;
+
+      await _supabase.from('user_mission_progress').upsert(
+        {
+          'user_id': winnerId,
+          'mission_id': m.missionId,
+          'period_start': periodStart,
+          'current_value': newValue,
+          'target_value': m.targetValue,
+          'is_completed': nowCompleted,
+          if (nowCompleted)
+            'completed_at': DateTime.now().toUtc().toIso8601String(),
+        },
+        onConflict: 'user_id,mission_id,period_start',
+      );
+
+      if (!wasCompleted && nowCompleted) {
+        await _xpService.awardXP(userId: winnerId, amount: m.xpReward);
+      }
+    }
+
+    for (final m in daily.where((m) => m.category == MissionCategory.battle)) {
+      await bump(m, today);
+    }
+    for (final m in weekly.where((m) => m.category == MissionCategory.battle)) {
+      await bump(m, weekStart);
+    }
+  }
+
+  static String _weekStart() {
+    final now = DateTime.now();
+    final monday = now.subtract(Duration(days: now.weekday - 1));
+    return DateFormat('yyyy-MM-dd').format(monday);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Update steps (called from StepService propagation)
   // ---------------------------------------------------------------------------
 
   Future<void> updateParticipantSteps({
@@ -278,79 +582,110 @@ class BattleService {
     required String userId,
     required int steps,
   }) async {
-    final doc = await _battles.doc(battleId).get();
-    if (!doc.exists) return;
-
-    final participants = (doc.data()!['participants'] as List<dynamic>)
-        .map((p) => Map<String, dynamic>.from(p as Map))
-        .toList();
-
-    for (final p in participants) {
-      if (p['userId'] == userId) {
-        p['currentSteps'] = steps;
-        break;
-      }
-    }
-
-    await _battles.doc(battleId).update({'participants': participants});
+    await _supabase
+        .from('battle_participants')
+        .update({'current_steps': steps})
+        .eq('battle_id', battleId)
+        .eq('user_id', userId);
   }
 
   // ---------------------------------------------------------------------------
   // Queries
   // ---------------------------------------------------------------------------
 
+  Future<BattleModel?> _fetchBattle(String battleId) async {
+    final raw = await _supabase
+        .from('battles')
+        .select('*, battle_participants(*)')
+        .eq('id', battleId)
+        .maybeSingle();
+    if (raw == null) return null;
+    return BattleModel.fromSupabaseRow(raw);
+  }
+
   Stream<BattleModel?> watchBattle(String battleId) {
-    return _battles.doc(battleId).snapshots().map((doc) {
-      if (!doc.exists) return null;
-      return BattleModel.fromFirestore(doc);
-    });
+    return _supabase
+        .from('battles')
+        .stream(primaryKey: ['id'])
+        .eq('id', battleId)
+        .asyncMap((rows) async {
+          if (rows.isEmpty) return null;
+          // We need participants embedded — re-fetch with the join for
+          // a fully-hydrated model. The trigger here is the battle row
+          // change; the participant rows lag slightly but the next emit
+          // will reconcile.
+          return _fetchBattle(battleId);
+        });
   }
 
   Future<List<BattleModel>> getBattles({
     required String userId,
     required BattleStatus status,
   }) async {
-    final query = await _battles
-        .where('status', isEqualTo: status.name)
-        .orderBy('startTime', descending: true)
-        .get();
-
-    return query.docs
-        .map((doc) => BattleModel.fromFirestore(doc))
+    final rows = await _supabase
+        .from('battles')
+        .select('*, battle_participants(*)')
+        .eq('status', status.name)
+        .order('start_time', ascending: false);
+    return (rows as List)
+        .map((r) =>
+            BattleModel.fromSupabaseRow(r as Map<String, dynamic>))
         .where((b) => b.participants.any((p) => p.userId == userId))
         .toList();
   }
 
-  Stream<List<BattleModel>> watchActiveBattles(String userId) {
-    return _battles
-        .where('status', isEqualTo: 'active')
-        .snapshots()
-        .map((snapshot) => snapshot.docs
-            .map((doc) => BattleModel.fromFirestore(doc))
-            .where((b) => b.participants.any((p) => p.userId == userId))
-            .toList());
-  }
-
   /// Stream of all battles (any status) this user is a participant in.
+  /// Implemented by streaming `battle_participants` (cheap, indexed on
+  /// user_id) and resolving the full battle row + nested participants on
+  /// each tick. Slightly chatty but keeps the surface API the same the
+  /// Firestore version exposed.
   Stream<List<BattleModel>> watchAllBattles(String userId) {
-    return _battles
-        .orderBy('startTime', descending: true)
-        .snapshots()
-        .map((snapshot) => snapshot.docs
-            .map((doc) => BattleModel.fromFirestore(doc))
-            .where((b) => b.participants.any((p) => p.userId == userId))
-            .toList());
+    return _supabase
+        .from('battle_participants')
+        .stream(primaryKey: ['battle_id', 'user_id'])
+        .eq('user_id', userId)
+        .asyncMap((rows) async {
+          final battleIds =
+              rows.map((r) => r['battle_id'] as String).toSet().toList();
+          if (battleIds.isEmpty) return <BattleModel>[];
+          final battlesRaw = await _supabase
+              .from('battles')
+              .select('*, battle_participants(*)')
+              .inFilter('id', battleIds)
+              .order('start_time', ascending: false);
+          return (battlesRaw as List)
+              .map((b) => BattleModel.fromSupabaseRow(
+                  b as Map<String, dynamic>))
+              .toList();
+        });
   }
 
-  /// Stream of pending battles where the user is invited but hasn't accepted.
+  Stream<List<BattleModel>> watchActiveBattles(String userId) {
+    return watchAllBattles(userId)
+        .map((list) => list.where((b) => b.status == BattleStatus.active).toList());
+  }
+
+  /// Stream of pending battles where the user is invited but hasn't responded.
   Stream<List<BattleModel>> watchIncomingInvites(String userId) {
-    return _battles
-        .where('status', isEqualTo: 'pending')
-        .where('invitedUserIds', arrayContains: userId)
-        .snapshots()
-        .map((snap) => snap.docs
-            .map((d) => BattleModel.fromFirestore(d))
-            .where((b) => !b.acceptedUserIds.contains(userId))
-            .toList());
+    return _supabase
+        .from('battle_participants')
+        .stream(primaryKey: ['battle_id', 'user_id'])
+        .eq('user_id', userId)
+        .asyncMap((rows) async {
+          final pendingIds = rows
+              .where((r) => r['invite_status'] == 'pending')
+              .map((r) => r['battle_id'] as String)
+              .toList();
+          if (pendingIds.isEmpty) return <BattleModel>[];
+          final battlesRaw = await _supabase
+              .from('battles')
+              .select('*, battle_participants(*)')
+              .eq('status', 'pending')
+              .inFilter('id', pendingIds);
+          return (battlesRaw as List)
+              .map((b) => BattleModel.fromSupabaseRow(
+                  b as Map<String, dynamic>))
+              .toList();
+        });
   }
 }

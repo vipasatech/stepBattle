@@ -34,7 +34,7 @@ final activeClanBattleProvider = StreamProvider<ClanBattleModel?>((ref) {
 
 /// Whether the current user is the clan captain.
 final isClanCaptainProvider = Provider<bool>((ref) {
-  final uid = ref.watch(authStateProvider).valueOrNull?.uid;
+  final uid = ref.watch(authStateProvider).valueOrNull?.id;
   final clan = ref.watch(currentClanProvider).valueOrNull;
   if (uid == null || clan == null) return false;
   return clan.captainId == uid;
@@ -42,7 +42,7 @@ final isClanCaptainProvider = Provider<bool>((ref) {
 
 /// Stream of clans where the current user has a pending invite.
 final incomingClanInvitesProvider = StreamProvider<List<ClanModel>>((ref) {
-  final uid = ref.watch(authStateProvider).valueOrNull?.uid;
+  final uid = ref.watch(authStateProvider).valueOrNull?.id;
   if (uid == null) return Stream.value([]);
   return ref.read(clanServiceProvider).watchIncomingClanInvites(uid);
 });

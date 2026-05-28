@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'package:google_sign_in/google_sign_in.dart';
 import 'package:hive/hive.dart';
 import 'package:http/http.dart' as http;
+import '../utils/app_logger.dart';
 import 'native_step_service.dart';
 
 /// Last-resort step source: queries Google Fit via the REST API using the
@@ -57,6 +58,7 @@ class GoogleFitService {
   /// Returns true if the toggle was set to the requested value (false
   /// means the user denied the consent dialog).
   Future<bool> setEnabled(bool enabled) async {
+    AppLogger.health.i('googleFit:setEnabled', fields: {'enabled': enabled});
     if (!enabled) {
       await _box.put(_kEnabled, false);
       return true;
@@ -90,11 +92,15 @@ class GoogleFitService {
   /// auth token, or the request fails — caller should treat null as
   /// "source unavailable" (not zero).
   Future<int?> getTodaySteps() async {
-    if (!isEnabled) return null;
+    if (!isEnabled) {
+      AppLogger.health.t('googleFit:disabled');
+      return null;
+    }
 
     final token = await _accessToken();
     if (token == null) {
       _lastError = 'No access token';
+      AppLogger.health.w('googleFit:noToken');
       return null;
     }
 
@@ -145,9 +151,11 @@ class GoogleFitService {
         }
       }
       _lastError = null;
+      AppLogger.health.d('googleFit:getTodaySteps', fields: {'steps': total});
       return total;
-    } catch (e) {
+    } catch (e, s) {
       _lastError = e.toString();
+      AppLogger.health.e('googleFit:getTodaySteps:failed', error: e, stack: s);
       return null;
     }
   }

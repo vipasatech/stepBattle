@@ -1,32 +1,28 @@
-import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
+
 import '../models/friend_relationship_model.dart';
 import '../models/user_model.dart';
+import '../utils/app_logger.dart';
 
-/// Friend system — approval-based. Searches by username or userCode.
+/// Friend graph operations on Supabase.
+///
+/// Friendship is derived from `friend_relationships.status == 'accepted'`
+/// (see `acceptedFriendIdsProvider` for the read side). This service
+/// owns the writes — send/accept/reject/cancel/remove — plus the user
+/// search used by the Add Friends sheet.
 class FriendService {
-  final FirebaseFirestore _firestore;
+  final SupabaseClient _supabase;
 
-  FriendService({FirebaseFirestore? firestore})
-      : _firestore = firestore ?? FirebaseFirestore.instance;
-
-  CollectionReference<Map<String, dynamic>> get _users =>
-      _firestore.collection('users');
-
-  CollectionReference<Map<String, dynamic>> get _relationships =>
-      _firestore.collection('friend_relationships');
-
-  CollectionReference<Map<String, dynamic>> get _notifications =>
-      _firestore.collection('notifications');
+  FriendService({SupabaseClient? supabase})
+      : _supabase = supabase ?? Supabase.instance.client;
 
   // ---------------------------------------------------------------------------
   // Search — by username prefix OR by userCode
   // ---------------------------------------------------------------------------
 
-  /// Smart search: if query starts with "#" treat as userCode, otherwise as username.
   Future<List<UserModel>> search(String query) async {
     final q = query.trim();
     if (q.isEmpty) return [];
-
     if (q.startsWith('#')) {
       final user = await searchByUserCode(q.toUpperCase());
       return user != null ? [user] : [];
@@ -34,150 +30,255 @@ class FriendService {
     return searchByUsername(q);
   }
 
-  /// Case-insensitive username prefix search.
+  /// Case-insensitive username prefix search via PostgREST's `ilike`.
   Future<List<UserModel>> searchByUsername(String query) async {
     final q = query.trim();
     if (q.isEmpty) return [];
-    final snap = await _users
-        .where('displayName', isGreaterThanOrEqualTo: q)
-        .where('displayName', isLessThanOrEqualTo: '$q\uf8ff')
-        .limit(15)
-        .get();
-    return snap.docs.map((d) => UserModel.fromFirestore(d)).toList();
+    try {
+      final rows = await _supabase
+          .from('profiles')
+          .select()
+          .ilike('display_name', '$q%')
+          .limit(15);
+      return (rows as List)
+          .map((r) => UserModel.fromSupabaseRow(r as Map<String, dynamic>))
+          .toList();
+    } catch (e, s) {
+      AppLogger.friend
+          .e('searchByUsername:failed', fields: {'q': q}, error: e, stack: s);
+      return [];
+    }
   }
 
-  /// Exact userCode match (e.g. "#U4X92").
   Future<UserModel?> searchByUserCode(String userCode) async {
-    final snap = await _users
-        .where('userCode', isEqualTo: userCode)
-        .limit(1)
-        .get();
-    if (snap.docs.isEmpty) return null;
-    return UserModel.fromFirestore(snap.docs.first);
+    try {
+      final row = await _supabase
+          .from('profiles')
+          .select()
+          .eq('user_code', userCode)
+          .maybeSingle();
+      if (row == null) return null;
+      return UserModel.fromSupabaseRow(row);
+    } catch (e, s) {
+      AppLogger.friend.e('searchByUserCode:failed',
+          fields: {'code': userCode}, error: e, stack: s);
+      return null;
+    }
   }
 
-  /// Exact userId lookup.
   Future<UserModel?> searchByUserId(String userId) async {
-    final doc = await _users.doc(userId).get();
-    if (!doc.exists) return null;
-    return UserModel.fromFirestore(doc);
+    final row = await _supabase
+        .from('profiles')
+        .select()
+        .eq('id', userId)
+        .maybeSingle();
+    if (row == null) return null;
+    return UserModel.fromSupabaseRow(row);
   }
 
   // ---------------------------------------------------------------------------
   // Friend requests
   // ---------------------------------------------------------------------------
 
-  /// Send a friend request. Creates a pending relationship doc + notification.
-  /// Returns the relationship ID, or null if request already existed.
+  /// Send a friend request. Pending-only dedup: rejecting and later re-asking
+  /// is allowed (the rejected row will be re-inserted). Returns the
+  /// `friend_relationships.id` of the (existing or new) row, or null when
+  /// the call targeted the caller themselves.
   Future<String?> sendRequest({
     required String fromUserId,
     required String toUserId,
     required String fromDisplayName,
   }) async {
-    if (fromUserId == toUserId) return null;
+    AppLogger.friend.i('sendRequest:start',
+        fields: {'from': fromUserId, 'to': toUserId});
+    if (fromUserId == toUserId) {
+      AppLogger.friend.w('sendRequest:selfTarget',
+          fields: {'userId': fromUserId});
+      return null;
+    }
 
-    // Deduplicate: check either direction
-    final forward = await _relationships
-        .where('fromUserId', isEqualTo: fromUserId)
-        .where('toUserId', isEqualTo: toUserId)
-        .limit(1)
-        .get();
-    if (forward.docs.isNotEmpty) return forward.docs.first.id;
+    try {
+      // Dedup ONLY against pending rows — accepted ones mean "you're already
+      // friends" (so the three-state button shows Friends and this code path
+      // shouldn't be reached); rejected ones should be re-sendable.
+      final forward = await _supabase
+          .from('friend_relationships')
+          .select('id')
+          .eq('from_user_id', fromUserId)
+          .eq('to_user_id', toUserId)
+          .eq('status', 'pending')
+          .maybeSingle();
+      if (forward != null) {
+        AppLogger.friend.i('sendRequest:dedupForward',
+            fields: {'relationshipId': forward['id']});
+        return forward['id'] as String;
+      }
 
-    final reverse = await _relationships
-        .where('fromUserId', isEqualTo: toUserId)
-        .where('toUserId', isEqualTo: fromUserId)
-        .limit(1)
-        .get();
-    if (reverse.docs.isNotEmpty) return reverse.docs.first.id;
+      final reverse = await _supabase
+          .from('friend_relationships')
+          .select('id')
+          .eq('from_user_id', toUserId)
+          .eq('to_user_id', fromUserId)
+          .eq('status', 'pending')
+          .maybeSingle();
+      if (reverse != null) {
+        AppLogger.friend.i('sendRequest:dedupReverse',
+            fields: {'relationshipId': reverse['id']});
+        return reverse['id'] as String;
+      }
 
-    // Create request
-    final doc = await _relationships.add(FriendRelationship(
-      relationshipId: '',
-      fromUserId: fromUserId,
-      toUserId: toUserId,
-      status: FriendStatus.pending,
-      createdAt: DateTime.now(),
-    ).toFirestore());
+      final inserted = await _supabase
+          .from('friend_relationships')
+          .insert({
+            'from_user_id': fromUserId,
+            'to_user_id': toUserId,
+            'status': 'pending',
+          })
+          .select('id')
+          .single();
+      final relId = inserted['id'] as String;
 
-    // Queue push notification (Cloud Function picks this up)
-    await _notifications.add({
-      'userId': toUserId,
-      'type': 'friend_request',
-      'title': 'New Friend Request',
-      'body': '$fromDisplayName wants to be your friend',
-      'data': {
-        'relationshipId': doc.id,
-        'fromUserId': fromUserId,
-      },
-      'read': false,
-      'createdAt': Timestamp.now(),
-    });
+      AppLogger.friend.i('sendRequest:relationshipCreated', fields: {
+        'relationshipId': relId,
+        'from': fromUserId,
+        'to': toUserId,
+      });
 
-    return doc.id;
+      // In-app notification for the recipient.
+      await _supabase.from('notifications').insert({
+        'user_id': toUserId,
+        'type': 'friend_request',
+        'title': 'New Friend Request',
+        'body': '$fromDisplayName wants to be your friend',
+        'data': {
+          'relationship_id': relId,
+          'from_user_id': fromUserId,
+        },
+      });
+
+      AppLogger.friend
+          .i('sendRequest:done', fields: {'relationshipId': relId});
+      return relId;
+    } catch (e, s) {
+      AppLogger.friend.e('sendRequest:failed',
+          fields: {'from': fromUserId, 'to': toUserId},
+          error: e,
+          stack: s);
+      rethrow;
+    }
   }
 
-  /// Accept a friend request — updates status, adds to both friends arrays,
-  /// queues push notification to the sender.
+  /// Accept a friend request — flips status to 'accepted'. The accepted-rel
+  /// stream picks it up on both sides; we no longer mirror to user.friends[].
   Future<void> acceptRequest(String relationshipId) async {
-    final doc = await _relationships.doc(relationshipId).get();
-    if (!doc.exists) return;
-    final rel = FriendRelationship.fromFirestore(doc);
+    AppLogger.friend.i('acceptRequest:start',
+        fields: {'relationshipId': relationshipId});
+    try {
+      final rel = await _supabase
+          .from('friend_relationships')
+          .select()
+          .eq('id', relationshipId)
+          .maybeSingle();
+      if (rel == null) {
+        AppLogger.friend.w('acceptRequest:missing',
+            fields: {'relationshipId': relationshipId});
+        return;
+      }
+      if (rel['status'] != 'pending') {
+        AppLogger.friend.t('acceptRequest:alreadyResolved', fields: {
+          'relationshipId': relationshipId,
+          'status': rel['status'],
+        });
+        return;
+      }
 
-    await _relationships.doc(relationshipId).update({'status': 'accepted'});
+      await _supabase
+          .from('friend_relationships')
+          .update({'status': 'accepted'}).eq('id', relationshipId);
 
-    await _users.doc(rel.fromUserId).update({
-      'friends': FieldValue.arrayUnion([rel.toUserId]),
-    });
-    await _users.doc(rel.toUserId).update({
-      'friends': FieldValue.arrayUnion([rel.fromUserId]),
-    });
+      // Notify the sender. We can read the accepter's display name from
+      // profiles — `allow read: authenticated` lets us see any profile row.
+      final accepterId = rel['to_user_id'] as String;
+      final senderId = rel['from_user_id'] as String;
+      final accepter = await _supabase
+          .from('profiles')
+          .select('display_name')
+          .eq('id', accepterId)
+          .maybeSingle();
+      final accepterName =
+          (accepter?['display_name'] as String?)?.trim().isNotEmpty == true
+              ? accepter!['display_name'] as String
+              : 'Someone';
+      await _supabase.from('notifications').insert({
+        'user_id': senderId,
+        'type': 'friend_accepted',
+        'title': 'Friend Request Accepted',
+        'body': '$accepterName is now your friend',
+        'data': {
+          'friend_user_id': accepterId,
+          'from_user_id': accepterId,
+        },
+      });
 
-    // Notify sender
-    final accepterDoc = await _users.doc(rel.toUserId).get();
-    final accepterName =
-        accepterDoc.data()?['displayName'] as String? ?? 'Someone';
-    await _notifications.add({
-      'userId': rel.fromUserId,
-      'type': 'friend_accepted',
-      'title': 'Friend Request Accepted',
-      'body': '$accepterName is now your friend',
-      'data': {'friendUserId': rel.toUserId},
-      'read': false,
-      'createdAt': Timestamp.now(),
-    });
+      AppLogger.friend.i('acceptRequest:done',
+          fields: {'relationshipId': relationshipId});
+    } catch (e, s) {
+      AppLogger.friend.e('acceptRequest:failed',
+          fields: {'relationshipId': relationshipId}, error: e, stack: s);
+      rethrow;
+    }
   }
 
   Future<void> rejectRequest(String relationshipId) async {
-    await _relationships.doc(relationshipId).update({'status': 'rejected'});
+    AppLogger.friend
+        .i('rejectRequest', fields: {'relationshipId': relationshipId});
+    await _supabase
+        .from('friend_relationships')
+        .update({'status': 'rejected'}).eq('id', relationshipId);
   }
 
-  /// Cancel an outgoing pending request (from sender).
+  /// Cancel an outgoing pending request — delete the row entirely.
+  /// RLS lets either party delete.
   Future<void> cancelRequest(String relationshipId) async {
-    await _relationships.doc(relationshipId).delete();
+    AppLogger.friend
+        .i('cancelRequest', fields: {'relationshipId': relationshipId});
+    await _supabase
+        .from('friend_relationships')
+        .delete()
+        .eq('id', relationshipId);
   }
 
-  /// Remove an accepted friend from both users.
+  /// Unfriend by deleting both possible direction rows. Either party can
+  /// delete (see friend_relationships RLS in 0001_init.sql).
   Future<void> removeFriend({
     required String userId,
     required String friendId,
   }) async {
-    await _users.doc(userId).update({
-      'friends': FieldValue.arrayRemove([friendId]),
-    });
-    await _users.doc(friendId).update({
-      'friends': FieldValue.arrayRemove([userId]),
-    });
-    // Also clean up the relationship doc
-    final rels = await _relationships
-        .where('fromUserId', whereIn: [userId, friendId])
-        .get();
-    for (final d in rels.docs) {
-      final r = FriendRelationship.fromFirestore(d);
-      if ((r.fromUserId == userId && r.toUserId == friendId) ||
-          (r.fromUserId == friendId && r.toUserId == userId)) {
-        await d.reference.delete();
-      }
+    AppLogger.friend.i('removeFriend:start',
+        fields: {'userId': userId, 'friendId': friendId});
+    try {
+      // PostgREST doesn't have native OR-of-row-conditions for deletes, so
+      // we issue two filtered deletes — one per direction. Each is a no-op
+      // if the row doesn't exist.
+      await _supabase
+          .from('friend_relationships')
+          .delete()
+          .eq('from_user_id', userId)
+          .eq('to_user_id', friendId);
+      await _supabase
+          .from('friend_relationships')
+          .delete()
+          .eq('from_user_id', friendId)
+          .eq('to_user_id', userId);
+
+      AppLogger.friend.i('removeFriend:done',
+          fields: {'userId': userId, 'friendId': friendId});
+    } catch (e, s) {
+      AppLogger.friend.e('removeFriend:failed',
+          fields: {'userId': userId, 'friendId': friendId},
+          error: e,
+          stack: s);
+      rethrow;
     }
   }
 
@@ -185,36 +286,39 @@ class FriendService {
   // Queries
   // ---------------------------------------------------------------------------
 
+  /// Batch-fetch profiles by id. PostgREST's `in` filter accepts up to ~100
+  /// values comfortably; for an MVP friends list (<1k friends) we issue one
+  /// query.
   Future<List<UserModel>> getFriends(List<String> friendIds) async {
     if (friendIds.isEmpty) return [];
-    final results = <UserModel>[];
-    for (var i = 0; i < friendIds.length; i += 30) {
-      final batch = friendIds.sublist(
-          i, i + 30 > friendIds.length ? friendIds.length : i + 30);
-      final snap =
-          await _users.where(FieldPath.documentId, whereIn: batch).get();
-      results.addAll(snap.docs.map((d) => UserModel.fromFirestore(d)));
-    }
-    return results;
+    final rows = await _supabase
+        .from('profiles')
+        .select()
+        .inFilter('id', friendIds);
+    return (rows as List)
+        .map((r) => UserModel.fromSupabaseRow(r as Map<String, dynamic>))
+        .toList();
   }
 
-  /// Stream incoming pending friend requests.
   Stream<List<FriendRelationship>> watchIncomingRequests(String userId) {
-    return _relationships
-        .where('toUserId', isEqualTo: userId)
-        .where('status', isEqualTo: 'pending')
-        .snapshots()
-        .map((snap) =>
-            snap.docs.map((d) => FriendRelationship.fromFirestore(d)).toList());
+    return _supabase
+        .from('friend_relationships')
+        .stream(primaryKey: ['id'])
+        .eq('to_user_id', userId)
+        .map((rows) => rows
+            .where((r) => r['status'] == 'pending')
+            .map((r) => FriendRelationship.fromSupabaseRow(r))
+            .toList());
   }
 
-  /// Stream outgoing pending friend requests.
   Stream<List<FriendRelationship>> watchOutgoingRequests(String userId) {
-    return _relationships
-        .where('fromUserId', isEqualTo: userId)
-        .where('status', isEqualTo: 'pending')
-        .snapshots()
-        .map((snap) =>
-            snap.docs.map((d) => FriendRelationship.fromFirestore(d)).toList());
+    return _supabase
+        .from('friend_relationships')
+        .stream(primaryKey: ['id'])
+        .eq('from_user_id', userId)
+        .map((rows) => rows
+            .where((r) => r['status'] == 'pending')
+            .map((r) => FriendRelationship.fromSupabaseRow(r))
+            .toList());
   }
 }

@@ -48,3 +48,10 @@ app.*.map.json
 /android/app/debug
 /android/app/profile
 /android/app/release
+
+# Per-session AppLogger output (written by tools/run_with_logs.ps1)
+/logs/
+
+# Local Supabase / runtime config — keys live here, never committed.
+# See .env.example for the shape; copy it to .env and fill in real values.
+.env

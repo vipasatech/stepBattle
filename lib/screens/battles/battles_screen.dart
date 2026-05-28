@@ -22,13 +22,15 @@ class _BattlesScreenState extends ConsumerState<BattlesScreen> {
   @override
   void initState() {
     super.initState();
-    // Auto-cancel any pending battles older than 24h that the user created
+    // Auto-cancel any pending battles older than 24h that the user created,
+    // and finalize any active battles whose endTime has passed.
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      final uid = ref.read(authStateProvider).valueOrNull?.uid;
+      final uid = ref.read(authStateProvider).valueOrNull?.id;
       if (uid != null) {
-        ref
-            .read(battleServiceProvider)
-            .cancelExpiredPendingBattles(uid);
+        final svc = ref.read(battleServiceProvider);
+        svc.cancelExpiredPendingBattles(uid);
+        svc.activateScheduledBattles(uid);
+        svc.completeExpiredBattles(uid);
       }
     });
   }
@@ -83,12 +85,31 @@ class _BattlesBody extends ConsumerWidget {
     final allBattles = ref.watch(allBattlesProvider);
     final incomingInvites =
         ref.watch(incomingBattleInvitesProvider).valueOrNull ?? [];
-    final uid = ref.watch(authStateProvider).valueOrNull?.uid ?? '';
+    final uid = ref.watch(authStateProvider).valueOrNull?.id ?? '';
 
-    return allBattles.when(
+    // Show the live reconnecting pill above whatever the body renders.
+    // Realtime errors should never reach the user as raw exception text;
+    // `retryingRealtimeStream` (see battle_provider.dart) keeps the
+    // StreamProvider in a value state and surfaces the reconnect state
+    // via [battlesReconnectingProvider] instead.
+    final reconnecting = ref.watch(battlesReconnectingProvider);
+
+    Widget body;
+    body = allBattles.when(
       loading: () => const Center(
           child: CircularProgressIndicator(color: AppColors.primary)),
-      error: (e, _) => Center(child: Text('Error loading battles: $e')),
+      // Non-transient errors only — transient realtime drops are caught
+      // by the retry wrapper before they ever reach this branch.
+      error: (e, _) => Center(
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Text(
+            'Could not load battles. Pull to retry.',
+            textAlign: TextAlign.center,
+            style: TextStyle(color: AppColors.onSurfaceVariant),
+          ),
+        ),
+      ),
       data: (_) {
         final active = ref.watch(activeBattlesProvider);
         final scheduled = ref.watch(scheduledBattlesProvider);
@@ -173,6 +194,53 @@ class _BattlesBody extends ConsumerWidget {
           ],
         );
       },
+    );
+
+    // Stack the body under a slim "Reconnecting…" pill while the
+    // realtime stream is retrying. Pill is intentionally small + at the
+    // top so it doesn't obscure content during normal reconnects.
+    return Stack(
+      children: [
+        body,
+        if (reconnecting)
+          Positioned(
+            top: 8,
+            left: 0,
+            right: 0,
+            child: Center(
+              child: Container(
+                padding: const EdgeInsets.symmetric(
+                    horizontal: 12, vertical: 6),
+                decoration: BoxDecoration(
+                  color: AppColors.primary.withValues(alpha: 0.15),
+                  borderRadius: BorderRadius.circular(20),
+                  border: Border.all(
+                      color: AppColors.primary.withValues(alpha: 0.3)),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const SizedBox(
+                      width: 12,
+                      height: 12,
+                      child: CircularProgressIndicator(
+                          strokeWidth: 2, color: AppColors.primary),
+                    ),
+                    const SizedBox(width: 8),
+                    Text(
+                      'Reconnecting…',
+                      style: TextStyle(
+                        color: AppColors.primary,
+                        fontWeight: FontWeight.w700,
+                        fontSize: 12,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+      ],
     );
   }
 

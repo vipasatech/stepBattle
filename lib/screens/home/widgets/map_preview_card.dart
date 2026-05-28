@@ -1,117 +1,208 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 import '../../../config/colors.dart';
+import '../../../providers/user_provider.dart';
+import '../../../sheets/set_home_sheet.dart';
 import '../../../widgets/glass_card.dart';
 
-/// Map preview section on Home — "Who's Leading Near You".
-/// V1: Coming Soon placeholder. Full map with Google Maps in a future update.
-class MapPreviewCard extends StatelessWidget {
+/// Map preview on Home — "Who's Leading Near You".
+///
+/// Two states:
+///   • Home district set → render a stylized "tap to enter" tile that opens
+///     the cinematic full-screen map at /map.
+///   • Home district NOT set → "Set home" CTA tile that opens [SetHomeSheet].
+///
+/// We deliberately don't render an interactive map preview here — the
+/// full map screen handles the GeoJSON download + cinematic open. This
+/// preview is just an entry point.
+class MapPreviewCard extends ConsumerWidget {
   const MapPreviewCard({super.key});
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final theme = Theme.of(context);
+    final user = ref.watch(userProfileProvider).valueOrNull;
+    final hasHome = user?.hasHome ?? false;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Text(
-          "Who's Leading Near You",
+          hasHome ? "Who's Leading Near You" : "Set your home",
           style: theme.textTheme.titleLarge?.copyWith(
             fontWeight: FontWeight.w700,
           ),
         ),
         const SizedBox(height: 12),
 
-        GlassCard(
-          padding: EdgeInsets.zero,
-          borderRadius: 20,
-          child: SizedBox(
-            height: 180,
-            child: Stack(
-              fit: StackFit.expand,
-              children: [
-                // Dark map background
-                Container(
-                  decoration: BoxDecoration(
-                    borderRadius: BorderRadius.circular(20),
-                    gradient: RadialGradient(
-                      center: Alignment.center,
-                      radius: 1.2,
-                      colors: [
-                        AppColors.surfaceContainerHigh,
-                        AppColors.surfaceContainerLowest,
-                      ],
-                    ),
-                  ),
-                ),
-                // Grid dots
-                CustomPaint(painter: _MapDotsPainter()),
-                // Center pin
-                Center(
-                  child: Container(
-                    width: 12,
-                    height: 12,
-                    decoration: BoxDecoration(
-                      color: AppColors.primary,
-                      shape: BoxShape.circle,
-                      boxShadow: [
-                        BoxShadow(
-                          color: AppColors.primary.withValues(alpha: 0.5),
-                          blurRadius: 12,
-                          spreadRadius: 4,
+        Material(
+          color: Colors.transparent,
+          child: InkWell(
+            borderRadius: BorderRadius.circular(20),
+            onTap: () {
+              if (hasHome) {
+                context.push('/map');
+              } else {
+                _openSetHomeSheet(context);
+              }
+            },
+            child: GlassCard(
+              padding: EdgeInsets.zero,
+              borderRadius: 20,
+              child: SizedBox(
+                height: 180,
+                child: Stack(
+                  fit: StackFit.expand,
+                  children: [
+                    // Background — radial gradient + grid dots
+                    Container(
+                      decoration: BoxDecoration(
+                        borderRadius: BorderRadius.circular(20),
+                        gradient: RadialGradient(
+                          center: Alignment.center,
+                          radius: 1.2,
+                          colors: hasHome
+                              ? [
+                                  AppColors.primary.withValues(alpha: 0.18),
+                                  AppColors.surfaceContainerLowest,
+                                ]
+                              : [
+                                  AppColors.amber.withValues(alpha: 0.12),
+                                  AppColors.surfaceContainerLowest,
+                                ],
                         ),
-                      ],
-                    ),
-                  ),
-                ),
-                // Coming Soon overlay
-                Positioned(
-                  bottom: 16,
-                  left: 16,
-                  right: 16,
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 16, vertical: 10),
-                    decoration: BoxDecoration(
-                      color: AppColors.surfaceContainerHigh
-                          .withValues(alpha: 0.9),
-                      borderRadius: BorderRadius.circular(12),
-                      border: Border.all(
-                        color: Colors.white.withValues(alpha: 0.05),
                       ),
                     ),
-                    child: Row(
-                      children: [
-                        Icon(Icons.explore,
-                            color: AppColors.primary, size: 18),
-                        const SizedBox(width: 8),
-                        Text(
-                          'Live map coming soon',
-                          style: theme.textTheme.bodySmall?.copyWith(
-                            color: AppColors.onSurfaceVariant,
-                          ),
+                    CustomPaint(painter: _MapDotsPainter()),
+
+                    // Center pin
+                    Center(
+                      child: Container(
+                        width: 14,
+                        height: 14,
+                        decoration: BoxDecoration(
+                          color: hasHome ? AppColors.primary : AppColors.amber,
+                          shape: BoxShape.circle,
+                          boxShadow: [
+                            BoxShadow(
+                              color: (hasHome
+                                      ? AppColors.primary
+                                      : AppColors.amber)
+                                  .withValues(alpha: 0.55),
+                              blurRadius: 16,
+                              spreadRadius: 6,
+                            ),
+                          ],
                         ),
-                        const Spacer(),
-                        Container(
-                          padding: const EdgeInsets.symmetric(
-                              horizontal: 8, vertical: 3),
-                          decoration: BoxDecoration(
-                            color: AppColors.primary.withValues(alpha: 0.15),
-                            borderRadius: BorderRadius.circular(8),
-                          ),
-                          child: Text('V2',
-                              style: theme.textTheme.labelSmall?.copyWith(
-                                  color: AppColors.primary,
-                                  fontWeight: FontWeight.w700)),
-                        ),
-                      ],
+                      ),
                     ),
-                  ),
+
+                    // Bottom info bar
+                    Positioned(
+                      bottom: 14,
+                      left: 14,
+                      right: 14,
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 14, vertical: 10),
+                        decoration: BoxDecoration(
+                          color: AppColors.surfaceContainerHigh
+                              .withValues(alpha: 0.92),
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(
+                            color: Colors.white.withValues(alpha: 0.06),
+                          ),
+                        ),
+                        child: Row(
+                          children: [
+                            Icon(
+                              hasHome ? Icons.public : Icons.location_off,
+                              color: hasHome
+                                  ? AppColors.primary
+                                  : AppColors.amber,
+                              size: 18,
+                            ),
+                            const SizedBox(width: 10),
+                            Expanded(
+                              child: hasHome
+                                  ? _HomeRow(user: user!)
+                                  : _UnsetRow(),
+                            ),
+                            Icon(
+                              Icons.chevron_right,
+                              color: AppColors.onSurfaceVariant,
+                              size: 18,
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ],
                 ),
-              ],
+              ),
             ),
           ),
         ),
+      ],
+    );
+  }
+
+  void _openSetHomeSheet(BuildContext context) {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      useRootNavigator: true,
+      backgroundColor: Colors.transparent,
+      builder: (_) => const SetHomeSheet(),
+    );
+  }
+}
+
+class _HomeRow extends StatelessWidget {
+  final dynamic user;
+  const _HomeRow({required this.user});
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final district = user.districtName as String? ?? '';
+    final state = user.stateName as String? ?? '';
+    final country = user.countryName as String? ?? '';
+    final headline = district.isNotEmpty
+        ? district
+        : (state.isNotEmpty ? state : country);
+    final sub = state.isNotEmpty && district.isNotEmpty
+        ? '$state · $country'
+        : country;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(headline,
+            style: theme.textTheme.titleSmall
+                ?.copyWith(fontWeight: FontWeight.w800)),
+        Text(sub,
+            style: theme.textTheme.labelSmall
+                ?.copyWith(color: AppColors.onSurfaceVariant)),
+      ],
+    );
+  }
+}
+
+class _UnsetRow extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text('Set your home district',
+            style: theme.textTheme.titleSmall
+                ?.copyWith(fontWeight: FontWeight.w800)),
+        Text('Unlock local leaderboards + the cinematic map',
+            style: theme.textTheme.labelSmall
+                ?.copyWith(color: AppColors.onSurfaceVariant)),
       ],
     );
   }
@@ -123,7 +214,6 @@ class _MapDotsPainter extends CustomPainter {
     final paint = Paint()
       ..color = AppColors.outlineVariant.withValues(alpha: 0.15)
       ..style = PaintingStyle.fill;
-
     const spacing = 30.0;
     for (double x = spacing; x < size.width; x += spacing) {
       for (double y = spacing; y < size.height; y += spacing) {

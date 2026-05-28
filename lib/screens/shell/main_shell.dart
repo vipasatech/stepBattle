@@ -4,8 +4,10 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../../config/colors.dart';
 import '../../providers/auth_provider.dart';
+import '../../providers/battle_provider.dart';
 import '../../providers/step_provider.dart';
 import '../../services/step_source_aggregator.dart';
+import '../../widgets/friend_request_toast_host.dart';
 import '../../widgets/permission_gate.dart';
 
 /// Main shell with 5-tab bottom nav.
@@ -26,14 +28,32 @@ class _MainShellState extends ConsumerState<MainShell> {
   bool _backfillTriggered = false;
 
   Future<void> _runInitialSync(String uid) async {
-    // 1. Backfill missing user doc fields (userCode, etc.)
-    await ref.read(authServiceProvider).ensureUserDataComplete(uid);
-
-    // 2. Force a step sync using the aggregator (max of native + HC + Fit).
+    // Each ref-read is guarded by `mounted` because this is a fire-and-forget
+    // chain that can outlive the widget (e.g., the user signs out mid-sync,
+    // which disposes the shell and invalidates `ref`).
+    //
+    // Profile creation no longer needs a client-side backfill — the
+    // `on_auth_user_created` trigger on the Supabase side inserts the
+    // profile row when the auth user is created.
+    if (!mounted) return;
+    // 1. Force a step sync using the aggregator (max of native + HC + Fit).
     //    Pushes today's aggregate to every downstream (step_logs, missions,
     //    battles, clan) AND writes the per-source hourly breakdown row.
     //    Needed because ref.listen only fires on CHANGE, not on first load.
     await _syncStepsAllSources(uid);
+
+    if (!mounted) return;
+    // 2. Activate any scheduled battles whose start_time has arrived. Has
+    //    to run before completion in case a battle's whole window elapsed
+    //    while the app was closed (would otherwise transition scheduled →
+    //    active → completed in two separate launches).
+    await ref.read(battleServiceProvider).activateScheduledBattles(uid);
+
+    if (!mounted) return;
+    // 3. Finalize any battles whose endTime passed while the app was closed.
+    //    Without Cloud Functions this is the only chance to award the win
+    //    before the user opens the Battles tab.
+    await ref.read(battleServiceProvider).completeExpiredBattles(uid);
   }
 
   /// Runs the canonical "we just got new step data" pipeline:
@@ -80,7 +100,7 @@ class _MainShellState extends ConsumerState<MainShell> {
   Widget build(BuildContext context) {
     // Run one-time schema backfill + force initial step sync when auth confirms.
     // Non-blocking: fires and forgets.
-    final uid = ref.watch(authStateProvider).valueOrNull?.uid;
+    final uid = ref.watch(authStateProvider).valueOrNull?.id;
     if (uid != null && !_backfillTriggered) {
       _backfillTriggered = true;
       _runInitialSync(uid);
@@ -95,7 +115,7 @@ class _MainShellState extends ConsumerState<MainShell> {
       if (newSteps == null || newSteps <= 0) return;
       if (prev?.valueOrNull == newSteps) return;
 
-      final uid = ref.read(authStateProvider).valueOrNull?.uid;
+      final uid = ref.read(authStateProvider).valueOrNull?.id;
       if (uid == null) return;
 
       // Use the cached reading from the aggregator — this is the SAME
@@ -120,14 +140,16 @@ class _MainShellState extends ConsumerState<MainShell> {
 
     final shell = widget.navigationShell;
     return PermissionGate(
-      child: Scaffold(
-        body: shell,
-        extendBody: true,
-        bottomNavigationBar: _BottomNavBar(
-          currentIndex: shell.currentIndex,
-          onTap: (index) => shell.goBranch(
-            index,
-            initialLocation: index == shell.currentIndex,
+      child: FriendRequestToastHost(
+        child: Scaffold(
+          body: shell,
+          extendBody: true,
+          bottomNavigationBar: _BottomNavBar(
+            currentIndex: shell.currentIndex,
+            onTap: (index) => shell.goBranch(
+              index,
+              initialLocation: index == shell.currentIndex,
+            ),
           ),
         ),
       ),

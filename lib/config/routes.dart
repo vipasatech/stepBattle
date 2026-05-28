@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../providers/auth_provider.dart';
+import '../utils/app_logger.dart';
 import '../screens/shell/main_shell.dart';
 import '../screens/home/home_screen.dart';
 import '../screens/battles/battles_screen.dart';
@@ -15,11 +16,41 @@ import '../screens/auth/login_screen.dart';
 import '../screens/auth/onboarding_screen.dart';
 import '../screens/clan_battle/create_clan_battle_screen.dart';
 import '../screens/clan_battle/join_clan_battle_screen.dart';
+import '../screens/map/map_screen.dart';
 import '../screens/onboarding/health_setup_screen.dart';
 import '../screens/profile/profile_screen.dart';
 import '../screens/profile/step_sources_screen.dart';
 
 final GlobalKey<NavigatorState> _rootNavigatorKey = GlobalKey<NavigatorState>();
+
+/// NavigatorObserver that logs every push/pop/replace to AppLogger.nav.
+/// Keeps a record of which screen the user is on at every tap so we can
+/// correlate downstream service events with the current UI surface.
+class _NavLoggingObserver extends NavigatorObserver {
+  @override
+  void didPush(Route route, Route? previousRoute) {
+    AppLogger.nav.i('push', fields: {
+      'to': route.settings.name ?? route.settings.toString(),
+      'from': previousRoute?.settings.name,
+    });
+  }
+
+  @override
+  void didPop(Route route, Route? previousRoute) {
+    AppLogger.nav.i('pop', fields: {
+      'from': route.settings.name ?? route.settings.toString(),
+      'to': previousRoute?.settings.name,
+    });
+  }
+
+  @override
+  void didReplace({Route? newRoute, Route? oldRoute}) {
+    AppLogger.nav.i('replace', fields: {
+      'old': oldRoute?.settings.name,
+      'new': newRoute?.settings.name,
+    });
+  }
+}
 
 /// GoRouter provider — rebuilds when auth state changes for redirect logic.
 final routerProvider = Provider<GoRouter>((ref) {
@@ -29,6 +60,7 @@ final routerProvider = Provider<GoRouter>((ref) {
   return GoRouter(
     navigatorKey: _rootNavigatorKey,
     initialLocation: '/home',
+    observers: [_NavLoggingObserver()],
     redirect: (context, state) {
       final user = authState.valueOrNull;
       final isLoggedIn = user != null;
@@ -107,6 +139,15 @@ final routerProvider = Provider<GoRouter>((ref) {
         builder: (context, state) => BattleGroundScreen(
           battleId: state.pathParameters['id']!,
         ),
+      ),
+
+      // Map — full-screen cinematic map. Auto-redirects to Set Home
+      // sheet when the user hasn't set a home district.
+      GoRoute(
+        parentNavigatorKey: _rootNavigatorKey,
+        path: '/map',
+        name: 'map',
+        builder: (context, state) => const MapScreen(),
       ),
 
       // Main app shell with 5 tabs

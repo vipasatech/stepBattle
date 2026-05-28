@@ -1,4 +1,6 @@
 import 'dart:developer' as dev;
+
+import '../utils/app_logger.dart';
 import 'google_fit_service.dart';
 import 'health_service.dart';
 import 'native_step_service.dart';
@@ -22,10 +24,9 @@ class StepReading {
   /// from "we didn't ask Fit at all."
   final int? googleFitSteps;
 
-  /// Effective value the rest of the app reads.
-  /// = max(nativeSteps, healthConnectSteps, googleFitSteps ?? -1).
-  /// Max because all three sources read the same physical activity; sum
-  /// would double-count. Max favors freshness when one source is stale.
+  /// Effective value the rest of the app reads. Chosen by [pickAggregate]
+  /// (HC-preferred, with per-source sanity checks against impossible
+  /// readings).
   final int aggregate;
 
   /// Per-source timeout / error snapshots for the debug screen.
@@ -52,18 +53,22 @@ class StepReading {
 
 /// Orchestrates all step data sources behind a single API.
 ///
-/// Strategy:
-///   1. Query native + Health Connect in parallel (each with a timeout).
-///   2. Return `max(values)` — never `sum` (would double-count overlapping
-///      readings of the same hardware counter).
-///   3. Cache per-source values for the debug screen.
+/// Source selection (changed from the original `max()` policy after a
+/// corrupt native baseline poisoned today's step count with a 40k+ value
+/// — see logs/2026-05-26_15-15-42):
 ///
-/// Why max:
-///   - Native sensor is real-time; HC may lag while Samsung Health batches.
-///   - HC can be higher than native when it aggregates a Galaxy Watch reading
-///     the phone alone wouldn't see.
-///   - Either source returning 0 (no permission, no feeder) shouldn't suppress
-///     the other.
+///   1. Run a sanity check on each per-source reading. Anything >
+///      [_perDayMax] is treated as "this source is lying" and discarded
+///      with a `sourceRejected` warning.
+///   2. Prefer Health Connect when available — it's the authoritative
+///      OEM-fed value on Android (Samsung Health, Mi Fit, Fitbit, etc.).
+///   3. Fall back to native pedometer for devices without an HC feeder
+///      (Realme/Motorola on a fresh install).
+///   4. Google Fit fallback only when explicitly opted in.
+///
+/// If native disagrees wildly with HC (HC=440, native=40k), trust HC and
+/// ask NativeStepService to repair its corrupt baseline (see
+/// [NativeStepService.repairBaselineFromTrustedSource]).
 class StepSourceAggregator {
   final NativeStepService _native;
   final HealthService _hc;
@@ -73,6 +78,17 @@ class StepSourceAggregator {
   /// monotonic-within-a-day floor and by the debug screen.
   StepReading? _lastReading;
   StepReading? get lastReading => _lastReading;
+
+  /// Anything beyond this is treated as garbage. The world record for
+  /// most steps in 24h is around 200k; everyday users top out well below.
+  /// 100k gives plenty of headroom but rejects the corrupt-baseline
+  /// scenario (which surfaces as the device's lifetime step count, often
+  /// in the 40k–200k+ range).
+  static const int _perDayMax = 100000;
+
+  /// If native says >10k MORE than HC (when HC is available and trusted),
+  /// we conclude native's baseline is wrong and repair it.
+  static const int _nativeDriftFromHCToRepair = 10000;
 
   static const _nativeTimeout = Duration(seconds: 1);
   static const _hcTimeout = Duration(seconds: 3);
@@ -86,22 +102,16 @@ class StepSourceAggregator {
         _hc = healthService,
         _fit = googleFit;
 
-  /// Eager startup — call once after permissions are granted.
   Future<void> warmUp() async {
     await _native.start();
   }
 
-  /// Best-effort today's step count across all sources.
-  /// Never throws — falls back to 0 if everything fails.
   Future<int> getTodaySteps() async {
     final reading = await readWithDebug();
     return reading.aggregate;
   }
 
-  /// Same as [getTodaySteps] but returns the full per-source breakdown.
   Future<StepReading> readWithDebug() async {
-    // Run all three in parallel — Fit only fires if user opted in, so we
-    // don't burn the OAuth token on every poll for the 99% who never enabled.
     final nativeStart = DateTime.now();
     final hcStart = DateTime.now();
     final fitStart = DateTime.now();
@@ -131,38 +141,107 @@ class StepSourceAggregator {
       hcFuture,
       fitFuture,
     ]);
-    final nativeVal = results[0] as int;
-    final hcVal = results[1] as int;
-    final fitVal = results[2] as int?;
+    final nativeRaw = results[0] as int;
+    final hcRaw = results[1] as int;
+    final fitRaw = results[2] as int?;
 
     final nativeLatency = DateTime.now().difference(nativeStart);
     final hcLatency = DateTime.now().difference(hcStart);
     final fitLatency = DateTime.now().difference(fitStart);
 
+    // -------------------------------------------------------------------
+    // Sanity-check each source. A reading > _perDayMax can't be a real
+    // human walking — almost always a corrupt cumulative baseline. Mark
+    // the source as errored so it isn't considered for the aggregate.
+    // -------------------------------------------------------------------
+    final nativeValid = nativeRaw >= 0 && nativeRaw <= _perDayMax;
+    final hcValid = hcRaw >= 0 && hcRaw <= _perDayMax;
+    final fitValid = fitRaw == null || (fitRaw >= 0 && fitRaw <= _perDayMax);
+
+    if (!nativeValid) {
+      AppLogger.health.w('aggregator:sourceRejected', fields: {
+        'source': 'native',
+        'value': nativeRaw,
+        'reason': 'exceeds_per_day_max_$_perDayMax',
+      });
+    }
+    if (!hcValid) {
+      AppLogger.health.w('aggregator:sourceRejected', fields: {
+        'source': 'health_connect',
+        'value': hcRaw,
+        'reason': 'exceeds_per_day_max_$_perDayMax',
+      });
+    }
+    if (!fitValid) {
+      AppLogger.health.w('aggregator:sourceRejected', fields: {
+        'source': 'google_fit',
+        'value': fitRaw,
+        'reason': 'exceeds_per_day_max_$_perDayMax',
+      });
+    }
+
+    // -------------------------------------------------------------------
+    // Detect "native baseline poisoned" — native is valid by itself but
+    // dramatically higher than HC, which is the authoritative source when
+    // present. Ask NativeStepService to repair so the next read converges.
+    // -------------------------------------------------------------------
+    if (nativeValid &&
+        hcValid &&
+        hcRaw > 0 &&
+        nativeRaw - hcRaw > _nativeDriftFromHCToRepair) {
+      AppLogger.health.w('aggregator:nativeBaselineDrift', fields: {
+        'native': nativeRaw,
+        'hc': hcRaw,
+        'drift': nativeRaw - hcRaw,
+      });
+      // Fire and forget — repair persists to Hive; next read picks up the
+      // corrected baseline.
+      _native.repairBaselineFromTrustedSource(trustedTodaySteps: hcRaw);
+    }
+
+    // -------------------------------------------------------------------
+    // Pick the winner: HC first, then native, then Fit.
+    // -------------------------------------------------------------------
+    int aggregate;
+    if (hcValid && hcRaw > 0) {
+      aggregate = hcRaw;
+    } else if (nativeValid && nativeRaw > 0) {
+      aggregate = nativeRaw;
+    } else if (fitValid && (fitRaw ?? 0) > 0) {
+      aggregate = fitRaw!;
+    } else {
+      aggregate = 0;
+    }
+
     String? nativeErr;
-    if (nativeLatency > _nativeTimeout) nativeErr = 'slow_native_read';
-    if (!_native.isAvailable) nativeErr ??= _native.lastError;
+    if (!nativeValid) {
+      nativeErr = 'invalid_value_$nativeRaw';
+    } else {
+      if (nativeLatency > _nativeTimeout) nativeErr = 'slow_native_read';
+      if (!_native.isAvailable) nativeErr ??= _native.lastError;
+    }
 
     String? hcErr;
-    if (hcLatency >= _hcTimeout) hcErr = 'timeout';
+    if (!hcValid) {
+      hcErr = 'invalid_value_$hcRaw';
+    } else if (hcLatency >= _hcTimeout) {
+      hcErr = 'timeout';
+    }
 
     String? fitErr;
-    if (_fit.isEnabled && fitVal == null) {
+    if (!fitValid) {
+      fitErr = 'invalid_value_$fitRaw';
+    } else if (_fit.isEnabled && fitRaw == null) {
       fitErr = _fit.lastError ?? 'fit_unavailable';
     }
 
-    // Aggregate: max across all available sources. Fit treated as -1
-    // when null so it never wins-by-default.
-    final fitForMax = fitVal ?? -1;
-    var aggregate = nativeVal;
-    if (hcVal > aggregate) aggregate = hcVal;
-    if (fitForMax > aggregate) aggregate = fitForMax;
-    if (aggregate < 0) aggregate = 0;
-
     final reading = StepReading(
-      nativeSteps: nativeVal,
-      healthConnectSteps: hcVal,
-      googleFitSteps: fitVal,
+      // Surface the validated value to consumers (debug screen included)
+      // so the dashboard never shows the rejected number as if it were
+      // real. Invalid reads collapse to 0 here.
+      nativeSteps: nativeValid ? nativeRaw : 0,
+      healthConnectSteps: hcValid ? hcRaw : 0,
+      googleFitSteps: fitValid ? fitRaw : null,
       aggregate: aggregate,
       nativeLatency: nativeLatency,
       healthConnectLatency: hcLatency,
@@ -173,11 +252,10 @@ class StepSourceAggregator {
     );
     _lastReading = reading;
 
-    // Single-line per-source breakdown so logs show which source produced
-    // the winning value at any moment. Tagged so you can grep for it.
     dev.log(
-      'native=$nativeVal hc=$hcVal '
-      'fit=${fitVal ?? "null"} '
+      'native=$nativeRaw(${nativeValid ? "ok" : "drop"}) '
+      'hc=$hcRaw(${hcValid ? "ok" : "drop"}) '
+      'fit=${fitRaw ?? "null"}(${fitValid ? "ok" : "drop"}) '
       'agg=$aggregate '
       'errs={n=${nativeErr ?? "-"}, h=${hcErr ?? "-"}, f=${fitErr ?? "-"}}',
       name: 'StepSourceAggregator',

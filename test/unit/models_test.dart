@@ -60,6 +60,99 @@ void main() {
       expect(updated.email, 'test@test.com'); // unchanged
       expect(updated.userId, 'u1'); // immutable
     });
+
+    test('toFirestore includes geo fields when set', () {
+      final user = UserModel(
+        userId: 'u1',
+        userCode: '#GEO1',
+        displayName: 'Geo',
+        email: 'geo@test.com',
+        createdAt: DateTime(2026, 1, 1),
+        lastActiveAt: DateTime(2026, 4, 28),
+        countryCode: 'IN',
+        countryName: 'India',
+        stateName: 'Telangana',
+        districtName: 'Hyderabad',
+        homeLat: 17.385,
+        homeLng: 78.486,
+        homeSetAt: DateTime(2026, 4, 28),
+      );
+
+      final map = user.toFirestore();
+      expect(map['countryCode'], 'IN');
+      expect(map['countryName'], 'India');
+      expect(map['stateName'], 'Telangana');
+      expect(map['districtName'], 'Hyderabad');
+      expect(map['homeLat'], 17.385);
+      expect(map['homeLng'], 78.486);
+      // homeSetAt is serialized as a Timestamp instance — just verify it
+      // is non-null without depending on Firestore types in this unit test.
+      expect(map['homeSetAt'], isNotNull);
+    });
+
+    test('toFirestore writes nulls for unset geo fields', () {
+      final user = UserModel(
+        userId: 'u1',
+        userCode: '#GEO2',
+        displayName: 'NoHome',
+        email: 'nohome@test.com',
+        createdAt: DateTime(2026, 1, 1),
+        lastActiveAt: DateTime(2026, 4, 28),
+      );
+
+      final map = user.toFirestore();
+      expect(map['countryCode'], isNull);
+      expect(map['stateName'], isNull);
+      expect(map['districtName'], isNull);
+      expect(map['homeLat'], isNull);
+      expect(map['homeSetAt'], isNull);
+    });
+
+    test('hasHome is true only when countryCode is set', () {
+      final unset = UserModel(
+        userId: 'u1',
+        userCode: '#H1',
+        displayName: 'A',
+        email: 'a@test.com',
+        createdAt: DateTime(2026, 1, 1),
+        lastActiveAt: DateTime(2026, 4, 28),
+      );
+      expect(unset.hasHome, isFalse);
+
+      final set = unset.copyWith(countryCode: 'IN');
+      expect(set.hasHome, isTrue);
+    });
+
+    test('copyWith preserves geo fields and lets you override', () {
+      final user = UserModel(
+        userId: 'u1',
+        userCode: '#H2',
+        displayName: 'Mover',
+        email: 'm@test.com',
+        createdAt: DateTime(2026, 1, 1),
+        lastActiveAt: DateTime(2026, 4, 28),
+        countryCode: 'IN',
+        countryName: 'India',
+        stateName: 'Telangana',
+        districtName: 'Hyderabad',
+      );
+
+      // Move within India: change district + state, country preserved.
+      final moved = user.copyWith(
+        stateName: 'Karnataka',
+        districtName: 'Bengaluru Urban',
+      );
+      expect(moved.countryCode, 'IN');
+      expect(moved.countryName, 'India');
+      expect(moved.stateName, 'Karnataka');
+      expect(moved.districtName, 'Bengaluru Urban');
+
+      // Untouched copyWith preserves all geo.
+      final unchanged = user.copyWith(level: 5);
+      expect(unchanged.countryCode, 'IN');
+      expect(unchanged.stateName, 'Telangana');
+      expect(unchanged.districtName, 'Hyderabad');
+    });
   });
 
   group('BattleModel', () {

@@ -50,6 +50,23 @@ class NotificationModel {
     );
   }
 
+  /// Build from a Supabase `public.notifications` row.
+  factory NotificationModel.fromSupabaseRow(Map<String, dynamic> d) {
+    return NotificationModel(
+      id: d['id'] as String? ?? '',
+      userId: d['user_id'] as String? ?? '',
+      type: _parseType(d['type'] as String? ?? 'other'),
+      title: d['title'] as String? ?? '',
+      body: d['body'] as String? ?? '',
+      // jsonb is decoded straight to Map<String, dynamic> by the SDK.
+      data: Map<String, dynamic>.from(d['data'] as Map? ?? const {}),
+      read: d['read'] as bool? ?? false,
+      createdAt:
+          DateTime.tryParse(d['created_at']?.toString() ?? '') ??
+              DateTime.now(),
+    );
+  }
+
   static NotificationType _parseType(String s) => switch (s) {
         'friend_request' => NotificationType.friendRequest,
         'friend_accepted' => NotificationType.friendAccepted,

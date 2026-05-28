@@ -2,19 +2,31 @@ import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import '../config/colors.dart';
 
-/// Lets the user pick when a battle ends. Presets for common windows
-/// plus a Custom option that opens a combined date + time picker.
+/// Picks the battle's full time window: a start moment AND an end moment.
 ///
-/// The selected value is an absolute [DateTime] — the moment the battle
-/// ends. When the battle activates (all invitees accept), the server
-/// preserves the picked duration from the activation moment, so a delayed
-/// acceptance doesn't shrink the window.
-class BattleDurationPicker extends StatefulWidget {
-  /// Fires whenever the selected end time changes.
-  final ValueChanged<DateTime> onChanged;
+/// UX layers, top to bottom:
+///   1. `SELECT BATTLE DURATION` header
+///   2. Duration chips (12h, 1d, 3d, 1w, Custom) — quick presets that
+///      recompute `endTime = startTime + duration`
+///   3. Two pill rows: "Starts" and "Ends" — tap either to open a
+///      date+time picker
+///
+/// Default: start = now, end = now + 1 day, preset = 1d.
+///
+/// The parent receives every committed change via [onChanged] as a
+/// `BattleWindow` (immutable start/end pair). The chips drive a recomputed
+/// end whenever the start moves so the preset duration stays correct.
+class BattleWindow {
+  final DateTime start;
+  final DateTime end;
+  const BattleWindow(this.start, this.end);
+  Duration get duration => end.difference(start);
+  bool get isValid => end.isAfter(start);
+}
 
-  /// Initial selection. If null, defaults to now + 1 day.
-  final DateTime? initial;
+class BattleDurationPicker extends StatefulWidget {
+  final ValueChanged<BattleWindow> onChanged;
+  final BattleWindow? initial;
 
   const BattleDurationPicker({
     super.key,
@@ -29,16 +41,9 @@ class BattleDurationPicker extends StatefulWidget {
 enum _Preset { h12, d1, d3, w1, custom }
 
 class _BattleDurationPickerState extends State<BattleDurationPicker> {
-  late DateTime _endTime;
+  late DateTime _start;
+  late DateTime _end;
   _Preset _preset = _Preset.d1;
-
-  static const _presetLabels = {
-    _Preset.h12: '12 hours',
-    _Preset.d1: '1 day',
-    _Preset.d3: '3 days',
-    _Preset.w1: '1 week',
-    _Preset.custom: 'Custom',
-  };
 
   static const _presetShort = {
     _Preset.h12: '12h',
@@ -48,14 +53,27 @@ class _BattleDurationPickerState extends State<BattleDurationPicker> {
     _Preset.custom: 'Custom',
   };
 
+  static const _presetLabels = {
+    _Preset.h12: '12 hours',
+    _Preset.d1: '1 day',
+    _Preset.d3: '3 days',
+    _Preset.w1: '1 week',
+    _Preset.custom: 'Custom',
+  };
+
   @override
   void initState() {
     super.initState();
-    _endTime =
-        widget.initial ?? DateTime.now().add(const Duration(days: 1));
-    // Fire once so the parent receives the initial value.
+    final initial = widget.initial;
+    if (initial != null) {
+      _start = initial.start;
+      _end = initial.end;
+    } else {
+      _start = DateTime.now();
+      _end = _start.add(const Duration(days: 1));
+    }
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      widget.onChanged(_endTime);
+      widget.onChanged(BattleWindow(_start, _end));
     });
   }
 
@@ -64,38 +82,72 @@ class _BattleDurationPickerState extends State<BattleDurationPicker> {
         _Preset.d1 => const Duration(days: 1),
         _Preset.d3 => const Duration(days: 3),
         _Preset.w1 => const Duration(days: 7),
-        _Preset.custom => Duration.zero, // sentinel
+        _Preset.custom => Duration.zero,
       };
 
-  void _pick(_Preset p) async {
+  void _pickPreset(_Preset p) {
     if (p == _Preset.custom) {
-      final picked = await _showCustomPicker();
-      if (picked == null) return;
-      setState(() {
-        _preset = _Preset.custom;
-        _endTime = picked;
-      });
-      widget.onChanged(picked);
-    } else {
-      final next = DateTime.now().add(_durationForPreset(p));
-      setState(() {
-        _preset = p;
-        _endTime = next;
-      });
-      widget.onChanged(next);
+      // Custom means "you'll choose end manually" — open the end picker.
+      _editEnd();
+      return;
     }
+    setState(() {
+      _preset = p;
+      _end = _start.add(_durationForPreset(p));
+    });
+    widget.onChanged(BattleWindow(_start, _end));
   }
 
-  Future<DateTime?> _showCustomPicker() async {
-    final now = DateTime.now();
+  Future<void> _editStart() async {
+    final picked = await _showDateTimePicker(
+      initial: _start,
+      // Clamp to >= now (or a small back-skew tolerance handled in service).
+      firstDate: DateTime.now().subtract(const Duration(minutes: 1)),
+      helpDate: 'Start date',
+      helpTime: 'Start time',
+    );
+    if (picked == null) return;
+    setState(() {
+      _start = picked;
+      // Preserve the active duration relative to the new start (unless the
+      // user picked Custom — in which case end is independent).
+      if (_preset != _Preset.custom) {
+        _end = _start.add(_durationForPreset(_preset));
+      } else if (!_end.isAfter(_start)) {
+        // Avoid invalid window if user dragged start past the old end.
+        _end = _start.add(const Duration(hours: 1));
+      }
+    });
+    widget.onChanged(BattleWindow(_start, _end));
+  }
+
+  Future<void> _editEnd() async {
+    final picked = await _showDateTimePicker(
+      initial: _end.isAfter(_start) ? _end : _start.add(const Duration(hours: 1)),
+      firstDate: _start.add(const Duration(minutes: 1)),
+      helpDate: 'End date',
+      helpTime: 'End time',
+    );
+    if (picked == null) return;
+    setState(() {
+      _preset = _Preset.custom;
+      _end = picked;
+    });
+    widget.onChanged(BattleWindow(_start, _end));
+  }
+
+  Future<DateTime?> _showDateTimePicker({
+    required DateTime initial,
+    required DateTime firstDate,
+    required String helpDate,
+    required String helpTime,
+  }) async {
     final date = await showDatePicker(
       context: context,
-      initialDate: _preset == _Preset.custom
-          ? _endTime
-          : now.add(const Duration(days: 1)),
-      firstDate: now,
-      lastDate: now.add(const Duration(days: 30)),
-      helpText: 'End date',
+      initialDate: initial.isBefore(firstDate) ? firstDate : initial,
+      firstDate: firstDate,
+      lastDate: DateTime.now().add(const Duration(days: 30)),
+      helpText: helpDate,
       builder: (ctx, child) => Theme(
         data: Theme.of(ctx).copyWith(
           colorScheme: Theme.of(ctx).colorScheme.copyWith(
@@ -110,10 +162,8 @@ class _BattleDurationPickerState extends State<BattleDurationPicker> {
 
     final time = await showTimePicker(
       context: context,
-      initialTime: _preset == _Preset.custom
-          ? TimeOfDay.fromDateTime(_endTime)
-          : const TimeOfDay(hour: 18, minute: 0),
-      helpText: 'End time',
+      initialTime: TimeOfDay.fromDateTime(initial),
+      helpText: helpTime,
       builder: (ctx, child) => Theme(
         data: Theme.of(ctx).copyWith(
           colorScheme: Theme.of(ctx).colorScheme.copyWith(
@@ -126,22 +176,15 @@ class _BattleDurationPickerState extends State<BattleDurationPicker> {
     );
     if (time == null) return null;
 
-    final combined = DateTime(
-      date.year,
-      date.month,
-      date.day,
-      time.hour,
-      time.minute,
-    );
-    // Guard: custom picks must be at least 1 hour out.
-    final earliest = DateTime.now().add(const Duration(hours: 1));
-    if (combined.isBefore(earliest)) return earliest;
-    return combined;
+    return DateTime(date.year, date.month, date.day, time.hour, time.minute);
   }
 
-  String get _summary {
-    final diff = _endTime.difference(DateTime.now());
-    if (diff.isNegative) return 'Invalid time';
+  String _format(DateTime t) =>
+      DateFormat('E, MMM d • h:mm a').format(t.toLocal());
+
+  String get _durationSummary {
+    final diff = _end.difference(_start);
+    if (diff.isNegative || diff == Duration.zero) return 'Invalid window';
     final d = diff.inDays;
     final h = diff.inHours % 24;
     final m = diff.inMinutes % 60;
@@ -149,10 +192,7 @@ class _BattleDurationPickerState extends State<BattleDurationPicker> {
     if (d > 0) parts.add('${d}d');
     if (h > 0) parts.add('${h}h');
     if (d == 0 && m > 0) parts.add('${m}m');
-    final rel = parts.join(' ');
-    final abs =
-        DateFormat('E, MMM d \u2022 h:mm a').format(_endTime.toLocal());
-    return '$rel \u2022 ends $abs';
+    return parts.join(' ');
   }
 
   @override
@@ -161,12 +201,14 @@ class _BattleDurationPickerState extends State<BattleDurationPicker> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text('BATTLE ENDS',
+        Text('SELECT BATTLE DURATION',
             style: theme.textTheme.labelSmall?.copyWith(
               color: AppColors.onSurfaceVariant,
               letterSpacing: 2,
             )),
         const SizedBox(height: 10),
+
+        // Preset chips
         Wrap(
           spacing: 8,
           runSpacing: 8,
@@ -174,63 +216,93 @@ class _BattleDurationPickerState extends State<BattleDurationPicker> {
               .map((p) => _Chip(
                     label: _presetShort[p]!,
                     selected: _preset == p,
-                    onTap: () => _pick(p),
+                    onTap: () => _pickPreset(p),
                   ))
               .toList(),
         ),
-        const SizedBox(height: 10),
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-          decoration: BoxDecoration(
-            color: AppColors.surfaceContainerLow,
-            borderRadius: BorderRadius.circular(12),
-            border: Border.all(
-                color: AppColors.primary.withValues(alpha: 0.12)),
-          ),
-          child: Row(
-            children: [
-              Icon(Icons.schedule,
-                  size: 16, color: AppColors.primary),
-              const SizedBox(width: 8),
-              Expanded(
-                child: Text(
-                  _summary,
-                  style: theme.textTheme.bodySmall?.copyWith(
-                    color: AppColors.onSurface,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-              ),
-              if (_preset != _Preset.custom)
-                TextButton(
-                  onPressed: () => _pick(_Preset.custom),
-                  style: TextButton.styleFrom(
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 8, vertical: 0),
-                    minimumSize: const Size(0, 24),
-                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                  ),
-                  child: Text(
-                    'Edit',
-                    style: theme.textTheme.labelSmall?.copyWith(
-                      color: AppColors.primary,
-                      fontWeight: FontWeight.w700,
-                    ),
-                  ),
-                ),
-            ],
+        const SizedBox(height: 14),
+
+        // Start + End pills
+        _TimePill(
+          icon: Icons.play_arrow_rounded,
+          label: 'Starts',
+          value: _format(_start),
+          onTap: _editStart,
+        ),
+        const SizedBox(height: 8),
+        _TimePill(
+          icon: Icons.flag_rounded,
+          label: 'Ends',
+          value: _format(_end),
+          onTap: _editEnd,
+        ),
+
+        const SizedBox(height: 6),
+        Text(
+          _preset == _Preset.custom
+              ? 'Custom • $_durationSummary'
+              : '${_presetLabels[_preset]} • $_durationSummary',
+          style: theme.textTheme.labelSmall?.copyWith(
+            color: AppColors.onSurfaceVariant,
           ),
         ),
-        if (_preset != _Preset.custom) ...[
-          const SizedBox(height: 4),
-          Text(
-            _presetLabels[_preset]!,
-            style: theme.textTheme.labelSmall?.copyWith(
-              color: AppColors.onSurfaceVariant,
-            ),
-          ),
-        ],
       ],
+    );
+  }
+}
+
+class _TimePill extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final String value;
+  final VoidCallback onTap;
+
+  const _TimePill({
+    required this.icon,
+    required this.label,
+    required this.value,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+        decoration: BoxDecoration(
+          color: AppColors.surfaceContainerLow,
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(
+              color: AppColors.primary.withValues(alpha: 0.12)),
+        ),
+        child: Row(
+          children: [
+            Icon(icon, size: 18, color: AppColors.primary),
+            const SizedBox(width: 10),
+            Text(label,
+                style: theme.textTheme.labelMedium?.copyWith(
+                  color: AppColors.onSurfaceVariant,
+                  fontWeight: FontWeight.w700,
+                )),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Text(
+                value,
+                style: theme.textTheme.bodyMedium?.copyWith(
+                  color: AppColors.onSurface,
+                  fontWeight: FontWeight.w700,
+                ),
+                textAlign: TextAlign.right,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+            const SizedBox(width: 6),
+            Icon(Icons.edit, size: 14, color: AppColors.onSurfaceVariant),
+          ],
+        ),
+      ),
     );
   }
 }

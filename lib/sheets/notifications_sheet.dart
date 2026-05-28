@@ -1,6 +1,6 @@
-import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 import '../config/colors.dart';
 import '../models/notification_model.dart';
 import '../providers/battle_provider.dart';
@@ -55,7 +55,7 @@ class NotificationsSheet extends ConsumerWidget {
                   if (sorted.any((n) => !n.read))
                     TextButton(
                       onPressed: () {
-                        final uid = FirebaseAuth.instance.currentUser?.uid;
+                        final uid = Supabase.instance.client.auth.currentUser?.id;
                         if (uid != null) markAllNotificationsRead(uid);
                       },
                       child: const Text('Mark all read'),
@@ -213,22 +213,31 @@ class _ActionButtonsState extends State<_ActionButtons> {
     setState(() => _busy = true);
     try {
       final n = widget.notification;
-      final uid = FirebaseAuth.instance.currentUser?.uid;
+      final uid = Supabase.instance.client.auth.currentUser?.id;
 
+      // Read snake_case keys — that's what the Supabase writers use
+      // (BattleService.createBattle, FriendService.sendRequest,
+      // ClanService.createClan all stamp keys in `data` as snake_case to
+      // match the Postgres jsonb column convention). The legacy
+      // camelCase fallback covers any pre-migration Firestore-era rows
+      // that might still be cached.
       if (n.type == NotificationType.friendRequest) {
-        final relId = n.data['relationshipId'] as String?;
+        final relId = (n.data['relationship_id'] ??
+            n.data['relationshipId']) as String?;
         if (relId != null) {
           await widget.ref.read(friendServiceProvider).acceptRequest(relId);
         }
       } else if (n.type == NotificationType.battleInvite) {
-        final battleId = n.data['battleId'] as String?;
+        final battleId =
+            (n.data['battle_id'] ?? n.data['battleId']) as String?;
         if (battleId != null && uid != null) {
           await widget.ref
               .read(battleServiceProvider)
               .acceptInvite(battleId: battleId, userId: uid);
         }
       } else if (n.type == NotificationType.clanInvite) {
-        final clanId = n.data['clanId'] as String?;
+        final clanId =
+            (n.data['clan_id'] ?? n.data['clanId']) as String?;
         if (clanId != null && uid != null) {
           await widget.ref
               .read(clanServiceProvider)
@@ -244,22 +253,25 @@ class _ActionButtonsState extends State<_ActionButtons> {
     setState(() => _busy = true);
     try {
       final n = widget.notification;
-      final uid = FirebaseAuth.instance.currentUser?.uid;
+      final uid = Supabase.instance.client.auth.currentUser?.id;
 
       if (n.type == NotificationType.friendRequest) {
-        final relId = n.data['relationshipId'] as String?;
+        final relId = (n.data['relationship_id'] ??
+            n.data['relationshipId']) as String?;
         if (relId != null) {
           await widget.ref.read(friendServiceProvider).rejectRequest(relId);
         }
       } else if (n.type == NotificationType.battleInvite) {
-        final battleId = n.data['battleId'] as String?;
+        final battleId =
+            (n.data['battle_id'] ?? n.data['battleId']) as String?;
         if (battleId != null && uid != null) {
           await widget.ref
               .read(battleServiceProvider)
               .rejectInvite(battleId: battleId, userId: uid);
         }
       } else if (n.type == NotificationType.clanInvite) {
-        final clanId = n.data['clanId'] as String?;
+        final clanId =
+            (n.data['clan_id'] ?? n.data['clanId']) as String?;
         if (clanId != null && uid != null) {
           await widget.ref
               .read(clanServiceProvider)

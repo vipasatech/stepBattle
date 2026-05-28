@@ -18,7 +18,7 @@ class ActiveBattleCard extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final activeBattle = ref.watch(firstActiveBattleProvider);
     final lastCompleted = ref.watch(lastCompletedBattleProvider);
-    final uid = ref.watch(authStateProvider).valueOrNull?.uid ?? '';
+    final uid = ref.watch(authStateProvider).valueOrNull?.id ?? '';
 
     final theme = Theme.of(context);
 

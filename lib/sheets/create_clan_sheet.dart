@@ -1,6 +1,6 @@
-import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 import '../config/colors.dart';
 import '../config/constants.dart';
 import '../models/user_model.dart';
@@ -53,7 +53,7 @@ class _CreateClanSheetState extends ConsumerState<CreateClanSheet> {
     setState(() => _creating = true);
 
     try {
-      final uid = FirebaseAuth.instance.currentUser!.uid;
+      final uid = Supabase.instance.client.auth.currentUser!.id;
       await ref.read(clanServiceProvider).createClan(
             name: _nameController.text.trim(),
             captainId: uid,

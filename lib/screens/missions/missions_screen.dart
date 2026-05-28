@@ -8,6 +8,7 @@ import '../../providers/stats_provider.dart';
 import '../../providers/user_provider.dart';
 import '../../sheets/mission_detail_sheet.dart';
 import '../../widgets/avatar_circle.dart';
+import '../../widgets/reset_countdown.dart';
 import 'widgets/daily_mission_card.dart';
 import 'widgets/weekly_challenge_card.dart';
 
@@ -111,15 +112,16 @@ class _MissionsBody extends ConsumerWidget {
     return ListView(
       padding: const EdgeInsets.fromLTRB(20, 0, 20, 120),
       children: [
-        // Reset timer
+        // Reset timer — live countdown to next local midnight
         Padding(
           padding: const EdgeInsets.only(bottom: 20),
           child: Row(
             children: [
               Icon(Icons.schedule, size: 14, color: AppColors.onSurfaceVariant),
               const SizedBox(width: 6),
-              Text(
-                'Daily missions reset in 4h 22m',
+              ResetCountdown(
+                prefix: 'Daily missions reset in',
+                nextResetAt: ResetCountdown.nextLocalMidnight(),
                 style: theme.textTheme.bodySmall,
               ),
             ],
@@ -163,9 +165,12 @@ class _MissionsBody extends ConsumerWidget {
                 style: theme.textTheme.headlineSmall
                     ?.copyWith(fontWeight: FontWeight.w700)),
             const SizedBox(width: 8),
-            Text('Resets Sunday',
-                style: theme.textTheme.bodySmall
-                    ?.copyWith(color: AppColors.onSurfaceVariant)),
+            ResetCountdown(
+              prefix: 'Resets in',
+              nextResetAt: ResetCountdown.nextLocalMonday(),
+              style: theme.textTheme.bodySmall
+                  ?.copyWith(color: AppColors.onSurfaceVariant),
+            ),
           ],
         ),
         const SizedBox(height: 16),

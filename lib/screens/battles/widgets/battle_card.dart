@@ -23,7 +23,12 @@ class BattleCard extends StatelessWidget {
     return switch (battle.status) {
       BattleStatus.active => _ActiveCard(
           battle: battle, currentUserId: currentUserId, onTap: onTap),
-      BattleStatus.pending => _ScheduledCard(battle: battle, onTap: onTap),
+      // 'pending' = waiting for accepts; 'scheduled' = all accepted, waiting
+      // for start_time. Same card style — the card itself disambiguates the
+      // status line.
+      BattleStatus.pending ||
+      BattleStatus.scheduled =>
+        _ScheduledCard(battle: battle, onTap: onTap),
       BattleStatus.completed => _CompletedCard(
           battle: battle, currentUserId: currentUserId, onTap: onTap),
       BattleStatus.cancelled => const SizedBox.shrink(),
@@ -171,6 +176,24 @@ class _ScheduledCard extends StatelessWidget {
 
   const _ScheduledCard({required this.battle, this.onTap});
 
+  /// Status line text: depends on whether the battle is still waiting on
+  /// invite acceptance (`pending`) or all-accepted-but-not-yet-active
+  /// (`scheduled`).
+  String _statusLine() {
+    if (battle.status == BattleStatus.scheduled) {
+      final r = battle.startTime.difference(DateTime.now());
+      if (r.isNegative) return 'Starting now…';
+      if (r.inDays > 0) {
+        return 'Starts in ${r.inDays}d ${r.inHours % 24}h';
+      }
+      if (r.inHours > 0) {
+        return 'Starts in ${r.inHours}h ${r.inMinutes % 60}m';
+      }
+      return 'Starts in ${r.inMinutes}m';
+    }
+    return 'Starts when accepted';
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -208,7 +231,7 @@ class _ScheduledCard extends StatelessWidget {
                           size: 14, color: AppColors.onSurfaceVariant),
                       const SizedBox(width: 6),
                       Text(
-                        'Starts when accepted',
+                        _statusLine(),
                         style: theme.textTheme.bodySmall,
                       ),
                     ],

@@ -20,7 +20,7 @@ class ClanDetailsScreen extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final clan = ref.watch(currentClanProvider).valueOrNull;
     final members = ref.watch(clanMembersProvider).valueOrNull ?? [];
-    final uid = ref.watch(authStateProvider).valueOrNull?.uid ?? '';
+    final uid = ref.watch(authStateProvider).valueOrNull?.id ?? '';
 
     return Scaffold(
       appBar: AppBar(

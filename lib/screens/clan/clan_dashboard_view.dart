@@ -1,8 +1,8 @@
-import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../config/colors.dart';
 import '../../models/clan_model.dart';
 import '../../providers/clan_provider.dart';
@@ -118,12 +118,12 @@ class _SoldiersSection extends ConsumerWidget {
         confirmLabel: 'Send Invites',
         onConfirm: (selected) async {
           if (selected.isEmpty || clanId.isEmpty) return;
-          final me = FirebaseAuth.instance.currentUser;
+          final me = Supabase.instance.client.auth.currentUser;
           if (me == null) return;
           try {
             await ref.read(clanServiceProvider).inviteMembers(
                   clanId: clanId,
-                  captainId: me.uid,
+                  captainId: me.id,
                   userIds: selected.map((u) => u.userId).toList(),
                 );
             if (context.mounted) {

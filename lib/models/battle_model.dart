@@ -4,17 +4,40 @@ class BattleParticipant {
   final String userId;
   final String displayName;
   final String? avatarURL;
+
+  /// Steps inside the battle window (derived from lifetime totals).
+  /// `total_steps_all_time - start_steps_baseline` when active,
+  /// `end_steps_baseline - start_steps_baseline` when frozen.
   final int currentSteps;
+
+  /// `total_steps_all_time` snapshot at battle activation. Set when the
+  /// battle flips from pending→active and stays put for the lifetime of
+  /// the battle.
+  final int? startStepsBaseline;
+
+  /// `total_steps_all_time` snapshot at battle completion. Set when the
+  /// battle flips from active→completed; freezes [currentSteps].
+  final int? endStepsBaseline;
+
   final bool isWinner;
+
+  /// Per-participant invite state. Battle is `pending` until every
+  /// participant is `accepted`; if any one is `rejected` the battle ends
+  /// (1v1) or is removed for that user (group).
+  final ParticipantInviteStatus inviteStatus;
 
   const BattleParticipant({
     required this.userId,
     required this.displayName,
     this.avatarURL,
     this.currentSteps = 0,
+    this.startStepsBaseline,
+    this.endStepsBaseline,
     this.isWinner = false,
+    this.inviteStatus = ParticipantInviteStatus.pending,
   });
 
+  /// Firestore-style nested map (still used by [BattleModel.toFirestore]).
   factory BattleParticipant.fromMap(Map<String, dynamic> map) {
     return BattleParticipant(
       userId: map['userId'] as String? ?? '',
@@ -32,11 +55,44 @@ class BattleParticipant {
         'currentSteps': currentSteps,
         'isWinner': isWinner,
       };
+
+  /// Build from a Supabase `public.battle_participants` row (snake_case).
+  factory BattleParticipant.fromSupabaseRow(Map<String, dynamic> d) {
+    return BattleParticipant(
+      userId: d['user_id'] as String? ?? '',
+      displayName: d['display_name'] as String? ?? '',
+      avatarURL: d['avatar_url'] as String?,
+      currentSteps: (d['current_steps'] as num?)?.toInt() ?? 0,
+      startStepsBaseline: (d['start_steps_baseline'] as num?)?.toInt(),
+      endStepsBaseline: (d['end_steps_baseline'] as num?)?.toInt(),
+      isWinner: d['is_winner'] as bool? ?? false,
+      inviteStatus: ParticipantInviteStatus.fromString(
+          d['invite_status'] as String? ?? 'pending'),
+    );
+  }
+}
+
+enum ParticipantInviteStatus {
+  pending,
+  accepted,
+  rejected;
+
+  static ParticipantInviteStatus fromString(String s) => switch (s) {
+        'accepted' => ParticipantInviteStatus.accepted,
+        'rejected' => ParticipantInviteStatus.rejected,
+        _ => ParticipantInviteStatus.pending,
+      };
 }
 
 enum BattleType { oneVsOne, group }
 
-enum BattleStatus { pending, active, completed, cancelled }
+/// Battle lifecycle:
+///   • pending   — at least one invitee hasn't responded
+///   • scheduled — all accepted, waiting for [BattleModel.startTime] to arrive
+///   • active    — start_time has arrived, steps are being counted
+///   • completed — end_time has passed, scores are frozen
+///   • cancelled — aborted before activation (1v1 reject, creator delete)
+enum BattleStatus { pending, scheduled, active, completed, cancelled }
 
 class BattleModel {
   final String battleId;
@@ -44,12 +100,20 @@ class BattleModel {
   final BattleStatus status;
   final List<BattleParticipant> participants;
 
-  /// User IDs invited but not yet responded (creator + recipients).
-  /// Creator's UID is always in `acceptedUserIds` by default.
-  final List<String> invitedUserIds;
+  /// User IDs invited but not yet rejected — derived from
+  /// `battle_participants` rows where `invite_status != 'rejected'`. Kept
+  /// as a denormalised getter so existing UI keeps compiling unchanged.
+  List<String> get invitedUserIds => participants
+      .where((p) => p.inviteStatus != ParticipantInviteStatus.rejected)
+      .map((p) => p.userId)
+      .toList();
 
-  /// User IDs who accepted the invite. Battle becomes active when all match invitedUserIds.
-  final List<String> acceptedUserIds;
+  /// User IDs who accepted the invite — derived (was a top-level field
+  /// in the Firestore schema).
+  List<String> get acceptedUserIds => participants
+      .where((p) => p.inviteStatus == ParticipantInviteStatus.accepted)
+      .map((p) => p.userId)
+      .toList();
 
   final DateTime startTime;
   final DateTime endTime;
@@ -66,8 +130,6 @@ class BattleModel {
     required this.type,
     required this.status,
     required this.participants,
-    this.invitedUserIds = const [],
-    this.acceptedUserIds = const [],
     required this.startTime,
     required this.endTime,
     required this.durationDays,
@@ -87,10 +149,6 @@ class BattleModel {
       participants: (data['participants'] as List<dynamic>? ?? [])
           .map((p) => BattleParticipant.fromMap(p as Map<String, dynamic>))
           .toList(),
-      invitedUserIds:
-          List<String>.from(data['invitedUserIds'] as List? ?? []),
-      acceptedUserIds:
-          List<String>.from(data['acceptedUserIds'] as List? ?? []),
       startTime:
           (data['startTime'] as Timestamp?)?.toDate() ?? DateTime.now(),
       endTime: (data['endTime'] as Timestamp?)?.toDate() ?? DateTime.now(),
@@ -100,6 +158,39 @@ class BattleModel {
       createdBy: data['createdBy'] as String? ?? '',
       createdAt:
           (data['createdAt'] as Timestamp?)?.toDate() ?? DateTime.now(),
+    );
+  }
+
+  /// Build from a Supabase `public.battles` row joined with its
+  /// `battle_participants` rows (via a nested PostgREST select).
+  factory BattleModel.fromSupabaseRow(Map<String, dynamic> d) {
+    DateTime parseTs(Object? raw) =>
+        DateTime.tryParse(raw?.toString() ?? '') ?? DateTime.now();
+
+    final partsRaw =
+        (d['battle_participants'] as List<dynamic>? ?? const []);
+    final participants = partsRaw
+        .map((p) => BattleParticipant.fromSupabaseRow(
+            p as Map<String, dynamic>))
+        .toList();
+
+    final start = parseTs(d['start_time']);
+    final end = parseTs(d['end_time']);
+    final duration = end.difference(start);
+
+    return BattleModel(
+      battleId: d['id'] as String? ?? '',
+      type: _parseType(d['type'] as String? ?? '1v1'),
+      status: _parseStatus(d['status'] as String? ?? 'pending'),
+      participants: participants,
+      startTime: start,
+      endTime: end,
+      durationDays:
+          duration.inHours >= 24 ? duration.inDays : 1,
+      xpReward: (d['xp_reward'] as num?)?.toInt() ?? 200,
+      winnerId: d['winner_id'] as String?,
+      createdBy: d['created_by'] as String? ?? '',
+      createdAt: parseTs(d['created_at']),
     );
   }
 
@@ -119,10 +210,11 @@ class BattleModel {
       };
 
   /// True if this is a pending invite for the given user and they haven't responded.
-  bool isPendingInviteFor(String userId) =>
-      status == BattleStatus.pending &&
-      invitedUserIds.contains(userId) &&
-      !acceptedUserIds.contains(userId);
+  bool isPendingInviteFor(String userId) {
+    if (status != BattleStatus.pending) return false;
+    final p = participantFor(userId);
+    return p != null && p.inviteStatus == ParticipantInviteStatus.pending;
+  }
 
   /// True if the invite has expired (>24h old and still pending).
   bool get isExpired {
@@ -175,6 +267,7 @@ class BattleModel {
       s == 'group' ? BattleType.group : BattleType.oneVsOne;
 
   static BattleStatus _parseStatus(String s) => switch (s) {
+        'scheduled' => BattleStatus.scheduled,
         'active' => BattleStatus.active,
         'completed' => BattleStatus.completed,
         'cancelled' => BattleStatus.cancelled,

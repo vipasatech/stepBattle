@@ -50,6 +50,27 @@ class UserMissionProgress {
     );
   }
 
+  /// Build from a Supabase `public.user_mission_progress` row. The composite
+  /// primary key (user_id, mission_id, period_start) is mirrored into [id]
+  /// using the same "{uid}_{mission}_{period}" convention the Firestore
+  /// path used — so the rest of the UI keeps working unchanged.
+  factory UserMissionProgress.fromSupabaseRow(Map<String, dynamic> d) {
+    final userId = d['user_id'] as String? ?? '';
+    final missionId = d['mission_id'] as String? ?? '';
+    final periodStart = d['period_start'] as String? ?? '';
+    return UserMissionProgress(
+      id: '${userId}_${missionId}_$periodStart',
+      userId: userId,
+      missionId: missionId,
+      currentValue: (d['current_value'] as num?)?.toInt() ?? 0,
+      targetValue: (d['target_value'] as num?)?.toInt() ?? 0,
+      isCompleted: d['is_completed'] as bool? ?? false,
+      completedAt:
+          DateTime.tryParse(d['completed_at']?.toString() ?? ''),
+      periodStart: periodStart,
+    );
+  }
+
   Map<String, dynamic> toFirestore() => {
         'userId': userId,
         'missionId': missionId,
@@ -59,6 +80,17 @@ class UserMissionProgress {
         'completedAt':
             completedAt != null ? Timestamp.fromDate(completedAt!) : null,
         'periodStart': periodStart,
+      };
+
+  /// Payload for `public.user_mission_progress` upsert.
+  Map<String, dynamic> toSupabaseRow() => {
+        'user_id': userId,
+        'mission_id': missionId,
+        'period_start': periodStart,
+        'current_value': currentValue,
+        'target_value': targetValue,
+        'is_completed': isCompleted,
+        'completed_at': completedAt?.toUtc().toIso8601String(),
       };
 
   /// Empty progress placeholder for a mission with no document yet.

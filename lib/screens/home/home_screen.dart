@@ -6,6 +6,7 @@ import '../../providers/notification_provider.dart';
 import '../../providers/user_provider.dart';
 import '../../sheets/notifications_sheet.dart';
 import '../../sheets/streak_history_sheet.dart';
+import '../../widgets/app_logo.dart';
 import '../../widgets/avatar_circle.dart';
 import '../../widgets/friends_app_bar_button.dart';
 import '../../widgets/no_steps_banner.dart';
@@ -28,7 +29,7 @@ class HomeScreen extends ConsumerWidget {
       appBar: AppBar(
         title: Row(
           children: [
-            Icon(Icons.bolt, color: AppColors.primaryBrand, size: 28),
+            const AppLogo(size: 28),
             const SizedBox(width: 8),
             Text(
               'StepBattle',

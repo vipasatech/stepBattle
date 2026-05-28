@@ -1,6 +1,7 @@
 import 'dart:io';
 import 'package:health/health.dart';
 import 'package:intl/intl.dart';
+import '../utils/app_logger.dart';
 
 /// Unified interface to Apple HealthKit (iOS) and Google Health Connect (Android).
 /// Reads steps, calories, and activity data. Handles permissions.
@@ -63,6 +64,7 @@ class HealthService {
 
   /// Request read permissions from the platform health store.
   Future<bool> requestPermissions() async {
+    AppLogger.health.i('requestPermissions:start');
     try {
       await _ensureConfigured();
       final permissions = _readTypes.map((_) => HealthDataAccess.READ).toList();
@@ -72,8 +74,11 @@ class HealthService {
         permissions: permissions,
       );
       _isAuthorized = granted;
+      AppLogger.health
+          .i('requestPermissions:done', fields: {'granted': granted});
       return granted;
-    } catch (e) {
+    } catch (e, s) {
+      AppLogger.health.e('requestPermissions:failed', error: e, stack: s);
       _isAuthorized = false;
       return false;
     }
@@ -114,6 +119,8 @@ class HealthService {
 
     final fetched = await _tryGetSteps(midnight, now);
     if (fetched == null) {
+      AppLogger.health.w('getTodaySteps:fetchFailed',
+          fields: {'lastKnown': _lastKnownTodaySteps});
       // Fetch failed (background restriction, offline, etc.) — keep last value.
       return _lastKnownTodaySteps;
     }
@@ -122,10 +129,13 @@ class HealthService {
     // than what we've already seen today (avoids weird Samsung/Health Connect
     // transient readings that flicker to 0).
     if (fetched < _lastKnownTodaySteps) {
+      AppLogger.health.t('getTodaySteps:nonMonotonic',
+          fields: {'fetched': fetched, 'lastKnown': _lastKnownTodaySteps});
       return _lastKnownTodaySteps;
     }
 
     _lastKnownTodaySteps = fetched;
+    AppLogger.health.d('getTodaySteps', fields: {'steps': fetched});
     return fetched;
   }
 

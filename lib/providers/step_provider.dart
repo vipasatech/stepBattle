@@ -120,25 +120,44 @@ final todayCaloriesProvider = FutureProvider<double>((ref) {
   return ref.read(healthServiceProvider).getTodayCalories();
 });
 
-/// Today's step log from Firestore (real-time, reflects server state).
+/// Today's step log row from Supabase (real-time stream over step_logs).
+/// Provider kept under the old name to avoid a cascade rename; consumers
+/// only care that it emits a StepLogModel.
 final firestoreTodayStepsProvider = StreamProvider<StepLogModel?>((ref) {
-  final authState = ref.watch(authStateProvider);
-  final user = authState.valueOrNull;
+  final user = ref.watch(authStateProvider).valueOrNull;
   if (user == null) return Stream.value(null);
-  return ref.read(stepServiceProvider).watchTodaySteps(user.uid);
+  return ref.read(stepServiceProvider).watchTodaySteps(user.id);
 });
 
-/// Combined "best available" today step count:
-/// Uses local device steps (freshest), falls back to Firestore.
-final todayStepsProvider = Provider<int>((ref) {
+/// Combined "best available" today step count, exposed as `AsyncValue`
+/// so the UI can render a shimmer skeleton in the loading state instead
+/// of collapsing to `0`. Prefers freshest local read; falls back to the
+/// persisted Supabase row when local is still loading; stays loading
+/// when neither has produced a value yet.
+final todayStepsAsyncProvider = Provider<AsyncValue<int>>((ref) {
   final local = ref.watch(localTodayStepsProvider);
-  final firestore = ref.watch(firestoreTodayStepsProvider);
+  final remote = ref.watch(firestoreTodayStepsProvider);
 
-  return local.when(
-    data: (steps) => steps,
-    loading: () => firestore.valueOrNull?.stepCount ?? 0,
-    error: (_, __) => firestore.valueOrNull?.stepCount ?? 0,
-  );
+  // 1. Best case — the device pedometer has emitted a value. This is
+  //    the freshest source and updates every 60s.
+  if (local.hasValue) {
+    return AsyncValue.data(local.value!);
+  }
+  // 2. Local is still loading but the Supabase row already arrived —
+  //    use the persisted count so cold launches don't show shimmer when
+  //    they have a perfectly fine cached value to render.
+  if (remote.hasValue && remote.value != null) {
+    return AsyncValue.data(remote.value!.stepCount);
+  }
+  // 3. Local errored AND remote has nothing — surface as loading rather
+  //    than 0; the UI shimmer is a better signal than a misleading number.
+  return const AsyncValue.loading();
+});
+
+/// Plain-int convenience for places that don't care about loading state.
+/// Returns 0 while loading — most legacy call sites already assume this.
+final todayStepsProvider = Provider<int>((ref) {
+  return ref.watch(todayStepsAsyncProvider).valueOrNull ?? 0;
 });
 
 /// Trigger a sync of device steps to Firestore. Call this periodically.
@@ -186,5 +205,5 @@ final weeklyStepsProvider = FutureProvider<int>((ref) async {
   final authState = ref.watch(authStateProvider);
   final user = authState.valueOrNull;
   if (user == null) return 0;
-  return ref.read(stepServiceProvider).getWeeklyTotal(user.uid);
+  return ref.read(stepServiceProvider).getWeeklyTotal(user.id);
 });

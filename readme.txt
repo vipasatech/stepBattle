@@ -1,1047 +1,414 @@
-# StepBattle — Complete Application Context
+# StepBattle — Application Functionality Reference
 
-> **For Claude Code:** Read this file fully before reading the Stitch zip file.
-> The zip file (`stitch_stepbattle__1_.zip`) in this folder contains 17 screen designs
-> (HTML + PNG) that are the visual reference. This README is the functional and content
-> specification. Use both together.
+This document describes what the StepBattle app **actually does today**, derived from
+the implemented code (not the original design spec). It is the source of truth for the
+current feature set, data model, and business logic.
 
----
+StepBattle is a mobile fitness gamification app: it reads the device's step data and
+turns walking into a competitive social game — XP, levels, battles, missions, clans,
+and geo-scoped leaderboards.
 
-## 1. What Is StepBattle
-
-StepBattle is a cross-platform mobile fitness gamification application. It reads
-pedometer and step data from the user's device health APIs and turns that data into a
-competitive social game.
-
-**Core loop:**
-1. User walks → steps are tracked in real time
-2. Steps convert to XP → XP increases level and rank
-3. Users challenge each other to step battles → winner earns bonus XP
-4. Daily and weekly missions give structured goals
-5. Clans let teams compete collectively
-6. Leaderboard creates global and social competition
-7. A Snapchat-style map shows who is leading nearby
-
-**Platform targets:** iOS (primary) and Android  
-**Health integrations:** Apple HealthKit (iOS), Google Health Connect (Android)  
-**Real-time requirements:** Battle step counts sync live, leaderboard updates live
+- **Platform targets:** Android (primary) and iOS
+- **Backend:** Supabase (Postgres + Auth + Realtime + Row-Level Security)
+- **Step sources:** Native pedometer (always-on), Google Health Connect / Apple HealthKit,
+  and optional Google Fit — combined by an aggregator with corruption protection
+- **Local persistence:** Hive (pedometer baseline, feature flags)
+- **State management:** Riverpod; routing via GoRouter (StatefulShellRoute)
+- **Push:** Firebase Cloud Messaging (token stored on profile); in-app notifications via
+  a realtime `notifications` table
 
 ---
 
-## 2. Application Architecture Overview
+## 1. Core Loop
 
-### Navigation Structure
+1. User walks → steps tracked continuously by the device pedometer + health APIs.
+2. Steps convert to XP → XP raises level and rank.
+3. Users challenge each other to step battles → winner earns bonus XP.
+4. Daily and weekly missions provide structured goals.
+5. Clans let teams compete collectively.
+6. Geo-scoped leaderboards (district / state / country / friends) create competition.
+7. An interactive map shows region rankings.
 
-The app has a **5-tab bottom navigation bar** that is persistent across all main screens.
+---
+
+## 2. Navigation Structure
+
+**5-tab bottom navigation** (glassmorphic, persistent), backed by a StatefulShellRoute
+so each tab keeps its own state:
 
 ```
 [ Home ] [ Battles ] [ Missions ] [ Clan ] [ Leaderboard ]
 ```
 
-The **Profile page** is a sub-page, not a tab. It is accessed by tapping the avatar
-circle in the top-right corner of any main screen.
+**Full-screen routes** (pushed over the shell, no bottom bar):
+- `/profile` — Profile page (opened from the avatar in any tab header)
+- `/profile/step-sources` — Step-source diagnostics screen
+- `/profile/health-setup` — OEM-aware health/permission setup wizard
+- `/battle-ground/:id` — Animated live battle arena
+- `/map` — Full-screen interactive geo map
 
-### Screen Inventory
-
-**Main tab screens (5):**
-- Home
-- Battles
-- Missions
-- Clan (entry state OR dashboard state depending on membership)
-- Leaderboard
-
-**Sub-screens / Full screens (3):**
-- Profile page
-- Create Clan Battle screen
-- Join Clan Battle screen
-- Full-screen Map view
-
-**Bottom sheets (9):**
-- New Battle selection sheet
-- 1v1 Battle setup sheet
-- Group Battle setup sheet
-- Mission detail sheet
-- Set Goal sheet
-- Create Clan sheet
-- Join Clan sheet
-- Add Friends sheet (reusable, called from multiple places)
-- Public Profile card (from Leaderboard row tap)
+**Auth-gated redirects:**
+- Not signed in → `/login`
+- Signed in but onboarding incomplete → `/onboarding`
+- Otherwise → `/home`
 
 ---
 
-## 3. Design System
+## 3. Authentication & Onboarding
 
-> Full spec is in `titanium_velocity/DESIGN.md` inside the zip file.
-> Summary below for quick reference.
+### Login (`lib/screens/auth/login_screen.dart`)
+Sign-in methods, all through Supabase Auth:
+- **Google OAuth** (a dedicated Supabase Web OAuth client; separate from any Firebase client)
+- **Apple OAuth** (iOS only)
+- **Email / password** (toggle between sign-in and sign-up)
 
-### Colours
+A new auth user automatically gets a `profiles` row via a Postgres trigger
+(`on_auth_user_created`), seeded with name/avatar from the OAuth metadata.
+A "no network" sheet with retry is shown on connection failure.
 
-| Token | Hex | Usage |
-|---|---|---|
-| Background | `#0e0e10` | All screen backgrounds |
-| Primary | `#1A73E8` | CTAs, progress bars, active states |
-| Secondary / Accent | `#34A853` | Success, completed, won states |
-| Danger | `#EA4335` | Errors, lost states, destructive actions |
-| Amber | `#FBBC04` | Pending, in-progress, countdown timers |
-| Surface low | `#1a1a1c` | Cards, bottom sheets |
-| Surface mid | `#252528` | Nested cards |
-| On-surface | `#FFFFFF` | Primary text |
-| On-surface-variant | `#acaaad` | Secondary text, labels |
+### Onboarding (`lib/screens/auth/onboarding_screen.dart`)
+3-step flow: (1) choose a username (3–20 chars), (2) connect health, (3) set a daily
+step goal (preset chips 5K/8K/10K/15K plus a ±500 stepper). Completion flips an
+onboarding flag and routes to Home.
 
-### Typography
-
-- **Headlines / Display:** Space Grotesk — used for step counts, battle titles, level numbers
-- **Body / Labels:** Manrope — used for descriptions, sub-labels, table data
-
-### Component Rules
-
-- **No 1px divider lines** — separation uses background colour shift only
-- **Glassmorphism cards** — `surface-variant` at 60% opacity, `backdrop-blur` 20px,
-  2px inner glow using primary at 20% opacity
-- **Progress bars** — gradient fill from `#1A73E8` to lighter blue, spark/glow dot at
-  leading edge
-- **Battle cards** — `xl` corner radius, no dividers, `surface-container-highest` on
-  active/winning state
-- **Bottom sheets** — rounded top corners 28px, handle pill at top centre
-- **Buttons primary** — gradient fill, `border-radius: full`, ambient glow on active
-- **Buttons secondary** — `surface-container-high` background, no border
-- **Buttons destructive** — red text, outlined style
+### Health Setup Wizard (`lib/screens/onboarding/health_setup_screen.dart`)
+Detects the device manufacturer and renders **OEM-specific** instructions (Samsung,
+Xiaomi, Realme, Motorola, stock Android, etc.) for enabling Health Connect / step
+feeders, with conditional cards for installing Health Connect, the OEM health app, or
+falling back to Google Fit. Auto-shown once after first permission grant (guarded by a
+Hive flag); revisitable from Profile.
 
 ---
 
-## 4. Home Tab
+## 4. Step Tracking & Source Aggregation
 
-### Purpose
-The home tab is the daily dashboard. It shows the user's current step progress,
-active battle, mission status, and a map preview at a glance.
+This is the heart of the app and the most hardened subsystem.
 
-### Navigation Bar
-- **Top-left:** App name "StepBattle" with bolt lightning icon in primary blue
-- **Top-right (first):** Streak badge — flame icon + current streak number (e.g. "7").
-  Tapping opens a Streak History bottom sheet.
-- **Top-right (second):** Profile avatar circle (user photo or initials).
-  Tapping navigates to the Profile page.
+### Sources
+- **Native pedometer** (`native_step_service.dart`) — Android `TYPE_STEP_COUNTER` /
+  iOS `CMPedometer`. Tracks a per-day baseline in Hive, detects device **reboots**
+  (cumulative counter resets), and carries pre-reboot steps forward.
+- **Health Connect / HealthKit** (`health_service.dart`) — unified via the `health`
+  package; monotonic-within-day reads with a cached fallback for background-read limits.
+- **Google Fit** (`google_fit_service.dart`) — REST API, **opt-in** from Profile →
+  Step Sources (avoids an extra OAuth scope unless the user wants it).
 
-### Section 1 — Overview Card
+### Aggregator policy (`step_source_aggregator.dart`)
+1. **Sanity cap:** any source reporting > 100,000 steps/day is rejected as a corrupt
+   baseline and logged (`aggregator:sourceRejected`).
+2. **Health-Connect-preferred:** if HC/HealthKit is available it is treated as
+   authoritative; the native pedometer is the fallback for fresh installs.
+3. **Self-heal:** if native drifts above HC by > 10,000 steps, the native baseline is
+   repaired from the trusted HC value (`repairBaselineFromTrustedSource`).
 
-A prominent full-width glassmorphism card. It is the most important element on the screen.
+### Sync (`step_service.dart`)
+On each sync: upsert the daily `step_logs` row, bump `profiles.total_steps_all_time`
+(read-modify-write), and award step XP. A **per-sync delta cap of 100,000** rejects
+absurd jumps so a bad reading can't poison the lifetime counter. Calories are derived
+as `steps × 0.04`.
 
-**Contents:**
-- **Level badge** (top-left inside card): pill label showing "Level 8". Updates on
-  level-up with animation.
-- **Step count** (centre, display-size font): today's total steps e.g. "6,000"
-- **Sub-label:** "STEPS TODAY" in small caps below the number
-- **XP delta line:** "+340 XP from Yesterday" with trending-up icon. Green if positive,
-  red if negative.
-- **Progress bar:** full-width bar showing % progress toward next level. Blue gradient
-  fill with spark glow at leading edge.
-- **Progress labels:** "LVL 9" (left) and "LVL 10" (right) above the bar.
-  Below the bar: "2,400 steps to go" centred in grey.
+> Migration `0007` was a one-time cleanup for historical rows poisoned by an earlier
+> native-baseline bug (delete `step_logs` > 100k, recompute lifetime totals, reset XP
+> gate fields).
 
-**Below the card — Stat Pills Row (3 equal-width cards):**
-
-| Pill | Value | Sub-label | On Tap |
-|---|---|---|---|
-| Calories | "400 kcal" | "Burnt Today" | No-op or health detail |
-| Rank | "#3" | "Global Rank" | Navigate to Leaderboard tab |
-| Missions | "2/3" | "Completed Today" | Navigate to Missions tab |
-
-### Section 2 — Active Battle
-
-**Section header:** "Active Battle" left-aligned + "● Live" green animated pill on right.
-
-**State A — Active battle running:**
-- Card content: opponent avatar, "You vs [Name]", "Day X of Y"
-- Sub-line in primary blue: "You're leading by 1,200 steps" (or "You're behind by X steps")
-- Button: "View Arena" pill button → opens that battle's bottom sheet in Battles tab
-
-**State B — No active battle, show most recent completed:**
-- Card content: "Last Battle · vs [Name]"
-- Sub-line: "You won · +500 XP · 2 days ago" (or "You lost")
-- Tap → opens battle recap in Battles tab
-
-**State C — No battles at all:**
-- Empty card with CTA button: "⚔️ Start a Battle"
-- Sub-line: "Challenge a friend to a step battle"
-- Tap → navigates to Battles tab
-
-### Section 3 — Daily Missions
-
-**Section header row:**
-- Left: "Daily Missions" bold
-- Right: chevron_right icon — tapping navigates to Missions tab
-
-**Mission rows (3 rows, one per daily mission):**
-
-Each row is a card containing:
-- **Left icon** (40×40 rounded square): category icon (walk/fire/sword)
-- **Mission title** (bold): e.g. "Walk 8,000 Steps"
-- **XP reward** (right-aligned, green): e.g. "+100 XP"
-- **Progress bar** (below, full width): animated fill showing current progress
-- **Status:** "In Progress" amber / "Completed ✓" green / locked grey appearance
-
-Default missions:
-1. Walk 8,000 Steps — +100 XP — progress bar (e.g. 75% filled)
-2. Burn 500 Calories — +75 XP — progress bar (e.g. 80% filled)
-3. Complete a Battle — +150 XP — 0%, locked appearance if no battle started
-
-**On tap any mission row:** opens Mission Detail bottom sheet for that mission.
-
-**All missions complete banner:**
-"✅ All missions complete! +150 XP earned today" — replaces the rows, green background.
-
-### Section 4 — Map (Who's Leading Near You)
-
-**Section header:** "Who's Leading Near You"
-
-A map card showing a live fragment of the device map. User avatar pins are placed at
-each active walker's location. The leading user pin has a gold ring. A sub-label shows
-"👟 12 active walkers in your area".
-
-**On tap:** Opens full-screen Snapchat-style map view (separate screen).
-
-**Empty state (location permission denied):**
-"Enable location to see who's leading near you" + "Enable Location" CTA button.
+### Per-source forensics (`source_step_hourly_log_service.dart`)
+Hourly per-source readings (native / HC / Fit), the winning source, per-source errors,
+and a device fingerprint are written to `source_step_hourly` for debugging which OEMs
+feed step data reliably.
 
 ---
 
-## 5. Battles Tab
+## 5. Home Tab (`lib/screens/home/`)
 
-### Purpose
-Manages all step battles — active, scheduled, and completed. Also the entry point
-for creating new battles.
+Daily dashboard. Header shows the brand, a Friends button (badge for pending requests),
+a notifications bell (unread badge), a streak flame badge (→ Streak History sheet), and
+the profile avatar (→ Profile).
 
-### Navigation Bar
-- **Title:** "Battles"
-- **Top-right:** "+ New Battle" filled blue button → opens New Battle bottom sheet
-
-### Section 1 — Active Battles
-
-**Section header:** "Active Battles" + ">" chevron (expands full list)
-
-**Battle card (one per active battle):**
-- Battle ID chip: "BATTLE ID #8402" (small, top of card)
-- Title: "⚔️ You vs [Opponent Name]"
-- Status tag: "● Live" with animated green pulse dot
-- Step counts row: "You: 6,820" and "[Opponent]: 9,100"
-- **Dual-fill progress bar:** two-colour bar — your colour vs opponent colour,
-  proportional to step delta
-- Time remaining: "⏱ 8h left"
-- Reward: "+200 XP on win"
-
-**Tapping a card:** opens a battle detail bottom sheet showing live step sync.
-
-**Empty state:** "No active battles right now" + "⚔️ Start a Battle" CTA.
-
-### Section 2 — Scheduled Battles
-
-**Section header:** "Scheduled Battles" + ">" chevron
-
-**Battle card (one per scheduled battle):**
-- Title: "⚔️ You vs [Name]"
-- Status tag: "Pending" (amber pill)
-- Start time: "Starts Saturday, 9:00 AM"
-- Reward: "+150 XP on win"
-- **Right-swipe gesture:** reveals "Cancel" destructive action with confirm dialog
-
-**Empty state:** "No upcoming battles scheduled"
-
-### Section 3 — Completed Battles
-
-**Section header:** "Completed" + ">" chevron
-
-**Battle card (one per completed battle):**
-- Title: "⚔️ You vs [Name]"
-- Result tag: "Won" (green pill) or "Lost" (red pill)
-- Final step counts: "You: 15,000 · [Opponent]: 11,200"
-- Frozen progress bar (non-interactive, final state)
-- Completion info: "Completed yesterday"
-- XP: "+200 XP earned" (if won) or "+0 XP" (if lost)
-
-**Empty state:** "No completed battles yet — go win one!"
+Sections, top to bottom:
+1. **No-steps banner** — auto-appears when every step source fails for ~10+ minutes;
+   tap → health-setup wizard; auto-dismisses when steps flow again.
+2. **Overview card** — level badge, large today's-step count (shimmer while loading,
+   "—" on error), XP-vs-yesterday delta, and a level-progress bar with "X XP to go".
+3. **Stat pills** (3) — Calories burnt today; Global Rank (→ Leaderboard);
+   Missions completed today (→ Missions).
+4. **Active battle card** — three states: active battle (lead/behind delta + "Enter the
+   Arena" → battle-ground), last completed battle (result + XP), or no battles
+   ("Start a Battle" → Battles).
+5. **Daily missions** — 2–3 mission rows with progress and XP; tap → Mission Detail sheet.
+6. **Map preview** — if no home district set, a "Set your home" CTA; otherwise a
+   "Who's Leading Near You" card → full map.
 
 ---
 
-## 6. New Battle — Bottom Sheet Flow
+## 6. Battles
 
-### Trigger
-Tapping "+ New Battle" in the Battles tab nav bar.
+### Battles Tab (`lib/screens/battles/battles_screen.dart`)
+Sectioned list with a "New Battle" action in the header. A slim **"Reconnecting…"** pill
+appears at the top while the realtime stream is retrying. Sections:
+- **Incoming invites** — Accept / Reject inline (inviter, type, duration, XP).
+- **Active battles** — `BattleCard`: short ID, both step counts, dual-fill bar, time
+  remaining, XP reward. Tap → battle arena.
+- **Waiting for opponent** — scheduled/pending battles (chevron → Pending Battles screen).
+- **Completed** — frozen bar, Won/Lost pill, XP earned.
 
-### Step 1 — New Battle Selection Sheet
+Friendly error copy ("Could not load battles. Pull to retry.") instead of raw exceptions.
 
-**Sheet title:** "New Battle"
-**Sub-label:** "Choose your battle format"
+### Pending Battles (`pending_battles_screen.dart`)
+Full list of pending/scheduled battles; the **creator** can delete (confirm dialog).
 
-Two selectable cards side by side:
-- **Card A:** 👤 icon, "1 vs 1", "Compete head-to-head with one friend"
-- **Card B:** 👥 icon, "Group Battle", "Compete with multiple participants"
+### Battle Arena (`lib/screens/battle_ground/`)
+Immersive animated arena for an active battle, driven by a single shared `Ticker`:
+- Runners positioned proportionally to steps; smooth tween to target positions.
+- Time-of-day skybox (dawn/day/dusk/night), parallax painters, up to 6 lanes.
+- Camera auto-follows the current user; drag to pan (auto-follow suspends ~3s),
+  double-tap to recenter.
+- Countdown ring (time remaining), leaderboard pill (standings + reward).
+- Lead changes trigger a screen flash, haptic, and toast; on completion the winner
+  badge plants on the leader and the scene freezes.
 
-Selected card gets blue border + light blue fill. Unselected is grey outlined.
+### Creating a battle (sheets)
+1. **New Battle selection** — 1v1 or Group.
+2. **1v1 setup** — pick a friend, choose duration (1/3/7 days), create.
+3. **Group setup** — multi-select friends (up to 10), create.
 
-**"Continue" button** (full-width, blue): disabled until a card is selected.
+Invites fan out as notifications; recipients accept/reject from the notifications sheet
+or the battles tab.
 
-### Step 2A — 1v1 Battle Setup Sheet
-
-**Sheet title:** "1 vs 1"
-**Battle ID:** "Battle ID: #A4X9" with copy-to-clipboard icon
-
-**Player layout (horizontal):**
-```
-[ YOU — auto-filled, locked ]   vs   [ + Select Friend ]
-```
-
-The "Select Friend" slot is a dashed-border card. Tapping it opens the
-Add Friends bottom sheet in single-select mode.
-
-Below the layout:
-- **Search field:** "Search by name or username"
-- **Suggested Rivals list:** 3 rows each showing avatar, username, rank, avg steps, "+" button
-
-**"Create Battle" button** (full-width, blue): disabled until Player 2 is selected.
-
-**Note below button:** "Battle starts immediately after opponent accepts"
-
-### Step 2B — Group Battle Setup Sheet
-
-**Sheet title:** "GROUP BATTLE"
-**Battle ID:** "Battle ID: #B7K2" with copy icon, settings icon top-right
-
-**Participants section (full-width card):**
-- Row 1: YOUR avatar + "YOU" label + "HOST" badge + "READY" green badge — locked
-- Row 2: Dashed slot "+ Add Friend" — tappable → opens Add Friends sheet (multi-select)
-- Row 3: Dashed slot "+ Add Friend" — tappable
-- Caption: "ADD UP TO 10 PARTICIPANTS"
-
-**Search field:** "Search by name or username"
-
-**Suggested Friends list:** same as 1v1 list, multi-select
-
-**"Invite Friends" button** (outlined, blue): shares Battle ID via system share sheet
-
-**"Create Battle" button** (full-width, blue): disabled until at least 1 friend added
-
-**Note:** "Battle starts when all participants accept"
+### Battle scoring (lifetime-counter baseline model)
+- A participant's live score is `profiles.total_steps_all_time − start_steps_baseline`.
+- **Status lifecycle:** `pending → scheduled → active → completed` (or `cancelled`).
+  - When all invitees accept: if start time has passed → **active** (baselines snapped
+    immediately); if start time is future → **scheduled** until the window opens.
+  - On **activation**, each participant's `start_steps_baseline` is snapshotted from their
+    lifetime counter.
+  - On **completion** (end time passed), `end_steps_baseline` is snapshotted, freezing the
+    final score independent of future walking.
+- **Winner:** highest score. Ties or non-positive scores → no winner, no XP.
+- Reward: **+200 XP** (1v1) / **+300 XP** (group) to the winner.
 
 ---
 
-## 7. Missions Tab
+## 7. Missions (`lib/screens/missions/`)
 
-### Purpose
-Tracks daily and weekly challenges. Missions reset on a timer. Completing missions
-earns XP and motivates consistent daily activity.
+Daily and weekly challenges read from a `missions` catalog table (with hardcoded
+defaults as a fallback). Progress is tracked per user, per mission, per period in
+`user_mission_progress` and streamed live.
 
-### Navigation Bar
-- **Title:** "Missions" (left)
-- **Top-right:** "300 XP today" green pill badge (total XP earned today, tappable →
-  XP breakdown sheet), flame icon + streak number, profile avatar
+- **Reset countdown** to local midnight; weekly period keys off Monday.
+- Mission cards: category icon, title, progress bar, XP reward, status (In progress /
+  Completed / Locked). Tap → **Mission Detail sheet** (draggable, full progress + how-it-works).
+- **Completion is monotonic** — once a mission is marked complete for the period it stays
+  complete (prevents flicker and false repeat XP on transient step spikes).
 
-**Sub-header line:** "Daily missions reset in 4h 22m" — live countdown timer
-
-### Section 1 — Daily Missions
-
-**Section header:** "Daily"
-
-**Mission card (one per daily mission):**
-- **Left icon** (48×48 rounded, category-specific):
-  - 👟 footprint for steps
-  - ⚔️ sword for battle
-  - 🔥 flame for streak
-- **Mission title** (bold): e.g. "Walk 5,000 Steps"
-- **Description** (grey, small): e.g. "Hit your daily step target"
-- **XP reward** (right-aligned, green): "+100 XP"
-- **Progress bar** (full-width, animated): fills proportionally
-- **Progress label** (below bar): "3,200 / 5,000 steps" or "64%"
-- **Status tag:**
-  - "In Progress" — amber pill
-  - "Completed ✓" — green pill
-  - "Locked" — grey, dimmed card appearance
-
-**On tap:** opens Mission Detail bottom sheet for that mission.
-
-**Default daily missions:**
-1. Walk 5,000 Steps — Hit your daily step target — +100 XP
-2. Win a Battle — Defeat an opponent in a step battle — +150 XP
-3. Keep Streak Alive — Log steps for another consecutive day — +50 XP
-
-**All complete banner:** "✅ All daily missions complete! Come back tomorrow."
-
-### Section 2 — Weekly Challenges
-
-**Section header:** "Weekly"
-**Sub-label:** "Resets Sunday at midnight"
-
-**Challenge card:** same structure as daily mission card but taller.
-
-**Default weekly challenges:**
-1. Walk 50,000 Steps — Accumulate steps across the week — +500 XP — "32,000 / 50,000"
-2. Win 3 Battles — Defeat 3 opponents this week — +400 XP — "1 / 3 battles"
-3. Complete All Daily Missions 5 Days — Finish every daily mission 5 days in a row
-   — +300 XP — "3 / 5 days"
+**Seeded defaults:**
+- Daily: Walk 5,000 steps (100 XP) · Win a battle (150 XP) · Keep streak alive (50 XP)
+- Weekly: Walk 50,000 steps (500 XP) · Win 3 battles (400 XP) · All daily missions 5 days (300 XP)
 
 ---
 
-## 8. Mission Detail Bottom Sheet
+## 8. Clans (`lib/screens/clan/`)
 
-**Trigger:** Tapping any mission card in Missions tab or Home mission row.
+### Entry state (no clan)
+Shows pending clan invites (accept/reject) plus "Create a Clan" and "Join a Clan" CTAs.
 
-### Contents
+### Create / Join (sheets)
+- **Create Clan** — name (3–20 chars), optionally invite friends; creator becomes captain.
+- **Join Clan** — search by clan ID code or name; request/join.
 
-- **Sheet handle bar** at top centre
-- **Large category icon** (60px glowing circle, centred)
-- **Mission title** (large bold, Space Grotesk): e.g. "Walk 5,000 Steps"
-- **Status badge:** "IN PROGRESS" (amber) or "COMPLETED ✓" (green)
+### Dashboard state (in a clan)
+Header shows clan name and member count with a settings gear → Clan Details. Lists members
+(roles: captain / admin / soldier) with steps today, a copyable clan ID code, and clan
+battle entry points.
 
-**Progress card (full-width):**
-- Label: "CURRENT PROGRESS"
-- Value: "3,200 / 5,000 steps" (large, bold)
-- Percentage: "64%" (right-aligned, primary blue)
-- Progress bar: full-width, animated, gradient blue fill, spark at leading edge
+### Clan battles
+`create_clan_battle_screen.dart` / `join_clan_battle_screen.dart` plus schema and models
+exist (teams A/B, duration, `xp_per_member` default 300, winner clan). Clan-battle
+**scoring/step propagation is not yet wired** — see Implementation Status.
 
-**Detail grid (2-column rows):**
-- XP Reward: "+100 XP on completion" (green)
-- Resets In: "4h 22m" (amber, countdown)
-- Category: "Daily Mission"
-- Difficulty: "⭐ Easy"
-
-**"How it works" section:**
-Sub-heading + body text explaining how the mission is tracked, e.g.:
-"StepBattle automatically tracks your movement using your device's pedometer.
-You can also sync data from Apple Health or Google Fit to ensure every step
-in your daily routine contributes to your competitive standing."
-
-**CTA button (full-width):**
-- Active state: blue filled "Go Walk Now" with walk icon
-- Completed state: green filled "Completed ✓ · +100 XP Earned" (non-tappable)
+**Rules:** clan creation gated to Level 5+, max 10 members, only the captain manages the
+clan / its battles, one active clan battle at a time.
 
 ---
 
-## 9. Clan Tab
+## 9. Leaderboards (`lib/screens/leaderboard/`)
 
-### Purpose
-Lets users form teams (clans), manage members, and run clan vs clan step battles.
+Geo-scoped, not a single global board. **4 tabs:** District · State · Country · Friends.
 
-### State A — Entry Screen (user has no clan)
+- **Geo tabs** require a **home district** to be set. If not set, a `NeedsLocationCard`
+  prompts the user to set their home (Set Home sheet). Geo ranks are computed live from
+  `profiles` ordered by `total_xp` (supported by per-region indexes).
+- **Friends tab** ranks the user's accepted friends.
+- Top 3 render as a **podium** (gold/silver/bronze); the rest as ranked rows.
+- A **floating rank card** pins the user's own rank/XP above the tab bar while scrolling.
+- Tapping a row opens that user's **Public Profile sheet** (stats + add-friend /
+  challenge-to-battle).
 
-**Page title:** "Clan"
-
-**Centre-aligned empty state:**
-- Large shield illustration
-- Heading: "Join the Battle Together"
-- Sub-label: "Team up. Compete together. Dominate the leaderboard."
-
-**Two full-width buttons (stacked):**
-- "CREATE CLAN" — primary filled blue → opens Create Clan bottom sheet
-- "JOIN CLAN" — secondary outlined → opens Join Clan bottom sheet
+> A `leaderboard_snapshots` table exists for precomputed global ranks but is **not yet
+> populated** (awaits a scheduled job); current ranks are computed live.
 
 ---
 
-### Create Clan Bottom Sheet
+## 10. Map (`lib/screens/map/`)
 
-**Sheet title:** "Create a Clan"
-**Sub-label:** "Build your squad and dominate together"
-
-**Fields:**
-- **Clan Name input:**
-  - Placeholder: "Enter clan name..."
-  - Character counter right: "0 / 20"
-  - Validation note: "3–20 characters, letters and numbers only"
-- **Add Members section:**
-  - Label: "ADD MEMBERS"
-  - Button (outlined blue): "+ Add Friends" → opens Add Friends sheet (multi-select)
-  - Sub-label: "Invite friends to join your clan"
-  - **Selected members preview:** horizontal scroll row of avatar circles with name
-    below each. Each avatar has a red "×" remove button top-right.
-
-**Action buttons row:**
-- "Cancel" (outlined, neutral) — dismisses sheet
-- "Create" (filled blue, disabled until clan name is filled) — creates clan, navigates
-  to Clan Dashboard
+Full-screen interactive map (flutter_map) with snap zoom tiers (world → country → state
+→ district). Region boundaries are loaded per tier and color-coded by leaderboard
+standing; tapping a region drills into its leaderboard. Requires a home district to be set.
 
 ---
 
-### Join Clan Bottom Sheet
+## 11. Profile (`lib/screens/profile/`)
 
-**Sheet title:** "Join a Clan"
-**Sub-label:** "Enter a Clan ID or search by name"
+- **Identity** — avatar, display name, copyable user code, edit.
+- **Set Goal** → Set Goal sheet (presets + ±500 stepper, min 1,000 / max 50,000).
+- **This Week** stats and **All Time** stats.
+- **Account details** — email, connected step sources, link to "how my steps are tracked"
+  (→ Step Sources diagnostics screen).
+- **Sign out**.
 
-**Search / input field:**
-- Placeholder: "Enter Clan ID (e.g. #CL7X9) or clan name"
-- Search icon left, blue arrow-forward button right
-
-**Clan result rows (after search):**
-Each row: shield icon (unique clan colour), clan name bold, member count, clan XP,
-"Join" pill button (blue).
-
-**Empty state (before search):**
-Shield icon + "Search for a clan above to get started"
-
-**Bottom:**
-"Cancel" full-width outlined button
+**Step Sources screen** (`step_sources_screen.dart`) shows live native / Health Connect /
+Google Fit readings, per-source errors, and permission status; this is where Google Fit
+is toggled on/off.
 
 ---
 
-### State B — Clan Dashboard (user is in a clan)
+## 12. Bottom Sheets (`lib/sheets/`)
 
-**Nav header:** "[Clan Name]" e.g. "TEAM ALPHA" + "5 / 10 members" sub-label
-+ settings icon top-right
-
-#### Sub-section 1 — Soldiers (Members)
-
-**Section header:** "Soldiers"
-
-**Member rows (one per member):**
-- Avatar circle with initials or photo
-- Display name (bold)
-- Role badge: "Captain" (gold, creator only) or "Soldier" (grey)
-- Steps today (right-aligned): "4,200 Steps"
-
-**Bottom of list:**
-- "+ Add Members" button row → opens Add Friends sheet (multi-select mode)
-- **Clan ID chip:** "Clan ID: #CL7X9" with copy icon to clipboard
-
-#### Sub-section 2 — Clan Battles
-
-**Section header:** "Clan Battles"
-
-**Active clan battle card (if battle running):**
-- Matchup: "[Your Clan] ⚔️ vs [Opponent Clan]"
-- Status: "● Live" green dot
-- Step totals: "Your Clan: 42,000 · Night Runners: 38,500"
-- Dual-fill progress bar
-- "2 days left"
-- Reward: "+300 XP per member on win"
-
-**Action buttons row:**
-- "⚔️ Create Battle" (filled blue) → opens Create Clan Battle screen
-- "🔍 Join Battle" (outlined) → opens Join Clan Battle screen
+- **new_battle_selection** — choose 1v1 vs group.
+- **battle_1v1_setup / battle_group_setup** — opponent selection, duration, create.
+- **add_friends** — search by name / user code, send friend requests; reused across
+  battle/clan flows.
+- **create_clan / join_clan** — clan creation and joining.
+- **mission_detail** — full mission progress and explanation.
+- **set_goal** — daily step goal editor.
+- **set_home** — pick home district/state/country (enables geo leaderboards + map).
+- **notifications** — unified inbox; actionable items (friend/battle/clan invites) sorted
+  first with inline Accept/Reject; "Mark all read".
+- **public_profile** — another user's stats + add-friend / challenge.
+- **streak_history** — calendar of consecutive active days.
+- **xp_breakdown** — today's XP by source.
 
 ---
 
-## 10. Create Clan Battle Screen
+## 13. Notifications
 
-**Nav:** Back arrow + "CREATE CLAN BATTLE" title
+In-app notifications live in a realtime `notifications` table; the bell badge reflects
+unread count. Types: `friendRequest`, `friendAccepted`, `battleInvite`, `battleStarted`,
+`battleRejected`, `battleResult`, `clanInvite`, `levelUp`, `missionReset`, `other`.
 
-**Battle matchup hero card:**
-```
-[ Your Clan — OWNER badge ]    VS    [ SEARCH OPPONENT CLAN (dashed) ]
-```
-Tapping the dashed slot opens a search field.
+Each notification carries a `data` jsonb payload (e.g. `battle_id`, `clan_id`,
+`relationship_id`, `from_user_id`) in **snake_case** — accept/reject handlers read
+snake_case with a camelCase fallback for legacy rows. An incoming friend request also
+slides in a top toast (`friend_request_toast_host`). FCM push is supported via a token
+stored on the profile.
 
-**Search field:** "Find a rival clan..." with live results showing clan name, member
-count, XP, "SELECT" button per row.
+---
 
-**Battle Configuration section:**
+## 14. XP & Levelling
 
-| Setting | Options |
+XP values (`lib/config/constants.dart`):
+
+| Event | XP |
 |---|---|
-| Duration | "1 Day" / "3 Days" (default selected) / "7 Days" |
-| Battle Type | "Total Steps" / "Daily Average" — toggle |
-| Reward Pool | "+300 XP" — auto-calculated, non-editable |
+| Per 1,000 steps | +10 (gated per day so it can't double-award) |
+| Reach daily step goal | +75 (once/day) |
+| Complete a daily mission | +50 to +150 |
+| Complete a weekly challenge | +300 to +500 |
+| Win a 1v1 battle | +200 |
+| Win a group battle | +300 |
+| Win a clan battle (per member) | +300 |
+| 7-day streak | +100 |
+| All daily missions bonus | +150 |
 
-**Action buttons:**
-- "CREATE BATTLE" (full-width, blue, disabled until opponent selected)
-- "CANCEL" (full-width, outlined)
+**Step-XP gating:** `last_step_xp_threshold` / `last_step_xp_date` on the profile track
+how many thousand-step thresholds have already been paid today; on a new day the threshold
+resets. Daily-goal bonus is gated by `daily_goal_xp_awarded_date`.
 
----
+**Level thresholds (cumulative XP):**
 
-## 11. Join Clan Battle Screen
+| Lvl | XP | Lvl | XP | Lvl | XP | Lvl | XP |
+|----|------|----|-------|----|-------|----|-------|
+| 1 | 0 | 6 | 4,500 | 11 | 20,000 | 16 | 40,000 |
+| 2 | 500 | 7 | 6,000 | 12 | 25,000 | 17 | 50,000 |
+| 3 | 1,200 | 8 | 8,000 | 13 | 30,000 | 18 | 60,000 |
+| 4 | 2,000 | 9 | 11,000 | 14 | 32,500 | 19 | 70,000 |
+| 5 | 3,000 | 10 | 15,000 | 15 | 35,000 | 20 | 75,000 |
 
-**Nav:** Back arrow + "BATTLE ARENA" / "Available Battles"
-
-**Hero card:** "CLAN BATTLES" heading + "Join forces with your squad and dominate
-the leaderboard." tagline
-
-**Battle list (one card per available battle):**
-
-Card A:
-- Matchup: "Warriors vs Titans"
-- Pills: "3-Day Battle" + "Starts Saturday 9AM"
-- Urgency: "🟡 1 clan spot remaining" (amber)
-- "JOIN" button (full-width, blue)
-
-Card B:
-- "Iron Walkers vs Storm Squad"
-- "7-Day Battle · Starts Monday"
-- "2 spots remaining"
-- "JOIN" button
-
-Card C (full):
-- "Alpha vs Phantoms"
-- "1-Day Battle · Live Now"
-- "FULL" red tag — "JOIN" button disabled/greyed
-
-**Empty state:** "No open clan battles right now" + "Create one instead →" CTA
-
-**Bottom teaser:** "NEXT SEASON STARTS IN 48H" countdown
+Other key constants: default goal 8,000 (min 1,000 / max 50,000, ±500 step); background
+sync ~15 min, active-battle sync ~5 min; max group/clan members 10; clan creation Level 5+.
 
 ---
 
-## 12. Leaderboard Tab
+## 15. Backend Schema (Supabase / Postgres)
 
-### Purpose
-Shows XP-ranked lists globally and within the user's friend network.
+All user-data tables have Row-Level Security and are published to Supabase Realtime.
 
-### Navigation Bar
-- **Title:** "LEADERBOARD"
-- **Top-right:** Pill toggle "OVERALL | FRIENDS" — default: OVERALL
+**Tables:**
+- `profiles` — account, level, `total_xp`, streaks, `daily_step_goal`,
+  `total_steps_all_time` (battle baseline source), XP-gate fields, FCM token, geo/home
+  fields, `clan_id`.
+- `step_logs` — one row per user per day (`step_count`, `calories`, `source`).
+- `source_step_hourly` — per-source hourly forensics + device fingerprint.
+- `missions` — admin-seeded catalog. `user_mission_progress` — per user/mission/period.
+- `battles` — type (`1v1`/`group`), status (`pending`/`scheduled`/`active`/`completed`/
+  `cancelled`), window, reward, winner. `battle_participants` — baselines, `current_steps`,
+  `invite_status`, `is_winner`.
+- `clans`, `clan_members` (roles), `clan_invites`.
+- `clan_battles`, `clan_battle_teams` (teams A/B).
+- `friend_relationships` — directed edges; friendship = `status='accepted'`.
+- `notifications` — in-app inbox (jsonb `data`).
+- `leaderboard_snapshots` — precomputed ranks (not yet populated).
 
-### Rank Table
+**Migrations:** `0001` init (tables + RLS + auth trigger + mission seeds) · `0002`
+hourly forensics columns · `0003` clan/clan-battle extras · `0004` realtime publication ·
+`0005` relaxed RLS for co-participant / captain multi-row writes · `0006` `scheduled`
+battle status · `0007` one-time corrupt step-data cleanup.
 
-**Column structure:** Rank · Avatar + Name · XP · ">" chevron
-
-**Top 3 rows — special treatment:**
-- Rank 1: 🥇 gold row highlight, larger avatar, bold name, "workspace_premium" badge
-- Rank 2: 🥈 silver highlight
-- Rank 3: 🥉 bronze highlight
-
-**Ranks 4 onward:** standard list rows with rank number, avatar circle, name, XP, chevron.
-
-**On tap any row:** opens Public Profile Card bottom sheet for that user.
-
-### Friends Toggle
-When "FRIENDS" is selected: same table structure but scoped to friends list only.
-
-**Empty state (< 3 friends):** "Invite friends to see your ranking among them"
-+ "Invite Friends" CTA
-
-### Floating Your-Rank Card
-
-**Always visible, pinned above the bottom tab bar while scrolling:**
-- "#200" rank (large bold)
-- "You ([Your Name])"
-- "6,000 XP"
-- "↑ 12 spots this week" (green, with trending-up icon)
-
-### How to Earn More XP
-
-**Trigger:** "?" help icon below the rank table
-
-**Bottom sheet contents (table):**
-
-| Action | XP Reward |
-|---|---|
-| Complete a daily mission | +50 XP |
-| Win a 1 vs 1 battle | +200 XP |
-| Maintain a 7-day streak | +100 XP |
-| Reach daily step goal | +75 XP |
-| Win a group battle | +300 XP |
-| Complete all daily missions (bonus) | +150 XP |
-| Win a clan battle (per member) | +300 XP |
+> Migrations are applied manually via the Supabase SQL editor for this project (the
+> Supabase MCP is intentionally not used here).
 
 ---
 
-## 13. Profile Page
+## 16. Realtime & Resilience
 
-### Access
-Tapping the avatar circle in the top-right of any main screen.
-
-### Navigation Bar
-- **Title:** "Profile"
-- **Top-right:** 🔥 + streak number (e.g. "9") — tappable → streak history sheet
-
-### Section 1 — User Identity
-
-- **Avatar circle** (large, centred): user photo or initials. Tappable → opens avatar
-  picker sheet.
-- **Username** + ✏️ edit icon: tapping opens rename bottom sheet.
-
-**Stats strip (4 pills in a horizontal row):**
-
-| Pill | Label | Example |
-|---|---|---|
-| 1 | Level | 8 |
-| 2 | XP | 623 |
-| 3 | Streak | 7 Day Streak |
-| 4 | Rank | #3 |
-
-### Section 2 — Set Goal
-
-**Full-width button:** "Set Goal →" (outlined blue)
-
-**On tap → Set Goal bottom sheet:**
-
-- Sheet title: "Set Your Daily Step Goal"
-- Sub-label: "Your current goal: 8,000 steps/day"
-- **Large display number:** "8,000" (blue, display-size) + "STEPS PER DAY"
-- **Delta pill:** "Same as yesterday" or "↑ 2,000 more than current"
-- **Preset chips row (horizontal, scrollable):** "5K" | "8K" (selected) | "10K" | "15K"
-  — tapping a chip updates the large number instantly
-- **Custom input section:**
-  - Label: "OR ENTER A CUSTOM GOAL"
-  - Stepper: "−" | number input field "8000" | "+"
-  - Each tap = ±500 steps
-  - Min: 1,000 / Max: 50,000
-- **Motivation card:** trophy icon + "Users who set a goal are 3× more likely to hit it."
-- **Buttons:** "Cancel" (outlined) + "Save Goal" (filled blue, ambient glow)
-
-### Section 3 — This Week Stats
-
-**Section header:** "This Week" + 📅 calendar icon (right-aligned)
-
-Calendar icon opens a date picker dialog — user selects a specific week to view.
-
-**Stats table (label left, value right):**
-
-| Label | Value |
-|---|---|
-| Total Steps | 3,000 |
-| XP Earned | 200 XP |
-| Battles Won | 2 / 3 |
-| Missions Done | 7 / 10 |
-
-### Section 4 — All Time Stats
-
-**Section header:** "All Time"
-
-| Label | Value |
-|---|---|
-| Total XP | 6,000 XP |
-| Battles | 4 Won / 3 Lost |
-| Best Streak | 21 Days |
-| Total Steps | 2,01,500 |
-
-### Section 5 — Account Details
-
-**Section header:** "Account"
-
-| Field | Value |
-|---|---|
-| Email | abc@gmail.com (non-editable) |
-| Phone | +91 XXXXXXXXXX (editable) |
-| Connected to | "Apple Health" / "Google Fit" — chip badge showing active integration |
-
-### Section 6 — Sign Out
-
-**Full-width button:** "Sign Out" — red text, outlined destructive style.
-
-**On tap → Confirmation dialog:**
-"Are you sure you want to sign out?"
-Buttons: "Cancel" (dismiss) · "Sign Out" (red, confirm)
+Riverpod StreamProviders wrap Supabase realtime streams for battles, invites, missions,
+notifications, and profile. Battle streams are wrapped with `retryingRealtimeStream`
+(exponential backoff 2s→30s) so transient `RealtimeSubscribeException(timedOut)` errors
+auto-recover instead of surfacing raw; a `battlesReconnectingProvider` flag drives the UI
+"Reconnecting…" pill. Loading states use shimmer skeletons; every list has a defined
+empty state; errors show friendly copy.
 
 ---
 
-## 14. Add Friends Bottom Sheet (Reusable Component)
+## 17. Design System
 
-This is a **shared sheet** called from multiple places:
-- Battles → 1v1 setup (single-select mode, label: "Select as Opponent")
-- Battles → Group setup (multi-select mode, label: "Add to Battle")
-- Clan → Create Clan (multi-select, label: "Add to Clan")
-- Clan → Clan Dashboard → Add Members (multi-select, label: "Send Invite")
-- Profile → Friends section → Add Friend
-
-### Sheet Structure
-
-**Title:** "Add Friends"
-
-**Two-tab toggle:**
-- Tab 1: "Friends List" (default selected, blue fill)
-- Tab 2: "Search / User ID"
-
-#### Tab 1 — Friends List
-
-**Search bar:** "Search your friends..."
-
-**Friend rows:**
-- Avatar circle + display name (bold)
-- Sub-label: "Level 8 · Rank #3 · 6.2k avg steps"
-- Right button:
-  - "+" (blue circle) — unselected state
-  - "✓ Added" (green pill) — selected state
-
-**Empty state:** "No friends yet. Use the Search tab to find people."
-
-#### Tab 2 — Search / User ID
-
-**Input field:** "Enter @username or User ID (e.g. #U4X92)"
-Blue search button on right.
-
-**Result rows:** same structure as friends list rows.
-- If already friends: shows "✓ Friends" grey label instead of "+"
-- If not friends: shows "Add Friend" button
-
-**Bottom:**
-- "Confirm Selection" (full-width, blue CTA)
-- Note: "They'll receive an invite notification"
+- **Brand:** deep violet `#7C3AED` (primary), vivid violet `#A855F7` (accent), lavender
+  `#D8B4FE` (tertiary).
+- **Background:** near-black `#0E0E10`. Semantic: success `#34A853`, error `#FF716C`,
+  amber `#FBBC04`.
+- **Surfaces:** layered container tints; **glassmorphism** cards (≈60% surface-variant,
+  20px backdrop blur, subtle primary glow, thin border).
+- **Type:** Space Grotesk for headlines/step counts; Manrope for body/labels.
+- **Conventions:** dark theme only, no divider lines (spacing/colour shift instead),
+  bottom sheets with 28px rounded tops + handle pill, stadium-shaped filled buttons.
 
 ---
 
-## 15. Public Profile Card Bottom Sheet
+## 18. Implementation Status (honest notes)
 
-**Trigger:** Tapping any row in the Leaderboard table.
+Fully working: auth + profiles, step tracking/aggregation + XP drip, missions catalog &
+progress, battle create/accept/reject/activate/complete + scoring, friends, in-app
+notifications, clan structure & membership, geo leaderboards, map, permissions.
 
-### Contents
-
-- Avatar (large), display name, level badge, rank badge
-- **Stats strip:** steps this week, battles won, best streak
-- Two action buttons:
-  - "+ Add Friend" → adds to friends list, button changes to "✓ Friends"
-  - "⚔️ Challenge to Battle" → navigates to Battles tab, opens 1v1 setup with this
-    user pre-filled as Player 2
-
----
-
-## 16. Full-Screen Map View
-
-**Trigger:** Tapping the map card in Home tab Section 4.
-
-A Snapchat-style full-screen live map showing:
-- User avatar pins at each active walker's location
-- Step count bubble below each pin
-- Leading user pin has gold ring
-- Your own pin is highlighted in primary blue
-- Tap any pin → shows that user's today step count + name card
-
-**Bottom floating card:** "12 active walkers in your area"
+Not yet wired / partial:
+- Step→battle, step→mission, and step→clan **live propagation** hooks in `step_service.dart`
+  are stubs (battle/mission/clan step counts don't yet update from each sync).
+- **Clan battle** scoring/step aggregation (schema + screens exist; logic pending).
+- **Streak** increment/break logic (columns exist; automation pending).
+- **leaderboard_snapshots** population job (ranks currently computed live).
+- Multi-row writes trust the client (RLS relaxed in `0005`) as an MVP tradeoff; intended
+  to move to Edge Functions later.
 
 ---
 
-## 17. XP & Levelling System
-
-### XP Earn Events
-
-| Action | XP | Condition |
-|---|---|---|
-| Every 1,000 steps | +10 XP | Continuous, auto-awarded |
-| Reach daily step goal | +75 XP | Once per day |
-| Complete a daily mission | +50–150 XP | Once per mission per day |
-| Win a 1v1 battle | +200 XP | On battle conclusion |
-| Win a group battle | +300 XP | On battle conclusion |
-| Win a clan battle | +300 XP | Per member, on conclusion |
-| Maintain 7-day streak | +100 XP | On 7th consecutive day |
-| Complete all daily missions (bonus) | +150 XP | Once per day |
-| Complete weekly challenge | +300–500 XP | Once per challenge per week |
-
-### Level Thresholds
-
-| Level | Cumulative XP | Unlock |
-|---|---|---|
-| 1 | 0 | App access |
-| 2 | 500 | Battle invite |
-| 3 | 1,200 | Group battles |
-| 5 | 3,000 | Clan creation |
-| 8 | 8,000 | Custom avatar frames |
-| 10 | 15,000 | Elite leaderboard tier |
-| 15 | 35,000 | Legendary badge |
-| 20 | 75,000 | Hall of Fame |
-
----
-
-## 18. Data Models
-
-### User
-```
-userId: String
-displayName: String
-avatarURL: String?
-email: String
-phone: String?
-level: Int
-totalXP: Int
-currentStreak: Int
-bestStreak: Int
-rank: Int
-dailyStepGoal: Int          // default 8000
-totalStepsAllTime: Int
-friends: [String]           // list of userIds
-clanId: String?
-createdAt: Timestamp
-```
-
-### StepLog
-```
-logId: String
-userId: String
-date: Date                  // yyyy-MM-dd
-stepCount: Int
-calories: Int
-source: String              // "healthkit" | "googlefit"
-syncedAt: Timestamp
-```
-
-### Battle
-```
-battleId: String
-type: String                // "1v1" | "group" | "clan"
-status: String              // "pending" | "active" | "completed"
-participants: [BattleParticipant]
-  └── userId, displayName, avatarURL, currentSteps, isWinner
-startTime: Timestamp
-endTime: Timestamp
-durationDays: Int
-xpReward: Int
-winnerId: String?
-createdBy: String
-```
-
-### Mission
-```
-missionId: String
-type: String                // "daily" | "weekly"
-title: String
-description: String
-category: String            // "steps" | "battle" | "streak" | "calories"
-targetValue: Int
-xpReward: Int
-difficulty: String          // "easy" | "medium" | "hard"
-resetCycle: String          // "daily" | "weekly"
-```
-
-### UserMissionProgress
-```
-userId: String
-missionId: String
-currentValue: Int
-targetValue: Int
-isCompleted: Bool
-completedAt: Timestamp?
-periodStart: Date
-```
-
-### Clan
-```
-clanId: String
-name: String
-clanIdCode: String          // e.g. "#CL7X9" — public invite code
-captainId: String
-members: [ClanMember]
-  └── userId, displayName, avatarURL, role ("captain"|"soldier"), stepsToday
-totalClanXP: Int
-activeBattleId: String?
-createdAt: Timestamp
-maxMembers: Int             // default 10
-```
-
-### ClanBattle
-```
-clanBattleId: String
-status: String              // "pending" | "active" | "completed"
-clanA: ClanBattleTeam
-  └── clanId, clanName, totalSteps
-clanB: ClanBattleTeam
-startTime: Timestamp
-endTime: Timestamp
-durationDays: Int
-battleType: String          // "total_steps" | "daily_average"
-xpPerMember: Int
-winnerClanId: String?
-```
-
----
-
-## 19. Functional Rules & Business Logic
-
-### Step Tracking
-- Steps are polled from HealthKit / Health Connect every 10 minutes in the background
-- For active battles: step counts sync to Firestore every 5 minutes
-- Steps are stored as daily logs (one document per user per day)
-- Calories are derived from step count using a standard formula (steps × 0.04 kcal)
-
-### Battle Rules
-- A 1v1 battle starts when the opponent accepts the invite
-- A group battle starts when the creator taps "Create Battle" (others can join within
-  the first hour)
-- Battle ends at `endTime` — whoever has more steps wins
-- Ties go to the person with the higher step count in the final hour
-- XP is awarded immediately on conclusion
-- Battles cannot be cancelled once active
-
-### Mission Reset Logic
-- Daily missions reset at midnight in the user's local timezone
-- Weekly missions reset at midnight Sunday in the user's local timezone
-- If a mission is completed, it shows "Completed ✓" until reset, not locked
-
-### Streak Logic
-- Streak increments if the user logs ≥ 1 step on each consecutive day
-- Streak breaks if a full calendar day passes with 0 steps synced
-- Streak is maintained even if the daily goal is not reached
-- Streak bonus XP (+100) is awarded on the 7th day and every 7th day thereafter
-
-### Clan Rules
-- Only users at Level 5+ can create a clan
-- Clan capacity is 10 members by default
-- The creator is automatically the Captain
-- Only the Captain can create clan battles or remove members
-- A clan can only have 1 active clan battle at a time
-
-### Leaderboard Ranking
-- Global rank is determined by total all-time XP descending
-- Friends rank is the same but scoped to the user's friends list
-- Ranks update every 15 minutes (not real-time)
-- The user's own rank card is always pinned at the bottom, even if they are rank #1
-
----
-
-## 20. Key UX Rules
-
-### Navigation
-- Bottom sheet overlays: all creation flows, detail views, and secondary interactions
-  use bottom sheets — NOT full-screen pushes (except Map, Create Clan Battle,
-  Join Clan Battle which are full screens)
-- Back navigation: always available via back arrow or swipe-down on sheets
-- Tab switching: any card/pill that navigates to another tab should also deep-link
-  to the relevant section within that tab (e.g. Home missions row → Missions tab
-  with that mission's sheet pre-opened)
-
-### Empty States
-- Every list section must have a defined empty state with a relevant CTA
-- Empty states are never blank screens
-
-### Loading States
-- Step counts and leaderboard show shimmer skeleton loaders
-- Battle cards show last-known data while refreshing (stale-while-revalidate)
-
-### Error States
-- Network error: "Could not sync steps — tap to retry" banner
-- HealthKit permission denied: persistent banner with "Enable Health Access" CTA
-
-### Haptics
-- Light impact on all card taps
-- Medium impact on battle win/XP earn animations
-- Heavy impact on level-up
-
----
-
-## 21. For Claude Code — Build Instructions
-
-### Step 1 — Read the Visual Reference
-Unzip `stitch_stepbattle__1_.zip`. For each folder, read `code.html` for the UI
-structure and `screen.png` for the visual. The `titanium_velocity/DESIGN.md` file
-contains the design system spec.
-
-### Step 2 — Decide Tech Stack
-This README does not mandate a specific framework. Evaluate and recommend:
-- Flutter (preferred) vs React Native
-- Firebase vs Supabase for backend
-- State management approach
-- Health data package
-Present the recommendation before writing any application code.
-
-### Step 3 — Confirm Before Proceeding
-After presenting the tech stack, stop and wait for confirmation.
-
-### Step 4 — Scaffold
-Create the full project structure and configuration files first
-(pubspec.yaml or package.json, theme, colours, typography, routing).
-
-### Step 5 — Build in Order
-1. Foundation (theme, colours, typography, routing, nav bar)
-2. Data models
-3. Services (auth, health, Firestore, notifications)
-4. Home tab
-5. Battles tab + all battle sheets
-6. Missions tab + mission detail sheet
-7. Clan tab + all clan flows
-8. Leaderboard tab
-9. Profile page + all profile sheets
-10. Add Friends sheet (shared component)
-11. Map screen
-12. Polish (animations, haptics, empty states, error states)
-
-### Step 6 — One Feature at a Time
-Build one screen or one sheet completely (UI + logic + state) before moving to
-the next. Do not scaffold empty files for all screens upfront.
-
----
-
-*Last updated: April 2025*
-*Visual reference: stitch_stepbattle__1_.zip (17 screens)*
+*Reflects the implemented codebase as of 2026-05-28. Backend: Supabase project
+`egdmatrypvewrzkislmo`. Original visual spec lives in `stitch_stepbattle__1_.zip`.*
