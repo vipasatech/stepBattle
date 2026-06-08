@@ -20,6 +20,9 @@ import '../screens/map/map_screen.dart';
 import '../screens/onboarding/health_setup_screen.dart';
 import '../screens/profile/profile_screen.dart';
 import '../screens/profile/step_sources_screen.dart';
+import '../screens/track/track_hub_screen.dart';
+import '../screens/track/track_live_screen.dart';
+import '../screens/track/track_session_detail_screen.dart';
 
 final GlobalKey<NavigatorState> _rootNavigatorKey = GlobalKey<NavigatorState>();
 
@@ -148,6 +151,35 @@ final routerProvider = Provider<GoRouter>((ref) {
         path: '/map',
         name: 'map',
         builder: (context, state) => const MapScreen(),
+      ),
+
+      // Track hub — list of past sessions + Start CTA.
+      GoRoute(
+        parentNavigatorKey: _rootNavigatorKey,
+        path: '/track',
+        name: 'trackHub',
+        builder: (context, state) => const TrackHubScreen(),
+      ),
+
+      // Live Track recording. Reached from the FAB when a session is active,
+      // or right after Start. The session keeps running in the foreground
+      // service when the user navigates away from this screen.
+      GoRoute(
+        parentNavigatorKey: _rootNavigatorKey,
+        path: '/track/live',
+        name: 'trackLive',
+        builder: (context, state) => const TrackLiveScreen(),
+      ),
+
+      // Saved-session detail. Reached by tapping a row in the Track hub's
+      // "Recent sessions" list. Read-only stats + GPS route + rename/delete.
+      GoRoute(
+        parentNavigatorKey: _rootNavigatorKey,
+        path: '/track/session/:id',
+        name: 'trackSessionDetail',
+        builder: (context, state) => TrackSessionDetailScreen(
+          sessionId: state.pathParameters['id']!,
+        ),
       ),
 
       // Main app shell with 5 tabs

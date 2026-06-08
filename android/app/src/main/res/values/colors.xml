@@ -1,4 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <color name="ic_launcher_background">#7C3AED</color>
+    <!-- Tint colour applied by Android to the monochrome notification status
+         icon (ic_stat_logo) and the small accent strip in the expanded view. -->
+    <color name="notification_accent">#7C3AED</color>
 </resources>

@@ -6,10 +6,23 @@
     <uses-permission android:name="android.permission.ACTIVITY_RECOGNITION"/>
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
 
-    <!-- Location: foreground-only, used once at signup to set home district.
-         No background location — ACCESS_BACKGROUND_LOCATION is intentionally
-         not requested. -->
+    <!-- Background step sync.
+         FOREGROUND_SERVICE (+ DATA_SYNC type for Android 14+) backs the
+         flutter_foreground_task service that keeps syncing steps while a
+         battle is active and the app is backgrounded. WAKE_LOCK +
+         RECEIVE_BOOT_COMPLETED are declared by the plugin's manifest. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC"/>
+
+    <!-- Location. Coarse for the original home-district capture; fine +
+         background for the Track (run/walk) feature so recording continues
+         when the screen turns off. Background is gated behind an in-app
+         prompt (PermissionService.requestRunPermissions) triggered only by
+         tapping the Track FAB, so users who never use Track never see it. -->
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION"/>
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION"/>
+    <uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION"/>
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION"/>
 
     <!-- Health Connect permissions -->
     <uses-permission android:name="android.permission.health.READ_STEPS"/>
@@ -69,6 +82,42 @@
                 <category android:name="android.intent.category.HEALTH_PERMISSIONS"/>
             </intent-filter>
         </activity-alias>
+
+        <!-- Background step-sync foreground service (flutter_foreground_task).
+             Type is `dataSync` only — even though the Track session uses GPS,
+             we deliberately DO NOT add the `location` FGS type here. The
+             always-on service starts on login (before location permission
+             has been granted), and Android 14+ rejects starting a service
+             with `location` type when ACCESS_FINE_LOCATION isn't granted yet.
+             The Track session's Geolocator stream works without the FGS type
+             while the app has foreground state; truly background-with-screen-
+             off GPS is Phase 2 (separate location service / plugin fork). -->
+        <service
+            android:name="com.pravera.flutter_foreground_task.service.ForegroundService"
+            android:foregroundServiceType="dataSync"
+            android:exported="false" />
+
+        <!-- Monochrome status-bar icon for the persistent live-stats
+             notification. The key here is referenced from Dart via
+             NotificationIcon(metaDataName: 'com.stepbattle.notification.icon')
+             in lib/services/background_sync.dart. -->
+        <meta-data
+            android:name="com.stepbattle.notification.icon"
+            android:resource="@drawable/ic_stat_logo" />
+
+        <!-- Home-screen widget. Dart pushes data via HomeWidget.saveWidgetData
+             + HomeWidget.updateWidget('StepBattleWidgetProvider'); this
+             receiver re-renders the layout against the latest values. -->
+        <receiver
+            android:name="com.stepbattle.stepbattle.StepBattleWidgetProvider"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/stepbattle_widget_info" />
+        </receiver>
 
         <!-- Don't delete the meta-data below.
              This is used by the Flutter tool to generate GeneratedPluginRegistrant.java -->

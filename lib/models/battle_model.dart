@@ -216,6 +216,18 @@ class BattleModel {
     return p != null && p.inviteStatus == ParticipantInviteStatus.pending;
   }
 
+  /// True when this battle is the "Daily • Today" shape: ends at the local
+  /// 23:59 of the same day it started. Used by the UI to badge daily battles.
+  bool get isDaily {
+    final s = startTime.toLocal();
+    final e = endTime.toLocal();
+    return s.year == e.year &&
+        s.month == e.month &&
+        s.day == e.day &&
+        e.hour == 23 &&
+        e.minute >= 59;
+  }
+
   /// True if the invite has expired (>24h old and still pending).
   bool get isExpired {
     if (status != BattleStatus.pending) return false;

@@ -13,7 +13,10 @@ if (keystorePropertiesFile.exists()) {
 
 android {
     namespace = "com.stepbattle.stepbattle"
-    compileSdk = flutter.compileSdkVersion
+    // Pinned to 35: matches Flutter's default targetSdk (35) and silences
+    // the "plugin compiled against SDK 35" warnings from 7 transitive
+    // plugins. AGP 8.2.2 accepts 35 (prints a benign "not tested" line).
+    compileSdk = 35
     ndkVersion = flutter.ndkVersion
 
     compileOptions {

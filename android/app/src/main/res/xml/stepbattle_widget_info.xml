@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Metadata for the StepBattle home-screen widget.
+    • 4×2 cell footprint (~250×110 dp) — fits the logo + 3 stat columns + a
+      progress bar.
+    • updatePeriodMillis 0 means we don't ask the OS to update on a timer;
+      the foreground service calls HomeWidget.updateWidget() each time it
+      pushes fresh values, which is more accurate and battery-friendly than
+      letting the OS update on its 30-min minimum cadence.
+    • previewLayout used in the picker (Android 12+).
+-->
+<appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
+    android:minWidth="250dp"
+    android:minHeight="110dp"
+    android:targetCellWidth="4"
+    android:targetCellHeight="2"
+    android:updatePeriodMillis="0"
+    android:initialLayout="@layout/stepbattle_widget"
+    android:previewLayout="@layout/stepbattle_widget"
+    android:resizeMode="horizontal|vertical"
+    android:widgetCategory="home_screen" />

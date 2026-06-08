@@ -34,6 +34,7 @@ enum LogCategory {
   geo,
   notification,
   nav,
+  track,
 }
 
 enum LogLevel { trace, debug, info, warn, error }
@@ -58,6 +59,7 @@ class AppLogger {
   static final geo = AppLogger._(LogCategory.geo);
   static final notification = AppLogger._(LogCategory.notification);
   static final nav = AppLogger._(LogCategory.nav);
+  static final track = AppLogger._(LogCategory.track);
 
   final LogCategory _category;
   AppLogger._(this._category);

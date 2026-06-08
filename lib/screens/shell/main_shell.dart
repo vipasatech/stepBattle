@@ -1,11 +1,19 @@
 import 'dart:ui';
 import 'package:flutter/material.dart';
+import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../../config/colors.dart';
 import '../../providers/auth_provider.dart';
 import '../../providers/battle_provider.dart';
+import '../../providers/leaderboard_provider.dart';
+import '../../providers/mission_provider.dart';
+import '../../providers/notification_provider.dart';
+import '../../providers/run_session_provider.dart';
 import '../../providers/step_provider.dart';
+import '../../providers/user_provider.dart';
+import '../../services/background_sync.dart';
+import '../../services/notification_service.dart';
 import '../../services/step_source_aggregator.dart';
 import '../../widgets/friend_request_toast_host.dart';
 import '../../widgets/permission_gate.dart';
@@ -24,8 +32,116 @@ class MainShell extends ConsumerStatefulWidget {
   ConsumerState<MainShell> createState() => _MainShellState();
 }
 
-class _MainShellState extends ConsumerState<MainShell> {
+class _MainShellState extends ConsumerState<MainShell>
+    with WidgetsBindingObserver {
   bool _backfillTriggered = false;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    // Listen for messages from the foreground-service isolate, including
+    // notification action-button taps (forwarded as `btn:<id>`).
+    FlutterForegroundTask.addTaskDataCallback(_onTaskData);
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    FlutterForegroundTask.removeTaskDataCallback(_onTaskData);
+    // We deliberately do NOT stop the foreground service here. The shell can
+    // unmount for benign reasons (navigating to a root-level route like
+    // /track or /profile re-creates the shell on the way back), and stopping
+    // the service mid-session would tear down step sync, notification, and
+    // the live battle/track state. The service is torn down explicitly in
+    // SupabaseAuthService.signOut() instead.
+    super.dispose();
+  }
+
+  /// Handler for messages forwarded from the foreground-service isolate.
+  /// Currently used for notification action-button taps (open battle / end
+  /// run / open). The task isolate sends `'btn:<id>'`; we route accordingly.
+  void _onTaskData(Object data) {
+    if (data is! String) return;
+    if (!data.startsWith('btn:')) return;
+    final id = data.substring(4);
+    if (!mounted) return;
+    switch (id) {
+      case 'open_battle':
+        context.go('/battles');
+        break;
+      case 'end_track':
+        // The Track live screen handles the End flow (confirmation +
+        // service.end() + save toast); just route there.
+        context.go('/track/live');
+        break;
+      case 'open_app':
+      default:
+        context.go('/home');
+    }
+  }
+
+  /// When the app returns to the foreground we (1) re-sync steps so the
+  /// server has fresh numbers and (2) invalidate the data providers so the
+  /// UI drops back to its shimmer skeletons and then floods in fresh values
+  /// instead of showing whatever stale data was on screen when it was paused.
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state != AppLifecycleState.resumed) return;
+    final uid = ref.read(authStateProvider).valueOrNull?.id;
+    if (uid == null) return;
+
+    _refreshOnResume();
+
+    // Fresh device read → server. Battle activation/completion is owned by the
+    // server-side cron (migration 0008); the invalidations above re-fetch the
+    // latest battle state so a returning user sees the result within a tick.
+    _syncStepsAllSources(uid);
+  }
+
+  /// Reset the read-side providers so dependent widgets re-enter their
+  /// loading (shimmer) state, then repopulate from the freshest source.
+  /// Realtime providers (battles/invites) re-subscribe, giving an immediate
+  /// authoritative fetch rather than waiting for the next realtime event.
+  void _refreshOnResume() {
+    ref.invalidate(localTodayStepsProvider);
+    ref.invalidate(firestoreTodayStepsProvider);
+    ref.invalidate(todayCaloriesProvider);
+    ref.invalidate(weeklyStepsProvider);
+    ref.invalidate(userProfileProvider);
+    ref.invalidate(dailyProgressProvider);
+    ref.invalidate(weeklyProgressProvider);
+    ref.invalidate(allBattlesProvider);
+    ref.invalidate(incomingBattleInvitesProvider);
+    ref.invalidate(myRankProvider);
+    ref.invalidate(districtLeaderboardProvider);
+    ref.invalidate(stateLeaderboardProvider);
+    ref.invalidate(countryLeaderboardProvider);
+    ref.invalidate(friendsLeaderboardProvider);
+  }
+
+  /// Deep-link when the user taps a push notification. `notification`-type FCM
+  /// messages are shown by the OS; tapping one opens the app and we route to
+  /// the relevant tab (battle result → Battles, etc. via [NotificationService.
+  /// extractRoute]). Covers both the background-tap and cold-start cases.
+  void _setupPushNavigation() {
+    final svc = ref.read(notificationServiceProvider);
+
+    svc.setupBackgroundTapHandler(onMessageOpenedApp: (message) {
+      final route = NotificationService.extractRoute(message.data);
+      if (route != null && mounted) context.go(route);
+    });
+
+    // App opened from a terminated state by tapping a push.
+    svc.getInitialMessage().then((message) {
+      if (message == null || !mounted) return;
+      final route = NotificationService.extractRoute(message.data);
+      if (route == null) return;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) context.go(route);
+      });
+    });
+  }
 
   Future<void> _runInitialSync(String uid) async {
     // Each ref-read is guarded by `mounted` because this is a fire-and-forget
@@ -36,24 +152,35 @@ class _MainShellState extends ConsumerState<MainShell> {
     // `on_auth_user_created` trigger on the Supabase side inserts the
     // profile row when the auth user is created.
     if (!mounted) return;
+    // 0. Start the always-on foreground service so the persistent notification
+    //    shows live stats (daily progress when idle, battle stats while a
+    //    battle is active, run stats during a Track session). Idempotent.
+    //    Also registers the terminated-state WorkManager fallback.
+    await BackgroundSync.startService();
+    await BackgroundSync.registerPeriodicSync();
+
+    if (!mounted) return;
     // 1. Force a step sync using the aggregator (max of native + HC + Fit).
     //    Pushes today's aggregate to every downstream (step_logs, missions,
     //    battles, clan) AND writes the per-source hourly breakdown row.
     //    Needed because ref.listen only fires on CHANGE, not on first load.
     await _syncStepsAllSources(uid);
 
-    if (!mounted) return;
-    // 2. Activate any scheduled battles whose start_time has arrived. Has
-    //    to run before completion in case a battle's whole window elapsed
-    //    while the app was closed (would otherwise transition scheduled →
-    //    active → completed in two separate launches).
-    await ref.read(battleServiceProvider).activateScheduledBattles(uid);
+    // Battle activation + completion now runs server-side every minute
+    // (supabase/migrations/0008 → pg_cron process_battle_lifecycle). The
+    // client deliberately no longer sweeps those transitions: two writers
+    // (cron + each device) could otherwise double-award XP and post
+    // duplicate result notifications. The server is the single writer.
 
     if (!mounted) return;
-    // 3. Finalize any battles whose endTime passed while the app was closed.
-    //    Without Cloud Functions this is the only chance to award the win
-    //    before the user opens the Battles tab.
-    await ref.read(battleServiceProvider).completeExpiredBattles(uid);
+    // 2. Register for push + persist the FCM token so the server can wake the
+    //    phone (battle results, invites) while the app is backgrounded/killed.
+    //    Non-fatal: failures here must never block the shell.
+    final notifications = ref.read(notificationServiceProvider);
+    try {
+      await notifications.requestPermission();
+      await notifications.saveToken(uid);
+    } catch (_) {}
   }
 
   /// Runs the canonical "we just got new step data" pipeline:
@@ -104,7 +231,12 @@ class _MainShellState extends ConsumerState<MainShell> {
     if (uid != null && !_backfillTriggered) {
       _backfillTriggered = true;
       _runInitialSync(uid);
+      _setupPushNavigation();
     }
+
+    // (Battle-gated service control removed — the foreground service is now
+    // always-on per user session, with its notification adapting to the active
+    // state, so it can also show daily progress when no battle is live.)
 
     // Auto-sync step count to Firestore whenever local device reading changes.
     // Fans out to: step_logs, users.totalStepsAllTime,
@@ -139,11 +271,14 @@ class _MainShellState extends ConsumerState<MainShell> {
     });
 
     final shell = widget.navigationShell;
+    final trackActive = ref.watch(isTrackActiveProvider);
     return PermissionGate(
       child: FriendRequestToastHost(
         child: Scaffold(
           body: shell,
           extendBody: true,
+          floatingActionButton: _TrackFab(active: trackActive),
+          floatingActionButtonLocation: FloatingActionButtonLocation.endFloat,
           bottomNavigationBar: _BottomNavBar(
             currentIndex: shell.currentIndex,
             onTap: (index) => shell.goBranch(
@@ -153,6 +288,35 @@ class _MainShellState extends ConsumerState<MainShell> {
           ),
         ),
       ),
+    );
+  }
+}
+
+/// Persistent floating button (bottom-right) for launching/opening the Track
+/// session. Renders an active state (pulsing accent + "Live" label) while a
+/// session is in flight so the user can jump back in from any tab.
+class _TrackFab extends StatelessWidget {
+  final bool active;
+  const _TrackFab({required this.active});
+
+  @override
+  Widget build(BuildContext context) {
+    if (active) {
+      return FloatingActionButton.extended(
+        heroTag: 'track-fab',
+        onPressed: () => GoRouter.of(context).go('/track/live'),
+        backgroundColor: AppColors.success,
+        foregroundColor: Colors.white,
+        icon: const Icon(Icons.directions_run),
+        label: const Text('Live'),
+      );
+    }
+    return FloatingActionButton(
+      heroTag: 'track-fab',
+      onPressed: () => GoRouter.of(context).go('/track'),
+      backgroundColor: AppColors.primary,
+      foregroundColor: Colors.white,
+      child: const Icon(Icons.directions_run),
     );
   }
 }

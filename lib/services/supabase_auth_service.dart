@@ -3,6 +3,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../models/user_model.dart';
 import '../utils/app_logger.dart';
+import 'background_sync.dart';
 
 /// Auth service backed by Supabase.
 ///
@@ -130,6 +131,10 @@ class SupabaseAuthService {
   Future<void> signOut() async {
     final uid = _supabase.auth.currentUser?.id;
     AppLogger.auth.i('signOut', fields: {'uid': uid});
+    // Tear down the always-on foreground service here (not in MainShell.dispose
+    // — that fires on any shell unmount, including transient root-route
+    // navigations, and would stop the service while the user is still active).
+    await BackgroundSync.stopService();
     try {
       await _googleSignIn.signOut();
     } catch (_) {

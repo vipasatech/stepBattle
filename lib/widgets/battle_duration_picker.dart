@@ -38,7 +38,9 @@ class BattleDurationPicker extends StatefulWidget {
   State<BattleDurationPicker> createState() => _BattleDurationPickerState();
 }
 
-enum _Preset { h12, d1, d3, w1, custom }
+// `daily` is the "today's calendar day" preset: start = now, end = today
+// 23:59:59 local (auto-rolls to tomorrow if opened within the last minute).
+enum _Preset { daily, h12, d1, d3, w1, custom }
 
 class _BattleDurationPickerState extends State<BattleDurationPicker> {
   late DateTime _start;
@@ -46,6 +48,7 @@ class _BattleDurationPickerState extends State<BattleDurationPicker> {
   _Preset _preset = _Preset.d1;
 
   static const _presetShort = {
+    _Preset.daily: 'Daily',
     _Preset.h12: '12h',
     _Preset.d1: '1d',
     _Preset.d3: '3d',
@@ -54,6 +57,7 @@ class _BattleDurationPickerState extends State<BattleDurationPicker> {
   };
 
   static const _presetLabels = {
+    _Preset.daily: 'Daily • Today',
     _Preset.h12: '12 hours',
     _Preset.d1: '1 day',
     _Preset.d3: '3 days',
@@ -82,13 +86,38 @@ class _BattleDurationPickerState extends State<BattleDurationPicker> {
         _Preset.d1 => const Duration(days: 1),
         _Preset.d3 => const Duration(days: 3),
         _Preset.w1 => const Duration(days: 7),
+        _Preset.daily => Duration.zero, // anchored end; computed in _pickPreset
         _Preset.custom => Duration.zero,
       };
+
+  /// "Daily" anchors end at local midnight (23:59:59) of the current day, with
+  /// start snapped to now. If we're already within the last minute of the day,
+  /// roll to tomorrow's midnight so the battle has a usable window.
+  DateTime _dailyEnd(DateTime now) {
+    var end = DateTime(now.year, now.month, now.day, 23, 59, 59);
+    if (end.difference(now).inMinutes < 1) {
+      end = end.add(const Duration(days: 1));
+    }
+    return end;
+  }
 
   void _pickPreset(_Preset p) {
     if (p == _Preset.custom) {
       // Custom means "you'll choose end manually" — open the end picker.
       _editEnd();
+      return;
+    }
+    if (p == _Preset.daily) {
+      // Anchor end to midnight, snap start to now. Counting still begins at
+      // the moment the battle activates (per the lifetime-baseline rule); the
+      // label "Daily • Today" just signals when the battle ends.
+      final now = DateTime.now();
+      setState(() {
+        _preset = p;
+        _start = now;
+        _end = _dailyEnd(now);
+      });
+      widget.onChanged(BattleWindow(_start, _end));
       return;
     }
     setState(() {
@@ -109,9 +138,16 @@ class _BattleDurationPickerState extends State<BattleDurationPicker> {
     if (picked == null) return;
     setState(() {
       _start = picked;
-      // Preserve the active duration relative to the new start (unless the
-      // user picked Custom — in which case end is independent).
-      if (_preset != _Preset.custom) {
+      // "Daily" anchors end at midnight; once the user drags start off "now",
+      // the preset no longer makes sense → fall back to Custom and keep the
+      // midnight end the user already saw.
+      if (_preset == _Preset.daily) {
+        _preset = _Preset.custom;
+        if (!_end.isAfter(_start)) {
+          _end = _start.add(const Duration(hours: 1));
+        }
+      } else if (_preset != _Preset.custom) {
+        // Preserve the active duration relative to the new start.
         _end = _start.add(_durationForPreset(_preset));
       } else if (!_end.isAfter(_start)) {
         // Avoid invalid window if user dragged start past the old end.

@@ -1,0 +1,306 @@
+import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
+
+import '../../config/colors.dart';
+import '../../models/run_session_model.dart';
+import '../../providers/auth_provider.dart';
+import '../../providers/run_session_provider.dart';
+import '../../services/permission_service.dart';
+import '../../services/run_tracking_service.dart';
+import '../../widgets/empty_state.dart';
+
+/// Landing screen for the Track feature. Big "Start Run" button + recent
+/// sessions list. Reached by tapping the floating FAB when no session is
+/// active; if one IS active, the FAB jumps straight to TrackLiveScreen.
+class TrackHubScreen extends ConsumerStatefulWidget {
+  const TrackHubScreen({super.key});
+
+  @override
+  ConsumerState<TrackHubScreen> createState() => _TrackHubScreenState();
+}
+
+class _TrackHubScreenState extends ConsumerState<TrackHubScreen> {
+  bool _starting = false;
+  final TextEditingController _nameController = TextEditingController();
+
+  @override
+  void dispose() {
+    _nameController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _start() async {
+    if (_starting) return;
+    setState(() => _starting = true);
+    try {
+      final permission = await PermissionService().requestRunPermissions();
+      if (!mounted) return;
+      switch (permission) {
+        case RunLocationStatus.granted:
+        case RunLocationStatus.foregroundOnly:
+          // Foreground-only still lets us start; recording pauses if the
+          // screen turns off. Tell the user and start.
+          if (permission == RunLocationStatus.foregroundOnly) {
+            ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+              content: Text(
+                'Background location not granted — recording may pause when the screen is off.',
+              ),
+            ));
+          }
+          break;
+        case RunLocationStatus.permanentlyDenied:
+        case RunLocationStatus.foregroundOnlyPermanent:
+          await PermissionService().openAppSettingsPage();
+          return;
+        case RunLocationStatus.denied:
+          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+            content: Text('Location permission is required to track a run.'),
+          ));
+          return;
+      }
+
+      final uid = ref.read(authStateProvider).valueOrNull?.id;
+      if (uid == null) return;
+      final name = _nameController.text;
+      final ok = await ref
+          .read(runTrackingServiceProvider)
+          .start(userId: uid, name: name);
+      if (!mounted) return;
+      if (ok) {
+        _nameController.clear();
+        context.go('/track/live');
+      }
+    } finally {
+      if (mounted) setState(() => _starting = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final historyAsync = ref.watch(runSessionHistoryProvider);
+    // Watch the stream so we rebuild when end() emits null; trust the Hive
+    // flag for the truth — `activeAsync.valueOrNull` would otherwise stay
+    // populated with the last RunSession even after the session ended.
+    ref.watch(activeRunSessionProvider);
+    final isActive = isTrackActiveFromHive();
+
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Track'),
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back),
+          // /track is a root-level route (not pushed on top of the shell), so
+          // there's nothing to pop. Send the user back to Home explicitly.
+          onPressed: () => context.go('/home'),
+        ),
+      ),
+      body: ListView(
+        padding: const EdgeInsets.fromLTRB(20, 16, 20, 120),
+        children: [
+          Container(
+            padding: const EdgeInsets.all(20),
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                colors: [
+                  AppColors.primaryBrand.withValues(alpha: 0.20),
+                  AppColors.primaryBrand.withValues(alpha: 0.06),
+                ],
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+              ),
+              borderRadius: BorderRadius.circular(24),
+              border: Border.all(
+                color: AppColors.primaryBrand.withValues(alpha: 0.30),
+              ),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    const Icon(Icons.directions_run,
+                        color: AppColors.primary, size: 28),
+                    const SizedBox(width: 10),
+                    Text('Run / walk session',
+                        style: theme.textTheme.titleLarge?.copyWith(
+                          fontWeight: FontWeight.w700,
+                        )),
+                  ],
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  'Track steps, distance, and calories with GPS. Falls back to '
+                  'pedometer if GPS is weak.',
+                  style: theme.textTheme.bodyMedium?.copyWith(
+                    color: AppColors.onSurfaceVariant,
+                  ),
+                ),
+                const SizedBox(height: 16),
+                // Optional name. Blank → auto-defaulted to "Run · MMM d, h:mm a"
+                // on save. Hidden while a session is already active (the live
+                // screen does in-run naming).
+                if (!isActive)
+                  TextField(
+                    controller: _nameController,
+                    maxLength: 50,
+                    textInputAction: TextInputAction.done,
+                    decoration: const InputDecoration(
+                      labelText: 'Name this run (optional)',
+                      hintText: 'e.g. Morning park loop',
+                      counterText: '',
+                    ),
+                  ),
+                if (!isActive) const SizedBox(height: 8),
+                SizedBox(
+                  width: double.infinity,
+                  child: FilledButton.icon(
+                    onPressed: isActive
+                        ? () => context.go('/track/live')
+                        : (_starting ? null : _start),
+                    icon: Icon(isActive ? Icons.open_in_full : Icons.play_arrow),
+                    label: Text(isActive ? 'Open active session' : 'Start run'),
+                    style: FilledButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(vertical: 16),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+
+          const SizedBox(height: 28),
+          Text('RECENT SESSIONS',
+              style: theme.textTheme.labelSmall?.copyWith(
+                color: AppColors.onSurfaceVariant,
+                letterSpacing: 2,
+              )),
+          const SizedBox(height: 10),
+
+          historyAsync.when(
+            loading: () => const Padding(
+              padding: EdgeInsets.symmetric(vertical: 24),
+              child: Center(child: CircularProgressIndicator()),
+            ),
+            error: (_, __) => const EmptyState(
+              icon: Icons.error_outline,
+              title: 'Could not load history',
+              subtitle: 'Pull down to retry.',
+            ),
+            data: (sessions) {
+              if (sessions.isEmpty) {
+                return const EmptyState(
+                  icon: Icons.directions_run,
+                  title: 'No runs yet',
+                  subtitle: 'Tap "Start run" above to record your first one.',
+                );
+              }
+              return Column(
+                children: sessions
+                    .map((s) => Padding(
+                          padding: const EdgeInsets.only(bottom: 8),
+                          child: _SessionTile(session: s),
+                        ))
+                    .toList(),
+              );
+            },
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _SessionTile extends StatelessWidget {
+  final RunSession session;
+  const _SessionTile({required this.session});
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final km = (session.distanceMeters / 1000);
+    final dur = _formatDuration(session.durationSeconds);
+    return Material(
+      color: AppColors.surfaceContainerLow,
+      borderRadius: BorderRadius.circular(16),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(16),
+        onTap: () =>
+            GoRouter.of(context).go('/track/session/${session.id}'),
+        child: Padding(
+          padding: const EdgeInsets.all(14),
+          child: Row(
+            children: [
+              Container(
+                width: 40,
+                height: 40,
+                decoration: BoxDecoration(
+                  color: AppColors.primaryBrand.withValues(alpha: 0.15),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: const Icon(Icons.directions_run,
+                    color: AppColors.primary, size: 20),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    // Row title — user-set name OR auto-default ("Run · MMM d, h:mm a")
+                    Text(
+                      session.displayName,
+                      style: theme.textTheme.titleSmall
+                          ?.copyWith(fontWeight: FontWeight.w700),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      '${km.toStringAsFixed(2)} km · $dur · '
+                      '${session.steps} steps · ${session.calories} kcal',
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: AppColors.onSurfaceVariant,
+                      ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ],
+                ),
+              ),
+              if (session.source != 'pedometer')
+                Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  decoration: BoxDecoration(
+                    color: AppColors.primaryBrand.withValues(alpha: 0.15),
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: Text(
+                    session.source.toUpperCase(),
+                    style: theme.textTheme.labelSmall?.copyWith(
+                      color: AppColors.primary,
+                      fontWeight: FontWeight.w700,
+                      letterSpacing: 1,
+                    ),
+                  ),
+                ),
+              const SizedBox(width: 6),
+              const Icon(Icons.chevron_right,
+                  size: 18, color: AppColors.onSurfaceVariant),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  static String _formatDuration(int seconds) {
+    final h = seconds ~/ 3600;
+    final m = (seconds % 3600) ~/ 60;
+    final s = seconds % 60;
+    if (h > 0) return '${h}h ${m}m';
+    if (m > 0) return '${m}m ${s}s';
+    return '${s}s';
+  }
+}

@@ -1,0 +1,22 @@
+<!--
+  Notification status-bar icon for StepBattle's always-on foreground service.
+
+  Status-bar icons on Android MUST be monochrome with transparency — the
+  system colours them via the notification channel / app theme. The fill is
+  white-on-transparent; the OS handles the actual tint.
+
+  The shape is a stylised lightning bolt to match the app's "bolt" branding
+  (the colour logo lives in mipmap-* as the launcher icon; that's not usable
+  in the status bar). Replace this file later with a logo-character silhouette
+  vector if you have one — the manifest meta-data key
+  `com.stepbattle.notification.icon` points here, so no other change needed.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M7,2v11h3v9l7,-12h-4l4,-8z" />
+</vector>

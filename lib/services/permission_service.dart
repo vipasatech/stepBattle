@@ -87,6 +87,54 @@ class PermissionService {
   Future<void> openAppSettingsPage() async {
     await openAppSettings();
   }
+
+  /// Run-specific location flow, called only when the user taps the Track FAB.
+  /// We deliberately don't bundle this with the global PermissionGate — most
+  /// of the app works without location, and ACCESS_BACKGROUND_LOCATION is a
+  /// sensitive permission we only want to ask for when it'll be used.
+  ///
+  /// Sequence (Android 10+ requirement):
+  ///   1. ACCESS_FINE_LOCATION   — foreground GPS access.
+  ///   2. ACCESS_BACKGROUND_LOCATION — only after step 1 is granted; lets
+  ///      the foreground service keep recording while the screen is off.
+  ///
+  /// Returns [RunLocationStatus.granted] only when BOTH are granted. The
+  /// session can technically run with only foreground granted (it'll pause
+  /// recording when the screen turns off), but Strava-style behaviour needs
+  /// background.
+  Future<RunLocationStatus> requestRunPermissions() async {
+    AppLogger.permission.i('requestRunPermissions:start');
+
+    final fine = await Permission.locationWhenInUse.request();
+    if (!fine.isGranted) {
+      AppLogger.permission
+          .w('requestRunPermissions:fineDenied', fields: {'status': fine.name});
+      return fine.isPermanentlyDenied
+          ? RunLocationStatus.permanentlyDenied
+          : RunLocationStatus.denied;
+    }
+
+    final background = await Permission.locationAlways.request();
+    AppLogger.permission.i('requestRunPermissions:done', fields: {
+      'fine': fine.name,
+      'background': background.name,
+    });
+    if (background.isGranted) return RunLocationStatus.granted;
+    if (background.isPermanentlyDenied) {
+      return RunLocationStatus.foregroundOnlyPermanent;
+    }
+    return RunLocationStatus.foregroundOnly;
+  }
+}
+
+/// Outcome of the run-permission flow. The Track FAB / hub uses this to
+/// decide whether to start the session, prompt for upgrade, or open settings.
+enum RunLocationStatus {
+  granted,                    // fine + background — full Strava-like recording
+  foregroundOnly,             // fine yes, background no — recording pauses w/ screen off
+  foregroundOnlyPermanent,    // background denied forever — needs settings trip
+  denied,                     // fine denied this round
+  permanentlyDenied,          // fine denied forever — settings trip required
 }
 
 /// Snapshot of all permission states.

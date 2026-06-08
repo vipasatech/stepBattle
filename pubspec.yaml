@@ -33,7 +33,17 @@ dependencies:
   permission_handler: ^11.3.1
 
   # Background Tasks
+  #  • workmanager   — periodic headless sync; the only thing that can run
+  #                    while the app is fully terminated (best-effort, >=15min).
+  #  • flutter_foreground_task — persistent foreground service that keeps
+  #                    syncing steps while a battle is active and the app is
+  #                    backgrounded (reliable, fine-grained cadence).
   workmanager: ^0.5.2
+  flutter_foreground_task: ^8.17.0
+
+  # Home-screen widget — Dart pushes a few SharedPreferences keys and triggers
+  # an Android widget update; the widget itself is native XML + Kotlin.
+  home_widget: ^0.7.0
 
   # Local Storage
   hive: ^2.2.3

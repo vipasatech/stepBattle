@@ -30,7 +30,24 @@
       "mcp__claude_ai_Supabase__list_organizations",
       "mcp__claude_ai_Supabase__list_projects",
       "Bash(git checkout *)",
-      "Bash(Get-ChildItem -Path \"C:\\\\Users\\\\admin\\\\Desktop\\\\stepBattle\" -Name)"
+      "Bash(Get-ChildItem -Path \"C:\\\\Users\\\\admin\\\\Desktop\\\\stepBattle\" -Name)",
+      "Bash(awk '/flutter_foreground_task:/{f=1} f&&/version:/{print; exit}' pubspec.lock)",
+      "Bash(ls \"C:/Users/admin/AppData/Local/Pub/Cache/hosted/pub.dev/flutter_foreground_task-8.17.0/lib\")",
+      "Read(//c/Users/admin/AppData/Local/Pub/Cache/hosted/pub.dev/flutter_foreground_task-8.17.0/lib/**)",
+      "Bash(sed -n 1,80p C:/Users/admin/AppData/Local/Pub/Cache/hosted/pub.dev/flutter_foreground_task-8.17.0/lib/models/foreground_task_options.dart)",
+      "Bash(sed -n 1,60p C:/Users/admin/AppData/Local/Pub/Cache/hosted/pub.dev/flutter_foreground_task-8.17.0/lib/models/foreground_task_event_action.dart)",
+      "Read(//c/Users/admin/AppData/Local/Pub/Cache/hosted/pub.dev/flutter_foreground_task-8.17.0/android/src/main/**)",
+      "Read(//c/Users/admin/AppData/Local/Pub/Cache/hosted/pub.dev/flutter_foreground_task-8.17.0/**)",
+      "Bash(grep -iA20 ios)",
+      "Bash(flutter doctor *)",
+      "WebSearch",
+      "WebFetch(domain:support.strava.com)",
+      "WebFetch(domain:press.strava.com)",
+      "Bash(awk '/home_widget:/{f=1} f&&/version:/{print; exit}' pubspec.lock)",
+      "Bash(P=\"C:/Users/admin/AppData/Local/Pub/Cache/hosted/pub.dev/home_widget-0.7.0+1\"; echo \"=== android setup section ===\"; sed -n '/## Android/,/## /p' \"$P/README.md\" | head -120)"
+    ],
+    "additionalDirectories": [
+      "C:\\Users\\admin\\AppData\\Local\\Pub\\Cache\\hosted\\pub.dev\\home_widget-0.7.0+1"
     ]
   }
 }

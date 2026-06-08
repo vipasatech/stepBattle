@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Horizontal progress bar drawable for the widget's step-goal bar.
+     The track is a muted violet @ 20% and the progress fill is solid violet. -->
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:id="@android:id/background">
+        <shape>
+            <corners android:radius="6dp" />
+            <solid android:color="#33A855F7" />
+        </shape>
+    </item>
+    <item android:id="@android:id/progress">
+        <clip>
+            <shape>
+                <corners android:radius="6dp" />
+                <solid android:color="#7C3AED" />
+            </shape>
+        </clip>
+    </item>
+</layer-list>
