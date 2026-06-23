@@ -2,9 +2,26 @@
 <resources>
     <!-- Theme applied to the Android Window while the process is starting when the OS's Dark Mode setting is off -->
     <style name="LaunchTheme" parent="@android:style/Theme.Light.NoTitleBar">
-        <!-- Show a splash screen on the activity. Automatically removed when
-             the Flutter engine draws its first frame -->
+        <!-- Android <12 splash: legacy drawable. -->
         <item name="android:windowBackground">@drawable/launch_background</item>
+
+        <!-- Android 12+ splash (Splash Screen API). These override the
+             legacy windowBackground on API 31+, which is why a violet
+             color set only on launch_background.xml still rendered black
+             on Android 12/13/14/15/16 devices. The OS shows the launcher
+             icon centered on this background. -->
+        <item name="android:windowSplashScreenBackground">@color/ic_launcher_background</item>
+        <!-- splash_icon.png is a static render of the FIRST FRAME of the
+             Flutter splash (circular logo + three concentric rings at t=0).
+             The Android 12+ SplashScreen API centers it at ~192dp; when
+             Flutter takes over, its widget renders the same rings + logo
+             at the same position and the rings start pulsing. No visible
+             jump at the handoff. -->
+        <item name="android:windowSplashScreenAnimatedIcon">@drawable/splash_icon</item>
+        <!-- Wordmark + tagline anchored at the bottom of the native splash.
+             Mirrors the wordmark widget in the Flutter splash so the
+             handoff just continues the same composition. -->
+        <item name="android:windowSplashScreenBrandingImage">@drawable/splash_branding</item>
     </style>
     <!-- Theme applied to the Android Window as soon as the process has started.
          This theme determines the color of the Android Window while your

@@ -15,6 +15,7 @@ import 'app.dart';
 import 'firebase_options.dart';
 import 'services/background_sync.dart';
 import 'services/native_step_service.dart';
+import 'services/persistent_notifications.dart';
 import 'utils/app_logger.dart';
 
 /// Top-level FCM background/terminated message handler. Must be a top-level
@@ -73,6 +74,16 @@ void main() async {
   // registered after login (see MainShell), and the foreground service is
   // started/stopped based on active battles.
   await BackgroundSync.initEarly();
+
+  // Battle + Track persistent notifications (posted by the foreground service
+  // tick from `background_sync.dart`). Tap handlers funnel the target route
+  // into `pendingDeepLinkNotifier`; MainShell consumes it via context.go.
+  await PersistentNotifications.instance.init(
+    onTap: (payload) {
+      final route = routeForNotifPayload(payload);
+      if (route != null) pendingDeepLinkNotifier.value = route;
+    },
+  );
 
   // Emit a session header so per-session log folders start with build/device
   // context. Wrapped so a logging hiccup never blocks app startup.

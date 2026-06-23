@@ -13,12 +13,16 @@ class ClanScreen extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    // Tri-state: null while the profile is still resolving (rare — usually
+    // already cached by the time you hit this tab), true if clanId is set,
+    // false if clan-less. Treating "loading" as "clan-less" causes the
+    // create-clan screen to flash for a few hundred ms on tab open.
     final hasClan = ref.watch(hasClanProvider);
     final clan = ref.watch(currentClanProvider).valueOrNull;
 
     return Scaffold(
       appBar: AppBar(
-        title: hasClan && clan != null
+        title: hasClan == true && clan != null
             ? Row(
                 children: [
                   Container(
@@ -69,7 +73,7 @@ class ClanScreen extends ConsumerWidget {
           // as the Home AppBar.
           const FriendsAppBarButton(),
           const SizedBox(width: 8),
-          if (hasClan)
+          if (hasClan == true)
             IconButton(
               icon: const Icon(Icons.settings, color: AppColors.onSurfaceVariant),
               tooltip: 'Clan details',
@@ -77,7 +81,13 @@ class ClanScreen extends ConsumerWidget {
             ),
         ],
       ),
-      body: hasClan ? const ClanDashboardView() : const ClanEntryView(),
+      body: switch (hasClan) {
+        null => const Center(
+            child: CircularProgressIndicator(color: AppColors.primary),
+          ),
+        true => const ClanDashboardView(),
+        false => const ClanEntryView(),
+      },
     );
   }
 }

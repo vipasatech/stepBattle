@@ -19,7 +19,15 @@ import '../config/colors.dart';
 class BattleWindow {
   final DateTime start;
   final DateTime end;
-  const BattleWindow(this.start, this.end);
+
+  /// True when the user picked the "Daily" preset (recurring series).
+  /// The caller (1v1 / group setup sheets) branches on this and routes the
+  /// create call to `BattleService.createDailySeries` instead of the
+  /// regular `createBattle`. False for every other preset / custom window.
+  final bool recurring;
+
+  const BattleWindow(this.start, this.end, {this.recurring = false});
+
   Duration get duration => end.difference(start);
   bool get isValid => end.isAfter(start);
 }
@@ -77,8 +85,19 @@ class _BattleDurationPickerState extends State<BattleDurationPicker> {
       _end = _start.add(const Duration(days: 1));
     }
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      widget.onChanged(BattleWindow(_start, _end));
+      _emitChange();
     });
+  }
+
+  /// Emits the current window to the parent, tagging `recurring: true` when
+  /// the user is on the Daily preset so the caller can route through the
+  /// recurring-series creation path instead of the one-off battle path.
+  void _emitChange() {
+    widget.onChanged(BattleWindow(
+      _start,
+      _end,
+      recurring: _preset == _Preset.daily,
+    ));
   }
 
   Duration _durationForPreset(_Preset p) => switch (p) {
@@ -117,14 +136,14 @@ class _BattleDurationPickerState extends State<BattleDurationPicker> {
         _start = now;
         _end = _dailyEnd(now);
       });
-      widget.onChanged(BattleWindow(_start, _end));
+      _emitChange();
       return;
     }
     setState(() {
       _preset = p;
       _end = _start.add(_durationForPreset(p));
     });
-    widget.onChanged(BattleWindow(_start, _end));
+    _emitChange();
   }
 
   Future<void> _editStart() async {
@@ -154,7 +173,7 @@ class _BattleDurationPickerState extends State<BattleDurationPicker> {
         _end = _start.add(const Duration(hours: 1));
       }
     });
-    widget.onChanged(BattleWindow(_start, _end));
+    _emitChange();
   }
 
   Future<void> _editEnd() async {
@@ -169,7 +188,7 @@ class _BattleDurationPickerState extends State<BattleDurationPicker> {
       _preset = _Preset.custom;
       _end = picked;
     });
-    widget.onChanged(BattleWindow(_start, _end));
+    _emitChange();
   }
 
   Future<DateTime?> _showDateTimePicker({

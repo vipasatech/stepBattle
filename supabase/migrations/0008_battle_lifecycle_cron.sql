@@ -139,6 +139,20 @@ declare
   v_period text;
   v_push_url    text;
   v_push_secret text;
+  v_series_status text;
+  v_series_type   text;
+  v_series_xp     integer;
+  v_series_creator uuid;
+  v_next_start    timestamptz;
+  v_next_end      timestamptz;
+  v_existing_next boolean;
+  v_new_battle_id uuid;
+  -- Team-battle scoring (migration 0015)
+  v_winning_team    text;
+  v_top_team_sum    bigint;
+  v_team_tie        boolean;
+  v_team_size       int;
+  v_team_xp_per_member integer;
   v_today  text := to_char(now() at time zone 'utc', 'YYYY-MM-DD');
   v_week   text := to_char(
                      (now() at time zone 'utc')::date
@@ -256,6 +270,130 @@ begin
     where bp.battle_id = b.id
       and bp.user_id = pr.id;
 
+    -- ===========================================================================
+    -- TEAM BATTLE BRANCH — winner is a TEAM_LABEL, not a single user.
+    -- ===========================================================================
+    if b.type = 'team' then
+      v_winning_team := null;
+      v_top_team_sum := -1;
+      v_team_tie := false;
+
+      -- Sum current_steps per team_label, pick the leader.
+      for p in
+        select team_label, sum(current_steps) as team_sum
+        from public.battle_participants
+        where battle_id = b.id
+          and invite_status = 'accepted'
+          and team_label is not null
+        group by team_label
+      loop
+        if p.team_sum > v_top_team_sum then
+          v_top_team_sum := p.team_sum;
+          v_winning_team := p.team_label;
+          v_team_tie := false;
+        elsif p.team_sum = v_top_team_sum then
+          v_team_tie := true;
+        end if;
+      end loop;
+      if v_team_tie or v_top_team_sum <= 0 then
+        v_winning_team := null;
+      end if;
+
+      -- Freeze every participant + stamp is_winner per team membership.
+      update public.battle_participants bp
+      set end_steps_baseline = pr.total_steps_all_time,
+          is_winner = (v_winning_team is not null
+                       and bp.team_label = v_winning_team)
+      from public.profiles pr
+      where bp.battle_id = b.id
+        and bp.user_id = pr.id;
+
+      -- For team battles, battles.winner_id stays null (no single winner) —
+      -- the UI looks at is_winner on each participant instead.
+      update public.battles
+      set status = 'completed', winner_id = null
+      where id = b.id;
+
+      -- Per Q9: each winning team member gets `xp_reward × team_size`.
+      -- Also bump their battle-category missions.
+      if v_winning_team is not null then
+        select count(*) into v_team_size
+        from public.battle_participants
+        where battle_id = b.id
+          and invite_status = 'accepted'
+          and team_label = v_winning_team;
+
+        v_team_xp_per_member := b.xp_reward * v_team_size;
+
+        for p in
+          select user_id
+          from public.battle_participants
+          where battle_id = b.id
+            and invite_status = 'accepted'
+            and team_label = v_winning_team
+        loop
+          perform public.award_xp(p.user_id, v_team_xp_per_member);
+
+          for m in select * from public.missions where category = 'battle' loop
+            v_period := case when m.type = 'daily' then v_today else v_week end;
+
+            select current_value, is_completed
+            into v_prior, v_was
+            from public.user_mission_progress
+            where user_id = p.user_id
+              and mission_id = m.id
+              and period_start = v_period;
+
+            v_prior := coalesce(v_prior, 0);
+            v_was := coalesce(v_was, false);
+            v_new := v_prior + 1;
+            v_done := v_new >= m.target_value;
+
+            insert into public.user_mission_progress
+              (user_id, mission_id, period_start, current_value,
+               target_value, is_completed, completed_at)
+            values
+              (p.user_id, m.id, v_period, v_new, m.target_value, v_done,
+               case when v_done then now() else null end)
+            on conflict (user_id, mission_id, period_start) do update
+            set current_value = excluded.current_value,
+                is_completed = public.user_mission_progress.is_completed
+                               or excluded.is_completed,
+                completed_at = coalesce(public.user_mission_progress.completed_at,
+                                         excluded.completed_at);
+
+            if v_done and not v_was then
+              perform public.award_xp(p.user_id, m.xp_reward);
+            end if;
+          end loop;
+        end loop;
+      end if;
+
+      -- Notify every accepted participant of the result.
+      insert into public.notifications (user_id, type, title, body, data)
+      select
+        bp.user_id,
+        'battle_result',
+        'Battle Ended',
+        case
+          when v_winning_team is null then 'Team battle ended in a tie'
+          when bp.team_label = v_winning_team then
+            'Your team won! +' || v_team_xp_per_member || ' XP'
+          else 'Team battle ended — better luck next time'
+        end,
+        jsonb_build_object('battle_id', b.id,
+                           'winning_team', v_winning_team)
+      from public.battle_participants bp
+      where bp.battle_id = b.id
+        and bp.invite_status = 'accepted';
+
+      -- Skip the individual-scoring path below.
+      continue;
+    end if;
+
+    -- ===========================================================================
+    -- INDIVIDUAL BATTLE PATH (1v1 / group) — unchanged below.
+    -- ===========================================================================
     -- Pick winner: highest current_steps. Ties or all-zero → no winner.
     v_winner := null;
     v_top := -1;
@@ -342,6 +480,66 @@ begin
     from public.battle_participants bp
     where bp.battle_id = b.id
       and bp.invite_status = 'accepted';
+
+    -- =========================================================================
+    -- DAILY RECURRENCE — if this instance was part of an active series, spawn
+    -- tomorrow's instance with the same participants. Next-day midnight is
+    -- derived from b.end_time + 1 second, which preserves the creator's
+    -- original local-TZ alignment (today 23:59:59 + 1s = tomorrow 00:00:00
+    -- in that same TZ). DST days will produce a 23h or 25h instance — fine.
+    -- =========================================================================
+    if b.series_id is not null then
+      select status, type, xp_reward, created_by
+        into v_series_status, v_series_type, v_series_xp, v_series_creator
+        from public.battle_series
+        where id = b.series_id;
+
+      if v_series_status = 'active' then
+        v_next_start := b.end_time + interval '1 second';
+        v_next_end   := v_next_start + interval '23 hours 59 minutes 59 seconds';
+
+        -- Idempotency guard: if a concurrent run already created tomorrow's
+        -- instance for this series, don't double up.
+        select exists (
+          select 1 from public.battles
+          where series_id = b.series_id
+            and start_time = v_next_start
+        ) into v_existing_next;
+
+        if not v_existing_next then
+          insert into public.battles (
+            type, status, start_time, end_time, xp_reward, created_by, series_id
+          )
+          values (
+            v_series_type,
+            'scheduled',
+            v_next_start,
+            v_next_end,
+            v_series_xp,
+            v_series_creator,
+            b.series_id
+          )
+          returning id into v_new_battle_id;
+
+          -- Carry the accepted roster forward. invite_status='accepted'
+          -- because acceptance is at the series level.
+          insert into public.battle_participants (
+            battle_id, user_id, display_name, avatar_url,
+            current_steps, is_winner, invite_status
+          )
+          select
+            v_new_battle_id,
+            sp.user_id,
+            sp.display_name,
+            sp.avatar_url,
+            0,
+            false,
+            'accepted'
+          from public.battle_series_participants sp
+          where sp.series_id = b.series_id;
+        end if;
+      end if;
+    end if;
   end loop;
 end;
 $$;

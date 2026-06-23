@@ -13,9 +13,21 @@ final currentClanProvider = StreamProvider<ClanModel?>((ref) {
   return ref.read(clanServiceProvider).watchClan(user.clanId!);
 });
 
-/// Whether the user is in a clan.
-final hasClanProvider = Provider<bool>((ref) {
-  return ref.watch(currentClanProvider).valueOrNull != null;
+/// Whether the user is in a clan. Tri-state:
+///   • `null`  — profile still loading; UI should show a spinner, NOT the
+///               "create a clan" screen. Reading from [currentClanProvider]
+///               (a derived stream) caused a brief flash of the create
+///               screen on tab open because `valueOrNull` is null while
+///               the stream is in `AsyncLoading`.
+///   • `true`  — profile resolved, clanId is set.
+///   • `false` — profile resolved, clanId is null (truly clan-less).
+///
+/// Derived from the cached profile so we know the answer the instant the
+/// user opens the Clan tab — no second async hop through [currentClanProvider].
+final hasClanProvider = Provider<bool?>((ref) {
+  final user = ref.watch(currentUserProvider);
+  if (user.isLoading) return null;
+  return user.valueOrNull?.clanId != null;
 });
 
 /// Clan members stream.

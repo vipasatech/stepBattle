@@ -1,0 +1,125 @@
+<template id="s8-template">
+  <div data-composition-id="s8" data-width="1920" data-height="1080">
+    <style>
+      [data-composition-id="s8"] {
+        width:100%; height:100%; background:#0A0614;
+        font-family:'Manrope',sans-serif; position:relative; overflow:hidden;
+      }
+      [data-composition-id="s8"] .leak { position:absolute; left:-200px; top:-160px; width:820px; height:820px; background:radial-gradient(circle, rgba(124,58,237,0.3) 0%, transparent 60%); filter:blur(80px); }
+
+      /* phone podium */
+      [data-composition-id="s8"] .phone { position:absolute; left:745px; top:100px; width:430px; height:880px; border-radius:48px; background:#05030B; padding:13px; box-shadow:0 50px 130px rgba(124,58,237,0.45), 0 0 0 2px rgba(168,85,247,0.28); z-index:3; }
+      [data-composition-id="s8"] .screen { width:100%; height:100%; border-radius:36px; overflow:hidden; background:#0E0E10; position:relative; }
+      [data-composition-id="s8"] .lh { font-family:'Space Grotesk',sans-serif; font-size:22px; font-weight:800; letter-spacing:1px; color:#fff; padding:34px 22px 10px; }
+      [data-composition-id="s8"] .tabs { display:flex; gap:8px; padding:0 18px 10px; }
+      [data-composition-id="s8"] .tabs .tb { font-size:12px; font-weight:700; color:rgba(216,180,254,0.6); background:rgba(255,255,255,0.05); border-radius:999px; padding:7px 14px; }
+      [data-composition-id="s8"] .tabs .tb.sel { background:linear-gradient(135deg,#7C3AED,#A855F7); color:#fff; }
+
+      [data-composition-id="s8"] .podium { display:flex; align-items:flex-end; justify-content:center; gap:14px; padding:24px 18px 10px; height:300px; }
+      [data-composition-id="s8"] .pcol { text-align:center; flex:1; }
+      [data-composition-id="s8"] .pcol .av { width:60px; height:60px; border-radius:50%; margin:0 auto 8px; border:3px solid; display:flex; align-items:center; justify-content:center; font-size:24px; color:#fff; }
+      [data-composition-id="s8"] .pcol.g .av { border-color:#FBBC04; background:linear-gradient(135deg,#FBBC04,#F59E0B); box-shadow:0 0 24px rgba(251,188,4,0.6); }
+      [data-composition-id="s8"] .pcol.s .av { border-color:#CBD5E1; background:linear-gradient(135deg,#CBD5E1,#94A3B8); }
+      [data-composition-id="s8"] .pcol.b .av { border-color:#D08B5B; background:linear-gradient(135deg,#D08B5B,#A16207); }
+      [data-composition-id="s8"] .pcol .nm { font-size:12px; font-weight:700; color:#fff; }
+      [data-composition-id="s8"] .pcol .xp { font-size:11px; color:#A855F7; font-weight:700; }
+      [data-composition-id="s8"] .pcol .bar { margin-top:8px; border-radius:10px 10px 0 0; background:linear-gradient(180deg, rgba(124,58,237,0.5), rgba(124,58,237,0.12)); display:flex; align-items:flex-start; justify-content:center; padding-top:8px; font-family:'Space Grotesk',sans-serif; font-weight:800; color:#fff; font-size:20px; }
+      [data-composition-id="s8"] .pcol.g .bar { height:130px; } [data-composition-id="s8"] .pcol.s .bar { height:96px; } [data-composition-id="s8"] .pcol.b .bar { height:72px; }
+
+      [data-composition-id="s8"] .lrow { margin:6px 18px; border-radius:14px; padding:12px 14px; background:rgba(255,255,255,0.04); display:flex; align-items:center; gap:12px; }
+      [data-composition-id="s8"] .lrow .rk { font-family:'Space Grotesk',sans-serif; font-weight:800; color:rgba(216,180,254,0.7); font-size:14px; width:24px; }
+      [data-composition-id="s8"] .lrow .av { width:34px; height:34px; border-radius:50%; background:linear-gradient(135deg,#A855F7,#7C3AED); }
+      [data-composition-id="s8"] .lrow .nm { font-size:14px; font-weight:700; color:#fff; }
+      [data-composition-id="s8"] .lrow .xp { margin-left:auto; font-size:13px; font-weight:800; color:#A855F7; }
+      [data-composition-id="s8"] .lrow.you { background:linear-gradient(90deg, rgba(124,58,237,0.35), rgba(124,58,237,0.08)); border:1px solid rgba(168,85,247,0.5); box-shadow:0 0 22px rgba(124,58,237,0.4); }
+
+      /* map takeover */
+      [data-composition-id="s8"] .map { position:absolute; inset:0; z-index:5; opacity:0; background:radial-gradient(ellipse at 50% 45%, #1A0E34 0%, #0C0720 70%); }
+      [data-composition-id="s8"] .mgrid { position:absolute; left:50%; top:48%; transform:translate(-50%,-50%); width:1500px; height:760px; }
+      [data-composition-id="s8"] .reg { position:absolute; border-radius:20px; border:1px solid rgba(168,85,247,0.3); background:rgba(124,58,237,0.08); }
+      [data-composition-id="s8"] .reg.hot { background:rgba(124,58,237,0.4); box-shadow:0 0 30px rgba(168,85,247,0.5); border-color:rgba(168,85,247,0.7); }
+      [data-composition-id="s8"] .reg.warm { background:rgba(124,58,237,0.22); }
+      [data-composition-id="s8"] .pin { position:absolute; z-index:7; transform:translate(-50%,-100%); }
+      [data-composition-id="s8"] .pin .head { width:46px; height:46px; border-radius:50% 50% 50% 4px; background:linear-gradient(135deg,#FBBC04,#F59E0B); transform:rotate(-45deg); box-shadow:0 8px 24px rgba(251,188,4,0.6); display:flex; align-items:center; justify-content:center; }
+      [data-composition-id="s8"] .pin .head span { transform:rotate(45deg); font-size:20px; }
+      [data-composition-id="s8"] .pin .cbox { position:absolute; left:60px; top:-8px; white-space:nowrap; background:rgba(14,10,26,0.9); border:1px solid rgba(251,188,4,0.5); border-radius:12px; padding:9px 16px; }
+      [data-composition-id="s8"] .pin .cbox b { color:#FBBC04; font-family:'Space Grotesk',sans-serif; font-size:18px; } [data-composition-id="s8"] .pin .cbox s { display:block; color:#fff; font-size:12px; text-decoration:none; }
+
+      /* caption */
+      [data-composition-id="s8"] .cap { position:absolute; left:120px; top:50%; transform:translateY(-50%); width:560px; z-index:4; }
+      [data-composition-id="s8"] .cap .k { font-size:20px; font-weight:700; letter-spacing:5px; text-transform:uppercase; color:#A855F7; margin-bottom:16px; }
+      [data-composition-id="s8"] .cap .h { font-family:'Space Grotesk',sans-serif; font-size:68px; font-weight:700; line-height:1.08; letter-spacing:-1.5px; color:#fff; }
+      [data-composition-id="s8"] .cap .h .v { background:linear-gradient(135deg,#D8B4FE,#7C3AED); -webkit-background-clip:text; background-clip:text; -webkit-text-fill-color:transparent; }
+      [data-composition-id="s8"] .cap2 { position:absolute; left:0; right:0; bottom:90px; text-align:center; z-index:8; opacity:0; }
+      [data-composition-id="s8"] .cap2 .h { font-family:'Space Grotesk',sans-serif; font-size:54px; font-weight:700; color:#fff; }
+      [data-composition-id="s8"] .cap2 .h .v { background:linear-gradient(135deg,#D8B4FE,#7C3AED); -webkit-background-clip:text; background-clip:text; -webkit-text-fill-color:transparent; }
+    </style>
+
+    <div class="leak"></div>
+
+    <div class="cap" id="s8-cap">
+      <div class="k">Ranks</div>
+      <div class="h">Climb the<br><span class="v">leaderboards.</span></div>
+    </div>
+
+    <div class="phone" id="s8-phone">
+      <div class="screen">
+        <div class="lh">LEADERBOARD</div>
+        <div class="tabs"><span class="tb sel">Friends</span><span class="tb">District</span><span class="tb">State</span><span class="tb">Country</span></div>
+        <div class="podium">
+          <div class="pcol s"><div class="av">🥈</div><div class="nm">Prashanth</div><div class="xp">5,130 XP</div><div class="bar">2</div></div>
+          <div class="pcol g"><div class="av">🥇</div><div class="nm">narsimlu</div><div class="xp">6,735 XP</div><div class="bar">1</div></div>
+          <div class="pcol b"><div class="av">🥉</div><div class="nm">Aditya</div><div class="xp">4,090 XP</div><div class="bar">3</div></div>
+        </div>
+        <div class="lrow"><span class="rk">4</span><div class="av"></div><span class="nm">Kiran</span><span class="xp">3,512 XP</span></div>
+        <div class="lrow you"><span class="rk">5</span><div class="av"></div><span class="nm">You</span><span class="xp" id="s8-youxp">3,180 XP</span></div>
+        <div class="lrow"><span class="rk">6</span><div class="av"></div><span class="nm">Meera</span><span class="xp">2,940 XP</span></div>
+      </div>
+    </div>
+
+    <!-- map -->
+    <div class="map" id="s8-map">
+      <div class="mgrid" id="s8-mgrid">
+        <div class="reg warm" style="left:60px; top:40px; width:300px; height:220px;"></div>
+        <div class="reg" style="left:380px; top:20px; width:260px; height:180px;"></div>
+        <div class="reg hot" style="left:660px; top:60px; width:340px; height:260px;" id="s8-hotreg"></div>
+        <div class="reg" style="left:1020px; top:30px; width:300px; height:210px;"></div>
+        <div class="reg warm" style="left:1330px; top:70px; width:160px; height:300px;"></div>
+        <div class="reg" style="left:60px; top:290px; width:280px; height:300px;"></div>
+        <div class="reg warm" style="left:360px; top:230px; width:280px; height:360px;"></div>
+        <div class="reg" style="left:660px; top:350px; width:340px; height:240px;"></div>
+        <div class="reg warm" style="left:1020px; top:270px; width:300px; height:320px;"></div>
+        <div class="pin" id="s8-pin" style="left:830px; top:170px;"><div class="head"><span>👑</span></div><div class="cbox"><b>#1 in your District</b><s>You · 3,180 XP</s></div></div>
+      </div>
+      <div class="cap2" id="s8-cap2"><div class="h">District · State · <span class="v">Country.</span></div></div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/gsap@3.14.2/dist/gsap.min.js"></script>
+    <script>
+      window.__timelines = window.__timelines || {};
+      const tl = gsap.timeline({ paused: true });
+
+      // PHASE A: podium
+      tl.from("#s8-phone", { x:60, autoAlpha:0, duration:0.55, ease:"power3.out" }, 0);
+      tl.from("#s8-cap", { x:-50, autoAlpha:0, duration:0.55, ease:"power3.out" }, 0.1);
+      tl.from(".podium .pcol", { y:40, autoAlpha:0, stagger:0.12, duration:0.5, ease:"back.out(1.4)" }, 0.5);
+      tl.from(".lrow", { x:30, autoAlpha:0, stagger:0.08, duration:0.4, ease:"power2.out" }, 1.0);
+
+      // PHASE B: dive into map
+      gsap.set("#s8-map", { scale:0.34, transformOrigin:"960px 540px" });
+      gsap.set("#s8-mgrid", { scale:1.5, transformOrigin:"830px 200px" });
+      gsap.set("#s8-pin", { autoAlpha:0, scale:0.6 });
+      tl.to(["#s8-phone","#s8-cap"], { autoAlpha:0, duration:0.4, ease:"power2.in" }, 2.5);
+      tl.to("#s8-map", { opacity:1, scale:1.0, duration:0.7, ease:"power3.out" }, 2.55);
+
+      // zoom from wide to the hot district
+      tl.to("#s8-mgrid", { scale:1.0, duration:1.0, ease:"power2.inOut" }, 3.2);
+      tl.to("#s8-mgrid", { scale:1.45, duration:1.4, ease:"power2.inOut" }, 4.3);
+      tl.to("#s8-hotreg", { boxShadow:"0 0 60px rgba(168,85,247,0.9)", duration:0.6, yoyo:true, repeat:1, ease:"sine.inOut" }, 4.4);
+      tl.fromTo("#s8-pin", { autoAlpha:0, scale:0.6, y:-20 }, { autoAlpha:1, scale:1.0, y:0, duration:0.5, ease:"back.out(1.7)" }, 4.5);
+      tl.fromTo("#s8-cap2", { opacity:0, y:20 }, { opacity:1, y:0, duration:0.45, ease:"power3.out" }, 3.0);
+
+      window.__timelines["s8"] = tl;
+    </script>
+  </div>
+</template>

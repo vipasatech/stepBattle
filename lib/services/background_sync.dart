@@ -16,6 +16,7 @@ import 'google_fit_service.dart';
 import 'health_service.dart';
 import 'mission_service.dart';
 import 'native_step_service.dart';
+import 'persistent_notifications.dart';
 import 'step_service.dart';
 import 'step_source_aggregator.dart';
 import 'xp_service.dart';
@@ -242,9 +243,10 @@ class _NotifContent {
 }
 
 // Stable button ids — also referenced by `onNotificationButtonPressed`.
+// Only `open_app` is wired on the FGS summary now; the battle/track
+// notifications are owned by PersistentNotifications and have their own
+// action ids handled by the flutter_local_notifications tap callback.
 const _kBtnOpen = 'open_app';
-const _kBtnOpenBattle = 'open_battle';
-const _kBtnEndTrack = 'end_track';
 
 String _fmtNumber(int n) {
   final s = n.toString();
@@ -276,61 +278,12 @@ String _fmtElapsed(Duration d) {
   return '${secs}s';
 }
 
-/// Resolve which state the user is in and produce the notification text to
-/// render. Track takes precedence (most ephemeral / user-driven), then battle,
-/// then idle. Returned `body` is the collapsed text; Android automatically
-/// uses it as the BigTextStyle when the user expands the shade.
-Future<_NotifContent> _renderForState(String uid) async {
+/// Daily-summary content for the foreground service's notification. This
+/// renders EVERY tick regardless of what else is happening (battle, track) —
+/// those get their own separate persistent notifications layered on top via
+/// [PersistentNotifications].
+Future<_NotifContent> _renderSummary(String uid) async {
   final client = Supabase.instance.client;
-
-  // 1. Active Track session (highest priority).
-  try {
-    final startedMs = Hive.box(NativeStepService.boxName)
-        .get('active_track_started_at');
-    if (startedMs is int) {
-      final started = DateTime.fromMillisecondsSinceEpoch(startedMs);
-      final elapsed = DateTime.now().difference(started);
-      return _NotifContent(
-        'Tracking your run',
-        '${_fmtElapsed(elapsed)} elapsed\nTap "End run" to save the session.',
-        const [
-          NotificationButton(id: _kBtnEndTrack, text: 'End run'),
-          NotificationButton(id: _kBtnOpen, text: 'Open'),
-        ],
-      );
-    }
-  } catch (_) {}
-
-  // 2. Soonest active battle the user is in.
-  try {
-    final rows = await client
-        .from('battle_participants')
-        .select('current_steps, battles!inner(end_time, status)')
-        .eq('user_id', uid)
-        .eq('battles.status', 'active')
-        .order('battles(end_time)', ascending: true)
-        .limit(1);
-    if (rows.isNotEmpty) {
-      final r = rows.first as Map;
-      final steps = (r['current_steps'] as num?)?.toInt() ?? 0;
-      final endStr = (r['battles'] as Map?)?['end_time'] as String?;
-      final remaining = endStr == null
-          ? null
-          : DateTime.parse(endStr).difference(DateTime.now().toUtc());
-      final remainingStr = remaining == null
-          ? ''
-          : '\n${_fmtRemaining(remaining)}';
-      return _NotifContent(
-        'Battle in progress',
-        'Your steps: ${_fmtNumber(steps)}$remainingStr',
-        const [
-          NotificationButton(id: _kBtnOpenBattle, text: 'Open battle'),
-        ],
-      );
-    }
-  } catch (_) {}
-
-  // 3. Idle — today's progress against the daily goal.
   try {
     final today = DateFormat('yyyy-MM-dd').format(DateTime.now());
     final logRow = await client
@@ -367,6 +320,165 @@ Future<_NotifContent> _renderForState(String uid) async {
   }
 }
 
+/// Content for the SECONDARY battle notification (posted via
+/// flutter_local_notifications, separate from the FGS summary).
+class _BattleNotifContent {
+  final String battleId;
+  final String title;
+  final String body;
+  final String bigText;
+  const _BattleNotifContent({
+    required this.battleId,
+    required this.title,
+    required this.body,
+    required this.bigText,
+  });
+}
+
+/// Look up the user's soonest active battle and render a delta-aware
+/// notification (ahead/behind for 1v1, rank + leader gap for group).
+/// Returns null when there's no active battle the user is part of.
+Future<_BattleNotifContent?> _renderBattle(String uid) async {
+  final client = Supabase.instance.client;
+  try {
+    // Find the user's soonest-ending active battle.
+    final mine = await client
+        .from('battle_participants')
+        .select('battle_id, battles!inner(id, type, end_time, status)')
+        .eq('user_id', uid)
+        .eq('battles.status', 'active')
+        .eq('invite_status', 'accepted')
+        .order('battles(end_time)', ascending: true)
+        .limit(1)
+        .maybeSingle();
+    if (mine == null) return null;
+    final battle = mine['battles'] as Map<String, dynamic>?;
+    if (battle == null) return null;
+
+    final battleId = battle['id'] as String? ?? '';
+    final type = battle['type'] as String? ?? '1v1';
+    final endStr = battle['end_time'] as String?;
+    final remaining = endStr == null
+        ? null
+        : DateTime.parse(endStr).difference(DateTime.now().toUtc());
+    final remainingStr =
+        remaining == null ? '' : ' · ${_fmtRemaining(remaining)}';
+
+    // Pull all accepted participants for that battle.
+    final partRows = await client
+        .from('battle_participants')
+        .select('user_id, display_name, current_steps')
+        .eq('battle_id', battleId)
+        .eq('invite_status', 'accepted');
+
+    final participants = (partRows as List)
+        .map((r) => {
+              'user_id': (r as Map)['user_id'] as String,
+              'display_name': r['display_name'] as String? ?? '',
+              'current_steps': (r['current_steps'] as num?)?.toInt() ?? 0,
+            })
+        .toList();
+    if (participants.isEmpty) return null;
+
+    final me = participants.firstWhere(
+      (p) => p['user_id'] == uid,
+      orElse: () => <String, Object>{},
+    );
+    if (me.isEmpty) return null;
+    final mySteps = me['current_steps'] as int;
+
+    String body;
+    String bigText;
+
+    if (type == '1v1' && participants.length == 2) {
+      // ---- 1v1 — ahead / behind / tied ----
+      final opp = participants.firstWhere(
+        (p) => p['user_id'] != uid,
+        orElse: () => <String, Object>{},
+      );
+      final oppName = (opp['display_name'] as String?) ?? 'Opponent';
+      final oppSteps = (opp['current_steps'] as int?) ?? 0;
+      final delta = mySteps - oppSteps;
+
+      final relationLine = delta > 0
+          ? "You're ahead by ${_fmtNumber(delta)} steps"
+          : delta < 0
+              ? "You're behind by ${_fmtNumber(-delta)} steps"
+              : "You're tied";
+
+      body = '$relationLine$remainingStr';
+      bigText = 'You vs $oppName\n'
+          '👟 You: ${_fmtNumber(mySteps)}\n'
+          '👟 $oppName: ${_fmtNumber(oppSteps)}\n'
+          '$relationLine'
+          '${remaining == null ? '' : '\n⏱ ${_fmtRemaining(remaining)}'}';
+    } else {
+      // ---- Group — rank + gap from leader ----
+      participants.sort((a, b) =>
+          (b['current_steps'] as int).compareTo(a['current_steps'] as int));
+      final myRank =
+          participants.indexWhere((p) => p['user_id'] == uid) + 1;
+      final leader = participants.first;
+      final leaderSteps = leader['current_steps'] as int;
+      final gap = leaderSteps - mySteps;
+
+      String rankLine;
+      if (myRank == 1) {
+        // Lead vs the second place.
+        final second = participants.length > 1
+            ? participants[1]['current_steps'] as int
+            : mySteps;
+        final lead = mySteps - second;
+        rankLine =
+            "Rank 1 of ${participants.length} · Leading by ${_fmtNumber(lead)}";
+      } else {
+        rankLine =
+            'Rank $myRank of ${participants.length} · ${_fmtNumber(gap)} behind leader';
+      }
+      body = '$rankLine$remainingStr';
+      bigText = 'Multi-player battle\n'
+          '${participants.take(4).map((p) {
+                final isMe = p['user_id'] == uid;
+                final marker = isMe ? '🟣' : '⚪';
+                return '$marker ${p['display_name']}: ${_fmtNumber(p['current_steps'] as int)}';
+              }).join('\n')}\n'
+          '$rankLine'
+          '${remaining == null ? '' : '\n⏱ ${_fmtRemaining(remaining)}'}';
+    }
+
+    return _BattleNotifContent(
+      battleId: battleId,
+      title: 'Battle in progress',
+      body: body,
+      bigText: bigText,
+    );
+  } catch (_) {
+    return null;
+  }
+}
+
+/// Content for the TRACK notification. Just elapsed time for now; the live
+/// session screen owns the rich UI. Returns null when no Track is active.
+({String title, String body, String bigText})? _renderTrack() {
+  try {
+    final startedMs = Hive.box(NativeStepService.boxName)
+        .get('active_track_started_at');
+    if (startedMs is int) {
+      final started = DateTime.fromMillisecondsSinceEpoch(startedMs);
+      final elapsed = DateTime.now().difference(started);
+      final elapsedStr = _fmtElapsed(elapsed);
+      return (
+        title: 'Tracking your run',
+        body: '$elapsedStr elapsed · tap to view',
+        bigText: 'Run in progress\n'
+            '⏱ $elapsedStr\n'
+            'Tap to open the live session.',
+      );
+    }
+  } catch (_) {}
+  return null;
+}
+
 @pragma('vm:entry-point')
 void foregroundTaskStartCallback() {
   FlutterForegroundTask.setTaskHandler(_StepSyncTaskHandler());
@@ -377,12 +489,24 @@ class _StepSyncTaskHandler extends TaskHandler {
   DateTime? _scheduledEnd;
   int _lastNotifHash = 0;
 
+  /// Faster timer dedicated to re-posting the secondary battle + track
+  /// persistent notifications. Survives a swipe-dismiss because every tick
+  /// re-issues the show() call. The main `onRepeatEvent` (5 min) is too slow
+  /// for "auto-re-show within seconds" UX.
+  Timer? _notifTimer;
+
   @override
   Future<void> onStart(DateTime timestamp, TaskStarter starter) async {
     _markForegroundAlive();
+    // This isolate gets a fresh PersistentNotifications instance — initialize
+    // with a no-op tap callback (the MAIN isolate's init owns tap routing).
+    await PersistentNotifications.instance.init(onTap: (_) {});
     await headlessStepSync();
     await _scheduleFinalSync();
-    await _refreshNotification(force: true);
+    await _refreshAll(force: true);
+    _notifTimer = Timer.periodic(const Duration(seconds: 30), (_) {
+      _refreshAll(force: true);
+    });
   }
 
   @override
@@ -391,47 +515,52 @@ class _StepSyncTaskHandler extends TaskHandler {
     // Fire-and-forget: the interface is synchronous.
     headlessStepSync();
     _scheduleFinalSync();
-    _refreshNotification();
+    _refreshAll();
   }
 
   /// Nudges from the main isolate (e.g., when a battle accept/complete fires,
-  /// or a Track session starts/stops). Triggers a notification refresh without
-  /// waiting for the next periodic tick.
+  /// or a Track session starts/stops). Triggers a refresh of all three.
   @override
   void onReceiveData(Object data) {
-    _refreshNotification(force: true);
+    _refreshAll(force: true);
   }
 
   /// Android 14+ lets the user swipe-dismiss FGS notifications. We treat the
-  /// persistent notification as essential UI (it IS the always-on service)
-  /// and re-render it immediately so it pops back. Equivalent to how Spotify
-  /// and turn-by-turn navigation notifications behave.
+  /// daily summary as essential UI (it IS the always-on service) and
+  /// re-render it immediately so it pops back. (Auto-re-show for the battle
+  /// and track notifications relies on `_notifTimer`'s 30s tick.)
   @override
   void onNotificationDismissed() {
     AppLogger.battle.i('persistentNotif:dismissed_reissuing');
-    _refreshNotification(force: true);
+    _refreshAll(force: true);
   }
 
-  /// Action-button taps from the notification. Routes to the main isolate so
-  /// the UI can react (open a tab, end the Track session).
+  /// Action-button taps from the FGS notification. Routes to the main
+  /// isolate so the UI can react.
   @override
   void onNotificationButtonPressed(String id) {
     AppLogger.battle.i('persistentNotif:buttonPressed', fields: {'id': id});
-    // The main isolate listens to these via FlutterForegroundTask's
-    // addTaskDataCallback — we forward the button id so MainShell can act.
     FlutterForegroundTask.sendDataToMain('btn:$id');
-    // Bring the app forward so the action lands somewhere visible.
     FlutterForegroundTask.launchApp();
   }
 
-  /// Recompute the notification (title + multi-line body + action buttons)
-  /// for the current state and push it via updateService — but only if the
-  /// content actually changed (hash dedupe), so we don't spam the shade.
-  Future<void> _refreshNotification({bool force = false}) async {
+  /// Refresh all three persistent notifications:
+  ///   • Daily summary  — FGS notification, updated via `updateService`.
+  ///   • Battle status  — local notification, posted/cancelled per state.
+  ///   • Track status   — local notification, posted/cancelled per state.
+  Future<void> _refreshAll({bool force = false}) async {
     try {
       final uid = await _ensureBackgroundInitAndUid();
       if (uid == null) return;
-      final content = await _renderForState(uid);
+      await _refreshSummary(uid, force: force);
+      await _refreshBattleNotif(uid, force: force);
+      await _refreshTrackNotif(force: force);
+    } catch (_) {}
+  }
+
+  Future<void> _refreshSummary(String uid, {required bool force}) async {
+    try {
+      final content = await _renderSummary(uid);
       final hash = content.dedupeHash;
       if (!force && hash == _lastNotifHash) return;
       _lastNotifHash = hash;
@@ -441,6 +570,35 @@ class _StepSyncTaskHandler extends TaskHandler {
         notificationButtons: content.buttons,
       );
     } catch (_) {}
+  }
+
+  Future<void> _refreshBattleNotif(String uid, {required bool force}) async {
+    final battle = await _renderBattle(uid);
+    if (battle == null) {
+      await PersistentNotifications.instance.cancelBattle();
+      return;
+    }
+    await PersistentNotifications.instance.showBattle(
+      battleId: battle.battleId,
+      title: battle.title,
+      body: battle.body,
+      bigText: battle.bigText,
+      force: force,
+    );
+  }
+
+  Future<void> _refreshTrackNotif({required bool force}) async {
+    final track = _renderTrack();
+    if (track == null) {
+      await PersistentNotifications.instance.cancelTrack();
+      return;
+    }
+    await PersistentNotifications.instance.showTrack(
+      title: track.title,
+      body: track.body,
+      bigText: track.bigText,
+      force: force,
+    );
   }
 
   /// Schedule a one-shot sync ~45s before the soonest active battle ends, so
@@ -470,6 +628,11 @@ class _StepSyncTaskHandler extends TaskHandler {
   @override
   Future<void> onDestroy(DateTime timestamp) async {
     _finalSyncTimer?.cancel();
+    _notifTimer?.cancel();
+    // Pull down the secondary notifications when the service is being torn
+    // down (e.g., the user signed out). Otherwise they linger orphaned.
+    await PersistentNotifications.instance.cancelBattle();
+    await PersistentNotifications.instance.cancelTrack();
   }
 }
 

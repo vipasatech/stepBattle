@@ -1,0 +1,176 @@
+<template id="s5-template">
+  <div data-composition-id="s5" data-width="1920" data-height="1080">
+    <style>
+      [data-composition-id="s5"] {
+        width:100%; height:100%; background:#0A0614;
+        font-family:'Manrope',sans-serif; position:relative; overflow:hidden;
+      }
+      /* ---- phone (battles list) intro ---- */
+      [data-composition-id="s5"] .leak { position:absolute; left:-200px; top:-160px; width:820px; height:820px; background:radial-gradient(circle, rgba(124,58,237,0.3) 0%, transparent 60%); filter:blur(80px); }
+      [data-composition-id="s5"] .phone { position:absolute; left:745px; top:100px; width:430px; height:880px; border-radius:48px; background:#05030B; padding:13px; box-shadow:0 50px 130px rgba(124,58,237,0.45), 0 0 0 2px rgba(168,85,247,0.28); z-index:3; }
+      [data-composition-id="s5"] .screen { width:100%; height:100%; border-radius:36px; overflow:hidden; background:#0E0E10; position:relative; }
+      [data-composition-id="s5"] .bt-h { font-family:'Space Grotesk',sans-serif; font-size:22px; font-weight:700; color:#A855F7; padding:36px 22px 8px; }
+      [data-composition-id="s5"] .sec { font-size:12px; font-weight:700; letter-spacing:1px; text-transform:uppercase; color:rgba(216,180,254,0.6); padding:10px 22px 6px; }
+      [data-composition-id="s5"] .bcard { margin:6px 18px; border-radius:18px; padding:16px; background:linear-gradient(180deg, rgba(40,24,70,0.7), rgba(22,12,42,0.7)); border:1px solid rgba(168,85,247,0.22); }
+      [data-composition-id="s5"] .bcard .r { display:flex; justify-content:space-between; align-items:center; font-size:13px; color:#cbb8e6; }
+      [data-composition-id="s5"] .bcard .nm { color:#fff; font-weight:700; font-size:14px; }
+      [data-composition-id="s5"] .dual { margin-top:12px; height:14px; border-radius:8px; background:rgba(255,255,255,0.08); overflow:hidden; display:flex; }
+      [data-composition-id="s5"] .dual .a { height:100%; width:0%; background:linear-gradient(90deg,#7C3AED,#A855F7); }
+      [data-composition-id="s5"] .dual .b { height:100%; width:0%; background:linear-gradient(90deg,#FF716C,#FB7185); margin-left:auto; }
+      [data-composition-id="s5"] .bcard .sc { display:flex; justify-content:space-between; margin-top:8px; font-size:13px; }
+      [data-composition-id="s5"] .bcard .sc .you { color:#A855F7; font-weight:700; }
+      [data-composition-id="s5"] .bcard .sc .riv { color:#FF716C; font-weight:700; }
+      [data-composition-id="s5"] .bcard.comp { opacity:0.7; }
+      [data-composition-id="s5"] .won { font-size:11px; font-weight:800; color:#34A853; }
+
+      /* ---- arena ---- */
+      [data-composition-id="s5"] .arena { position:absolute; inset:0; z-index:5; opacity:0; }
+      [data-composition-id="s5"] .sky { position:absolute; left:0; right:0; top:0; height:58%; background:linear-gradient(180deg, #3B1A6E 0%, #5B2A8C 45%, #8B3A86 75%, #C24E6E 100%); }
+      [data-composition-id="s5"] .sun { position:absolute; left:50%; top:30%; width:230px; height:230px; margin-left:-115px; border-radius:50%; background:radial-gradient(circle, rgba(255,220,150,0.9), rgba(255,170,120,0.2) 60%, transparent 70%); filter:blur(2px); }
+      [data-composition-id="s5"] .hill { position:absolute; left:0; right:0; border-radius:50% 50% 0 0; }
+      [data-composition-id="s5"] .h1 { bottom:42%; height:160px; background:#2A1450; opacity:0.7; transform:scaleX(1.4); }
+      [data-composition-id="s5"] .h2 { bottom:42%; height:90px; background:#3A1C66; opacity:0.6; transform:scaleX(1.8) translateX(-10%); }
+      [data-composition-id="s5"] .ground { position:absolute; left:0; right:0; bottom:0; height:42%; background:linear-gradient(180deg, #1C1030 0%, #120A22 100%); }
+      [data-composition-id="s5"] .lane { position:absolute; left:0; right:0; height:2px; background:rgba(168,85,247,0.18); }
+      [data-composition-id="s5"] .finish { position:absolute; top:60%; bottom:6%; width:14px; background:repeating-linear-gradient(0deg,#fff 0 12px,#000 12px 24px); opacity:0.85; border-radius:3px; }
+
+      [data-composition-id="s5"] .runner { position:absolute; width:96px; text-align:center; z-index:6; }
+      [data-composition-id="s5"] .runner .tok { width:74px; height:74px; border-radius:50%; margin:0 auto; display:flex; align-items:center; justify-content:center; box-shadow:0 12px 30px rgba(0,0,0,0.5); }
+      [data-composition-id="s5"] .runner .tok svg { width:42px; height:42px; fill:#fff; }
+      [data-composition-id="s5"] .runner.you .tok { background:linear-gradient(135deg,#7C3AED,#A855F7); box-shadow:0 0 28px rgba(168,85,247,0.7); }
+      [data-composition-id="s5"] .runner.riv .tok { background:linear-gradient(135deg,#FF716C,#FB7185); }
+      [data-composition-id="s5"] .runner .lbl { margin-top:6px; font-size:13px; font-weight:700; color:#fff; white-space:nowrap; }
+      [data-composition-id="s5"] .runner .stp { font-size:12px; color:rgba(255,255,255,0.75); }
+
+      [data-composition-id="s5"] .ring { position:absolute; right:46px; top:40px; width:120px; height:120px; z-index:7; }
+      [data-composition-id="s5"] .ring .lab { position:absolute; inset:0; display:flex; flex-direction:column; align-items:center; justify-content:center; }
+      [data-composition-id="s5"] .ring .lab b { font-family:'Space Grotesk',sans-serif; font-size:26px; color:#fff; font-weight:700; }
+      [data-composition-id="s5"] .ring .lab s { font-size:10px; color:rgba(255,255,255,0.7); text-decoration:none; letter-spacing:1px; }
+
+      [data-composition-id="s5"] .stand { position:absolute; left:46px; top:46px; z-index:7; background:rgba(14,10,26,0.6); border:1px solid rgba(168,85,247,0.3); border-radius:14px; padding:12px 16px; backdrop-filter:blur(6px); }
+      [data-composition-id="s5"] .stand .row { display:flex; align-items:center; gap:10px; font-size:15px; color:#fff; padding:3px 0; }
+      [data-composition-id="s5"] .stand .row .pos { color:#A855F7; font-weight:800; }
+
+      [data-composition-id="s5"] .flash { position:absolute; inset:0; background:rgba(168,85,247,0.55); opacity:0; z-index:8; }
+      [data-composition-id="s5"] .toast { position:absolute; left:50%; top:24%; transform:translateX(-50%); z-index:9; background:rgba(14,10,26,0.85); border:1px solid rgba(168,85,247,0.5); border-radius:999px; padding:12px 28px; font-size:20px; font-weight:700; color:#fff; opacity:0; white-space:nowrap; }
+      [data-composition-id="s5"] .winbadge { position:absolute; left:50%; top:50%; transform:translate(-50%,-50%); z-index:10; text-align:center; opacity:0; }
+      [data-composition-id="s5"] .winbadge .big { font-family:'Space Grotesk',sans-serif; font-size:90px; font-weight:800; color:#fff; letter-spacing:2px; text-shadow:0 0 40px rgba(168,85,247,0.9); }
+      [data-composition-id="s5"] .winbadge .xp { display:inline-block; margin-top:10px; background:linear-gradient(135deg,#7C3AED,#A855F7); color:#fff; font-size:30px; font-weight:800; padding:10px 30px; border-radius:999px; box-shadow:0 14px 40px rgba(124,58,237,0.6); }
+
+      /* caption lower-third for phone phase */
+      [data-composition-id="s5"] .cap { position:absolute; left:120px; top:50%; transform:translateY(-50%); width:560px; z-index:4; }
+      [data-composition-id="s5"] .cap .k { font-size:20px; font-weight:700; letter-spacing:5px; text-transform:uppercase; color:#A855F7; margin-bottom:16px; }
+      [data-composition-id="s5"] .cap .h { font-family:'Space Grotesk',sans-serif; font-size:70px; font-weight:700; line-height:1.08; letter-spacing:-1.5px; color:#fff; }
+      [data-composition-id="s5"] .cap .h .v { background:linear-gradient(135deg,#D8B4FE,#7C3AED); -webkit-background-clip:text; background-clip:text; -webkit-text-fill-color:transparent; }
+    </style>
+
+    <div class="leak"></div>
+
+    <!-- caption + phone battles intro -->
+    <div class="cap" id="s5-cap">
+      <div class="k">Battles</div>
+      <div class="h">Challenge<br>anyone to a<br><span class="v">step battle.</span></div>
+    </div>
+
+    <div class="phone" id="s5-phone">
+      <div class="screen">
+        <div class="bt-h">Battles</div>
+        <div class="sec">Active</div>
+        <div class="bcard">
+          <div class="r"><span class="nm">You vs narsimlu Goud</span><span>4h 7m</span></div>
+          <div class="dual"><div class="a" id="s5-da"></div><div class="b" id="s5-db"></div></div>
+          <div class="sc"><span class="you" id="s5-ya">2,855</span><span class="riv" id="s5-rb">2,410</span></div>
+        </div>
+        <div class="sec">Completed</div>
+        <div class="bcard comp">
+          <div class="r"><span class="nm">You vs Aditya</span><span class="won">WON · +200 XP</span></div>
+          <div class="dual"><div class="a" style="width:62%"></div><div class="b" style="width:38%"></div></div>
+        </div>
+        <div class="bcard comp">
+          <div class="r"><span class="nm">Group · 4 players</span><span class="won">WON · +300 XP</span></div>
+          <div class="dual"><div class="a" style="width:70%"></div><div class="b" style="width:30%"></div></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- arena -->
+    <div class="arena" id="s5-arena">
+      <div class="sky"><div class="sun"></div></div>
+      <div class="hill h1"></div><div class="hill h2"></div>
+      <div class="ground"></div>
+      <div class="lane" style="top:64%"></div>
+      <div class="lane" style="top:78%"></div>
+      <div class="lane" style="top:92%"></div>
+      <div class="finish" id="s5-finish" style="left:1730px"></div>
+
+      <div class="runner riv" id="s5-rrun" style="left:140px; top:70%;">
+        <div class="tok"><svg viewBox="0 0 24 24"><path d="M13.49 5.48c1.1 0 2-.9 2-2s-.9-2-2-2-2 .9-2 2 .9 2 2 2zm-3.6 13.9l1-4.4 2.1 2v6h2v-7.5l-2.1-2 .6-3c1.3 1.5 3.3 2.5 5.5 2.5v-2c-1.9 0-3.5-1-4.3-2.4l-1-1.6c-.4-.6-1-1-1.7-1-.3 0-.5.1-.8.1L6.5 6.1V11h2V7.6l1.8-.7-1.6 8.1-4.9-1-.4 2 7 1.4z"/></svg></div>
+        <div class="lbl">narsimlu</div><div class="stp" id="s5-rstep">2,410</div>
+      </div>
+      <div class="runner you" id="s5-yrun" style="left:140px; top:56%;">
+        <div class="tok"><svg viewBox="0 0 24 24"><path d="M13.49 5.48c1.1 0 2-.9 2-2s-.9-2-2-2-2 .9-2 2 .9 2 2 2zm-3.6 13.9l1-4.4 2.1 2v6h2v-7.5l-2.1-2 .6-3c1.3 1.5 3.3 2.5 5.5 2.5v-2c-1.9 0-3.5-1-4.3-2.4l-1-1.6c-.4-.6-1-1-1.7-1-.3 0-.5.1-.8.1L6.5 6.1V11h2V7.6l1.8-.7-1.6 8.1-4.9-1-.4 2 7 1.4z"/></svg></div>
+        <div class="lbl">You</div><div class="stp" id="s5-ystep">2,855</div>
+      </div>
+
+      <svg class="ring" viewBox="0 0 120 120"><circle cx="60" cy="60" r="52" fill="none" stroke="rgba(255,255,255,0.15)" stroke-width="8"/><circle id="s5-ringfill" cx="60" cy="60" r="52" fill="none" stroke="#A855F7" stroke-width="8" stroke-linecap="round" stroke-dasharray="327" stroke-dashoffset="60" transform="rotate(-90 60 60)"/></svg>
+      <div class="ring lab"><b id="s5-clock">00:42</b><s>LEFT</s></div>
+
+      <div class="stand">
+        <div class="row"><span class="pos">1</span> <span id="s5-s1">You · 2,855</span></div>
+        <div class="row"><span class="pos" style="color:#FF716C">2</span> <span id="s5-s2">narsimlu · 2,410</span></div>
+      </div>
+
+      <div class="flash" id="s5-flash"></div>
+      <div class="toast" id="s5-toast">⚡ You took the lead!</div>
+      <div class="winbadge" id="s5-win"><div class="big">YOU WIN</div><br><div class="xp">+200 XP</div></div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/gsap@3.14.2/dist/gsap.min.js"></script>
+    <script>
+      window.__timelines = window.__timelines || {};
+      const tl = gsap.timeline({ paused: true });
+
+      // PHASE A (0-2.0): phone battles list, dual bars animate
+      tl.from("#s5-phone", { x:60, autoAlpha:0, duration:0.55, ease:"power3.out" }, 0);
+      tl.from("#s5-cap", { x:-50, autoAlpha:0, duration:0.55, ease:"power3.out" }, 0.1);
+      tl.to("#s5-da", { width:"54%", duration:1.0, ease:"power2.out" }, 0.5);
+      tl.to("#s5-db", { width:"46%", duration:1.0, ease:"power2.out" }, 0.5);
+
+      // transition: dive into arena (scale up from phone)
+      gsap.set("#s5-arena", { scale:0.34, transformOrigin:"840px 540px" });
+      tl.to(["#s5-phone","#s5-cap"], { autoAlpha:0, duration:0.4, ease:"power2.in" }, 1.9);
+      tl.to("#s5-arena", { opacity:1, scale:1.0, duration:0.7, ease:"power3.out" }, 1.95);
+
+      // PHASE B (2.6-6.5): the race
+      // rivals start close, runners move right; clock ticks; you pull ahead
+      tl.to("#s5-rrun", { left:1120, duration:2.6, ease:"power1.inOut" }, 2.7);
+      tl.to("#s5-yrun", { left:980, duration:1.1, ease:"power1.inOut" }, 2.7);   // briefly behind
+      // lead change ~3.9s: you surge past
+      tl.to("#s5-yrun", { left:1620, duration:1.7, ease:"power2.out" }, 3.8);
+      tl.to("#s5-rrun", { left:1300, duration:1.6, ease:"power1.out" }, 3.9);
+
+      // step counters tick
+      const ys=document.getElementById("s5-ystep"), rs=document.getElementById("s5-rstep");
+      const s1=document.getElementById("s5-s1"), s2=document.getElementById("s5-s2");
+      tl.to({v:2855},{v:7240,duration:3.6,ease:"power1.inOut",onUpdate:function(){const n=Math.round(this.targets()[0].v);ys.textContent=n.toLocaleString();s1.textContent="You · "+n.toLocaleString();}},2.7);
+      tl.to({v:2410},{v:5980,duration:3.6,ease:"power1.inOut",onUpdate:function(){const n=Math.round(this.targets()[0].v);rs.textContent=n.toLocaleString();s2.textContent="narsimlu · "+n.toLocaleString();}},2.7);
+
+      // countdown clock + ring
+      const ck=document.getElementById("s5-clock");
+      tl.to({v:42},{v:0,duration:3.6,ease:"none",onUpdate:function(){const s=Math.max(0,Math.round(this.targets()[0].v));ck.textContent="00:"+String(s).padStart(2,"0");}},2.7);
+      tl.to("#s5-ringfill", { strokeDashoffset:327, duration:3.6, ease:"none" }, 2.7);
+
+      // lead-change flash + toast at ~4.0s
+      tl.fromTo("#s5-flash", { opacity:0 }, { opacity:0.55, duration:0.12, yoyo:true, repeat:1, ease:"power2.out" }, 4.0);
+      tl.fromTo("#s5-toast", { opacity:0, y:-10 }, { opacity:1, y:0, duration:0.35, ease:"back.out(2)" }, 4.05);
+      tl.to("#s5-toast", { opacity:0, duration:0.4 }, 5.2);
+
+      // win at ~6.3
+      tl.to(["#s5-stand",".stand"], {}, 6.2);
+      tl.fromTo("#s5-win", { opacity:0, scale:0.6 }, { opacity:1, scale:1.0, duration:0.5, ease:"back.out(1.6)" }, 6.2);
+      tl.fromTo("#s5-flash", { opacity:0 }, { opacity:0.5, duration:0.12, yoyo:true, repeat:1 }, 6.2);
+
+      window.__timelines["s5"] = tl;
+    </script>
+  </div>
+</template>

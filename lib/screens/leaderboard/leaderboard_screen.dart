@@ -20,21 +20,25 @@ import 'widgets/floating_rank_card.dart';
 ///
 /// District/State/Country require the user to have set a home district —
 /// when unset, those tabs render a "Set home" CTA instead of an empty board.
-enum _Tab { district, state, country, friends }
+/// Display order is friends → district → state → country — friends first
+/// because that's the most personally relevant board for most users. The
+/// tabs bar iterates `_Tab.values` so reordering the enum drives the visual
+/// order; all switches stay correct because they're keyed by case, not index.
+enum _Tab { friends, district, state, country }
 
 extension on _Tab {
   String get label => switch (this) {
+        _Tab.friends => 'Friends',
         _Tab.district => 'District',
         _Tab.state => 'State',
         _Tab.country => 'Country',
-        _Tab.friends => 'Friends',
       };
 
   IconData get icon => switch (this) {
+        _Tab.friends => Icons.group,
         _Tab.district => Icons.location_city,
         _Tab.state => Icons.map,
         _Tab.country => Icons.public,
-        _Tab.friends => Icons.group,
       };
 }
 
@@ -46,7 +50,8 @@ class LeaderboardScreen extends ConsumerStatefulWidget {
 }
 
 class _LeaderboardScreenState extends ConsumerState<LeaderboardScreen> {
-  _Tab _tab = _Tab.district;
+  // Default to Friends — leftmost tab, most personally relevant board.
+  _Tab _tab = _Tab.friends;
 
   @override
   Widget build(BuildContext context) {
@@ -78,6 +83,7 @@ class _LeaderboardScreenState extends ConsumerState<LeaderboardScreen> {
               _ScopeBanner(tab: _tab, user: user),
               Expanded(
                 child: switch (_tab) {
+                  _Tab.friends => const _BoardView(provider: 'friends'),
                   _Tab.district => _GeoTabContent(
                       scope: 'district',
                       hasHome: hasHome,
@@ -90,7 +96,6 @@ class _LeaderboardScreenState extends ConsumerState<LeaderboardScreen> {
                       scope: 'country',
                       hasHome: hasHome,
                     ),
-                  _Tab.friends => const _BoardView(provider: 'friends'),
                 },
               ),
             ],
@@ -235,12 +240,12 @@ class _ScopeBanner extends StatelessWidget {
   String? _scopeLabel() {
     if (user == null) return null;
     return switch (tab) {
+      _Tab.friends => 'YOUR FRIENDS',
       _Tab.district =>
         (user.districtName as String?)?.toUpperCase(),
       _Tab.state => (user.stateName as String?)?.toUpperCase(),
       _Tab.country => (user.countryName as String?)?.toUpperCase() ??
           (user.countryCode as String?)?.toUpperCase(),
-      _Tab.friends => 'YOUR FRIENDS',
     };
   }
 }

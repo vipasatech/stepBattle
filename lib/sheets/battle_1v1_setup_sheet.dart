@@ -9,6 +9,7 @@ import '../providers/battle_provider.dart';
 import '../services/battle_service.dart';
 import '../widgets/avatar_circle.dart';
 import '../widgets/battle_duration_picker.dart';
+import '../widgets/battle_visibility_toggle.dart';
 import '../widgets/bottom_sheet_handle.dart';
 import 'add_friends_sheet.dart';
 
@@ -34,7 +35,76 @@ class _Battle1v1SetupSheetState extends ConsumerState<Battle1v1SetupSheet> {
   bool _creating = false;
   BattleWindow? _window;
 
+  /// When true, the battle goes into the public Discover feed and anyone with
+  /// the join code (or the Discover tap) can join. Off by default — invite-only.
+  bool _isPublic = false;
+
   final _battleCode = BattleService.generateBattleCode();
+
+  Future<void> _showJoinCodeDialog(String code,
+      {required bool recurring}) async {
+    if (!mounted) return;
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: AppColors.surfaceContainer,
+        title: Text(
+          recurring ? 'Daily Battle Created' : 'Battle Invite Sent',
+          style: const TextStyle(fontWeight: FontWeight.w800),
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              _isPublic
+                  ? 'Listed in Discover. Anyone can also paste this code:'
+                  : 'Share this code to let anyone you invited join directly:',
+              style: const TextStyle(color: AppColors.onSurfaceVariant),
+            ),
+            const SizedBox(height: 16),
+            GestureDetector(
+              onTap: () => Clipboard.setData(ClipboardData(text: code)),
+              child: Container(
+                width: double.infinity,
+                padding: const EdgeInsets.symmetric(vertical: 18),
+                decoration: BoxDecoration(
+                  color: AppColors.glassBackground,
+                  borderRadius: BorderRadius.circular(16),
+                  border: Border.all(
+                    color: AppColors.primary.withValues(alpha: 0.3),
+                  ),
+                ),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Text(
+                      code,
+                      style: const TextStyle(
+                        fontSize: 28,
+                        fontWeight: FontWeight.w900,
+                        letterSpacing: 6,
+                        color: AppColors.primary,
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    const Icon(Icons.content_copy,
+                        size: 18, color: AppColors.primary),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Done'),
+          ),
+        ],
+      ),
+    );
+  }
 
   Future<void> _pickOpponent() async {
     await showModalBottomSheet(
@@ -64,30 +134,43 @@ class _Battle1v1SetupSheetState extends ConsumerState<Battle1v1SetupSheet> {
     try {
       final me = ref.read(currentUserProvider).valueOrNull;
       if (me == null) throw StateError('Not signed in');
-      await ref.read(battleServiceProvider).createBattle(
-        type: BattleType.oneVsOne,
-        participants: [
-          BattleParticipant(
-            userId: me.userId,
-            displayName: me.displayName.isEmpty ? 'You' : me.displayName,
-            avatarURL: me.avatarURL,
-          ),
-          BattleParticipant(
-            userId: _selectedOpponent!.userId,
-            displayName: _selectedOpponent!.displayName,
-            avatarURL: _selectedOpponent!.avatarURL,
-          ),
-        ],
-        startTime: window.start,
-        endTime: window.end,
-        createdBy: me.userId,
-      );
+      final participants = [
+        BattleParticipant(
+          userId: me.userId,
+          displayName: me.displayName.isEmpty ? 'You' : me.displayName,
+          avatarURL: me.avatarURL,
+        ),
+        BattleParticipant(
+          userId: _selectedOpponent!.userId,
+          displayName: _selectedOpponent!.displayName,
+          avatarURL: _selectedOpponent!.avatarURL,
+        ),
+      ];
+      // Daily preset → recurring series (one accept covers every future day).
+      // Anything else → one-off battle, original flow.
+      final service = ref.read(battleServiceProvider);
+      final visibility =
+          _isPublic ? BattleVisibility.public : BattleVisibility.private;
+      final result = window.recurring
+          ? await service.createDailySeries(
+              type: BattleType.oneVsOne,
+              participants: participants,
+              startTime: window.start,
+              endTime: window.end,
+              createdBy: me.userId,
+              visibility: visibility,
+            )
+          : await service.createBattle(
+              type: BattleType.oneVsOne,
+              participants: participants,
+              startTime: window.start,
+              endTime: window.end,
+              createdBy: me.userId,
+              visibility: visibility,
+            );
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-              content: Text('Battle invite sent! Waiting for opponent...')),
-        );
         Navigator.pop(context);
+        await _showJoinCodeDialog(result.joinCode, recurring: window.recurring);
       }
     } catch (e) {
       if (mounted) {
@@ -200,6 +283,13 @@ class _Battle1v1SetupSheetState extends ConsumerState<Battle1v1SetupSheet> {
                       // Avoid rebuild loops; just cache the value.
                       _window = window;
                     },
+                  ),
+
+                  const SizedBox(height: 16),
+
+                  BattleVisibilityToggle(
+                    isPublic: _isPublic,
+                    onChanged: (v) => setState(() => _isPublic = v),
                   ),
 
                   const SizedBox(height: 20),

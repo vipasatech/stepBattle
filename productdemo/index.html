@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=1920, height=1080" />
+    <title>StepBattle product demo</title>
+    <script src="https://cdn.jsdelivr.net/npm/gsap@3.14.2/dist/gsap.min.js"></script>
+    <style>
+      * { margin: 0; padding: 0; box-sizing: border-box; }
+      html, body {
+        width: 1920px; height: 1080px; overflow: hidden;
+        background: #0A0614;
+        font-family: 'Space Grotesk', 'Manrope', system-ui, sans-serif;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="root" data-composition-id="main" data-start="0" data-duration="42" data-width="1920" data-height="1080">
+      <!-- StepBattle demo: hook → brand → home/xp → battle/arena → missions → clan → ranks/map → outcome/close -->
+      <div class="clip" data-composition-id="s1" data-composition-src="compositions/scene01-hook.html"           data-start="0"    data-duration="1.7" data-track-index="1" data-width="1920" data-height="1080"></div>
+      <div class="clip" data-composition-id="s2" data-composition-src="compositions/scene02-continuation.html"   data-start="1.7"  data-duration="3.8" data-track-index="1" data-width="1920" data-height="1080"></div>
+      <div class="clip" data-composition-id="s3" data-composition-src="compositions/scene03-brand-reveal.html"   data-start="5.5"  data-duration="4.0" data-track-index="1" data-width="1920" data-height="1080"></div>
+      <div class="clip" data-composition-id="s4" data-composition-src="compositions/scene04-home-xp.html"        data-start="9.5"  data-duration="5.5" data-track-index="1" data-width="1920" data-height="1080"></div>
+      <div class="clip" data-composition-id="s5" data-composition-src="compositions/scene05-battle-arena.html"   data-start="15"   data-duration="6.5" data-track-index="1" data-width="1920" data-height="1080"></div>
+      <div class="clip" data-composition-id="s6" data-composition-src="compositions/scene06-missions.html"       data-start="21.5" data-duration="4.5" data-track-index="1" data-width="1920" data-height="1080"></div>
+      <div class="clip" data-composition-id="s7" data-composition-src="compositions/scene07-clan.html"           data-start="26"   data-duration="4.0" data-track-index="1" data-width="1920" data-height="1080"></div>
+      <div class="clip" data-composition-id="s8" data-composition-src="compositions/scene08-ranks-map.html"      data-start="30"   data-duration="6.0" data-track-index="1" data-width="1920" data-height="1080"></div>
+      <div class="clip" data-composition-id="s9" data-composition-src="compositions/scene09-outcome-close.html"  data-start="36"   data-duration="6.0" data-track-index="1" data-width="1920" data-height="1080"></div>
+
+      <audio id="bgm" class="clip" data-start="0" data-duration="42" data-track-index="0" data-volume="0.7" src="assets/bgm.mp3"></audio>
+    </div>
+
+    <script>
+      window.__timelines = window.__timelines || {};
+      window.__timelines["main"] = gsap.timeline({ paused: true });
+    </script>
+  </body>
+</html>

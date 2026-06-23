@@ -45,6 +45,11 @@ dependencies:
   # an Android widget update; the widget itself is native XML + Kotlin.
   home_widget: ^0.7.0
 
+  # Secondary persistent notifications. The foreground service's notification
+  # is the daily summary; this plugin posts the battle and track notifications
+  # ON TOP of it (separate channels, separate ids, separate dismiss handling).
+  flutter_local_notifications: ^18.0.1
+
   # Local Storage
   hive: ^2.2.3
   hive_flutter: ^1.1.0
@@ -60,6 +65,9 @@ dependencies:
   cached_network_image: ^3.4.1
   intl: ^0.19.0
   shimmer: ^3.0.0
+  # Video playback — used by the splash screen to play the hyperframes-
+  # rendered runner animation (assets/animations/splash_runner.mp4).
+  video_player: ^2.9.0
 
   # Networking + device fingerprinting (used by Google Fit fallback +
   # source_step_hourly analytics logs)
@@ -104,4 +112,6 @@ flutter:
   assets:
     - assets/geo/IN-districts.geojson
     - assets/logos/logo.png
+    - assets/logos/logo_square.png
+    - assets/animations/splash_runner.mp4
     - .env

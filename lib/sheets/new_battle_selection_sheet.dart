@@ -3,8 +3,9 @@ import '../config/colors.dart';
 import '../widgets/bottom_sheet_handle.dart';
 import 'battle_1v1_setup_sheet.dart';
 import 'battle_group_setup_sheet.dart';
+import 'battle_team_setup_sheet.dart';
 
-/// Step 1 of battle creation: choose 1v1 or Group format.
+/// Step 1 of battle creation: choose 1v1, Multi-player, or Team format.
 class NewBattleSelectionSheet extends StatefulWidget {
   const NewBattleSelectionSheet({super.key});
 
@@ -14,7 +15,7 @@ class NewBattleSelectionSheet extends StatefulWidget {
 }
 
 class _NewBattleSelectionSheetState extends State<NewBattleSelectionSheet> {
-  int? _selected; // 0 = 1v1, 1 = group
+  int? _selected; // 0 = 1v1, 1 = multi-player, 2 = team
 
   @override
   Widget build(BuildContext context) {
@@ -49,29 +50,47 @@ class _NewBattleSelectionSheetState extends State<NewBattleSelectionSheet> {
           ),
           const SizedBox(height: 28),
 
-          // Two selection cards
-          Row(
-            children: [
-              Expanded(
-                child: _FormatCard(
-                  icon: Icons.person,
-                  title: '1 vs 1',
-                  subtitle: 'Compete head-to-head\nwith one friend',
-                  isSelected: _selected == 0,
-                  onTap: () => setState(() => _selected = 0),
+          // Three selection cards — 1v1 / Multiplayer / Team.
+          //
+          // IntrinsicHeight collapses the Row's vertical extent to the
+          // tallest child's natural height; without it `stretch` would
+          // demand infinite height from a child inside the parent
+          // SingleChildScrollView and the whole sheet would fail layout.
+          IntrinsicHeight(
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Expanded(
+                  child: _FormatCard(
+                    icon: Icons.person,
+                    title: '1v1',
+                    subtitle: 'Head-to-head\nwith a friend',
+                    isSelected: _selected == 0,
+                    onTap: () => setState(() => _selected = 0),
+                  ),
                 ),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: _FormatCard(
-                  icon: Icons.group,
-                  title: 'Group Battle',
-                  subtitle: 'Compete with multiple\nparticipants',
-                  isSelected: _selected == 1,
-                  onTap: () => setState(() => _selected = 1),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: _FormatCard(
+                    icon: Icons.group,
+                    title: 'Multiplayer',
+                    subtitle: 'Free-for-all\nup to 10',
+                    isSelected: _selected == 1,
+                    onTap: () => setState(() => _selected = 1),
+                  ),
                 ),
-              ),
-            ],
+                const SizedBox(width: 8),
+                Expanded(
+                  child: _FormatCard(
+                    icon: Icons.flag,
+                    title: 'Team',
+                    subtitle: '2–4 teams\ncombined steps',
+                    isSelected: _selected == 2,
+                    onTap: () => setState(() => _selected = 2),
+                  ),
+                ),
+              ],
+            ),
           ),
           const SizedBox(height: 28),
 
@@ -104,9 +123,12 @@ class _NewBattleSelectionSheetState extends State<NewBattleSelectionSheet> {
       // sits above the shell's bottom nav instead of being hidden behind it.
       useRootNavigator: true,
       backgroundColor: Colors.transparent,
-      builder: (_) => _selected == 0
-          ? const Battle1v1SetupSheet()
-          : const BattleGroupSetupSheet(),
+      builder: (_) => switch (_selected) {
+        0 => const Battle1v1SetupSheet(),
+        1 => const BattleGroupSetupSheet(),
+        2 => const BattleTeamSetupSheet(),
+        _ => const Battle1v1SetupSheet(),
+      },
     );
   }
 }
@@ -133,12 +155,12 @@ class _FormatCard extends StatelessWidget {
       onTap: onTap,
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 200),
-        padding: const EdgeInsets.all(20),
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 14),
         decoration: BoxDecoration(
           color: isSelected
               ? AppColors.primaryBrand.withValues(alpha: 0.1)
               : AppColors.surfaceContainerLow,
-          borderRadius: BorderRadius.circular(20),
+          borderRadius: BorderRadius.circular(18),
           border: Border.all(
             color: isSelected
                 ? AppColors.primaryBrand
@@ -155,10 +177,11 @@ class _FormatCard extends StatelessWidget {
               : null,
         ),
         child: Column(
+          mainAxisSize: MainAxisSize.min,
           children: [
             Container(
-              width: 52,
-              height: 52,
+              width: 42,
+              height: 42,
               decoration: BoxDecoration(
                 color: isSelected
                     ? AppColors.primaryBrand.withValues(alpha: 0.2)
@@ -169,33 +192,43 @@ class _FormatCard extends StatelessWidget {
                   color: isSelected
                       ? AppColors.primary
                       : AppColors.onSurfaceVariant,
-                  size: 28),
+                  size: 22),
             ),
-            const SizedBox(height: 12),
-            Text(title,
-                style: theme.textTheme.titleSmall
-                    ?.copyWith(fontWeight: FontWeight.w700)),
+            const SizedBox(height: 10),
+            FittedBox(
+              fit: BoxFit.scaleDown,
+              child: Text(
+                title,
+                maxLines: 1,
+                style: theme.textTheme.titleSmall?.copyWith(
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ),
             const SizedBox(height: 4),
             Text(
               subtitle,
               style: theme.textTheme.bodySmall?.copyWith(
                 color: AppColors.onSurfaceVariant,
                 fontSize: 11,
+                height: 1.25,
               ),
               textAlign: TextAlign.center,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
             ),
             // Selection checkmark
             if (isSelected) ...[
               const SizedBox(height: 8),
               Container(
-                width: 20,
-                height: 20,
+                width: 18,
+                height: 18,
                 decoration: const BoxDecoration(
                   color: AppColors.primaryBrand,
                   shape: BoxShape.circle,
                 ),
                 child: const Icon(Icons.check,
-                    color: Colors.white, size: 14),
+                    color: Colors.white, size: 12),
               ),
             ],
           ],

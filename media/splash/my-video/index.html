@@ -1,0 +1,315 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=1080, height=1920" />
+    <script src="https://cdn.jsdelivr.net/npm/gsap@3.14.2/dist/gsap.min.js"></script>
+    <style>
+      * { margin: 0; padding: 0; box-sizing: border-box; }
+      html, body {
+        width: 1080px;
+        height: 1920px;
+        overflow: hidden;
+        background: #0E0E10;
+        font-family: "Inter", sans-serif;
+        color: #FFFFFF;
+      }
+
+      /* ----- scene fills the composition root ----- */
+      #scene {
+        position: relative;
+        width: 100%;
+        height: 100%;
+        background:
+          linear-gradient(135deg,
+            #A855F7 0%,
+            #7C3AED 60%,
+            #4C1D95 100%);
+      }
+
+      /* ----- frosted-glass depth orbs ----- */
+      .orb {
+        position: absolute;
+        border-radius: 50%;
+        filter: blur(80px);
+        opacity: 0.55;
+      }
+      .orb.tl { width: 380px; height: 380px; top: 180px; left: 100px;
+                background: #A855F7; }
+      .orb.br { width: 480px; height: 480px; bottom: 200px; right: 60px;
+                background: #7C3AED; }
+
+      /* ----- canvas holds rings + character + arrow ----- */
+      #runner-canvas {
+        position: absolute;
+        top: 50%;
+        left: 50%;
+        width: 800px;
+        height: 800px;
+        transform: translate(-50%, -50%);
+      }
+
+      /* ----- wordmark ----- */
+      .wordmark {
+        position: absolute;
+        left: 0;
+        right: 0;
+        bottom: 280px;
+        text-align: center;
+      }
+      .wordmark h1 {
+        font-size: 96px;
+        font-weight: 900;
+        letter-spacing: 6px;
+        text-shadow: 0 4px 16px rgba(0,0,0,0.4);
+      }
+      .wordmark p {
+        margin-top: 24px;
+        font-size: 36px;
+        font-weight: 500;
+        letter-spacing: 4px;
+        color: rgba(255,255,255,0.75);
+      }
+
+      /* ----- bottom hairline ("loading" hint) ----- */
+      .hairline {
+        position: absolute;
+        left: 50%;
+        bottom: 180px;
+        transform: translateX(-50%);
+        width: 160px;
+        height: 8px;
+        background: rgba(255,255,255,0.15);
+        border-radius: 4px;
+        overflow: hidden;
+      }
+      .hairline .fill {
+        position: absolute;
+        top: 0;
+        bottom: 0;
+        left: -40%;
+        width: 40%;
+        background: rgba(255,255,255,0.85);
+        border-radius: 4px;
+      }
+    </style>
+  </head>
+  <body>
+    <div
+      id="root"
+      data-composition-id="main"
+      data-start="0"
+      data-duration="2"
+      data-width="1080"
+      data-height="1920"
+    >
+      <div id="scene" class="clip" data-start="0" data-duration="2" data-track-index="0">
+        <div class="orb tl"></div>
+        <div class="orb br"></div>
+        <canvas id="runner-canvas" width="1600" height="1600"></canvas>
+        <div class="wordmark">
+          <h1>StepBattle</h1>
+          <p>Every step counts.</p>
+        </div>
+        <div class="hairline" data-layout-allow-overflow><div class="fill" id="hairFill"></div></div>
+      </div>
+    </div>
+
+    <script>
+      // -----------------------------------------------------------------
+      // Runner + rings rendered to a single canvas. A linear GSAP tween
+      // advances `state.t` from 0..1 over the 2s composition; onUpdate
+      // redraws the canvas as a pure function of progress, so the
+      // hyperframes capture engine gets a deterministic frame at every
+      // seek. Loops seamlessly: t=0 and t=1 paint identical frames.
+      // -----------------------------------------------------------------
+      const canvas = document.getElementById('runner-canvas');
+      const ctx = canvas.getContext('2d');
+      const W = canvas.width;
+      const H = canvas.height;
+
+      // 4 full run cycles per 2-second loop (~120 strides/min, relaxed jog).
+      const CYCLES = 4;
+      // 2 full ring pulses per loop.
+      const RING_CYCLES = 2;
+      const RING_COUNT = 3;
+
+      function drawScene(progress) {
+        ctx.clearRect(0, 0, W, H);
+
+        const cx = W / 2;
+        const cy = H / 2;
+
+        // -------------- pulsing rings --------------
+        for (let i = 0; i < RING_COUNT; i++) {
+          const phase = (progress * RING_CYCLES + i / RING_COUNT) % 1;
+          const ringScale = 0.55 + phase * 0.95;
+          const opacity = Math.max(0, 1 - phase) * 0.55;
+          const radius = 320 * ringScale;
+          ctx.beginPath();
+          ctx.arc(cx, cy, radius, 0, Math.PI * 2);
+          ctx.strokeStyle = 'rgba(255,255,255,' + opacity.toFixed(3) + ')';
+          ctx.lineWidth = 10;
+          ctx.stroke();
+        }
+
+        // -------------- runner --------------
+        // t in radians for the run cycle.
+        const t = progress * CYCLES * Math.PI * 2;
+
+        // Vertical bounce: two foot-strikes per cycle.
+        const bounceY = -Math.abs(Math.cos(2 * t)) * 24;
+
+        // Slight forward lean (~6°).
+        const lean = -0.10;
+        const leanCos = Math.cos(lean);
+        const leanSin = Math.sin(lean);
+
+        // Joint anchors (canvas pixel space).
+        const hipX = cx;
+        const hipY = cy + bounceY;
+        const shoulderX = hipX + leanSin * 140;
+        const shoulderY = hipY - 140 * leanCos;
+        const neckX = shoulderX + leanSin * 40;
+        const neckY = shoulderY - 40 * leanCos;
+        const headX = neckX + leanSin * 56;
+        const headY = neckY - 56 * leanCos;
+
+        // Limb swings — sin(t) and -sin(t) → 180° out-of-phase legs.
+        // Arms swing opposite to legs (real cross-body coordination).
+        const legSwing = Math.sin(t) * 0.85;
+        const armSwing = Math.sin(t) * 0.95;
+
+        // Knee bend peaks when the leg is forward (lifting).
+        const leftKnee  = Math.max(0,  Math.sin(t)) * 0.95;
+        const rightKnee = Math.max(0, -Math.sin(t)) * 0.95;
+
+        // ---- LEGS ----
+        const lThigh = polar(hipX, hipY, 140, Math.PI / 2 + legSwing);
+        const lShinAng = Math.PI / 2 + legSwing - leftKnee;
+        const lShin = polar(lThigh.x, lThigh.y, 140, lShinAng);
+
+        const rThigh = polar(hipX, hipY, 140, Math.PI / 2 - legSwing);
+        const rShinAng = Math.PI / 2 - legSwing - rightKnee;
+        const rShin = polar(rThigh.x, rThigh.y, 140, rShinAng);
+
+        // ---- ARMS ----
+        const lUpArm = polar(shoulderX, shoulderY, 96, Math.PI / 2 - armSwing);
+        const lFoArm = polar(lUpArm.x, lUpArm.y, 90, Math.PI / 2 - armSwing - 1.2);
+
+        const rUpArm = polar(shoulderX, shoulderY, 96, Math.PI / 2 + armSwing);
+        const rFoArm = polar(rUpArm.x, rUpArm.y, 90, Math.PI / 2 + armSwing - 1.2);
+
+        // ---- drop shadow (shrinks at bounce peak) ----
+        const shadowR = 90 - Math.abs(bounceY) * 0.4;
+        ctx.save();
+        ctx.beginPath();
+        ctx.ellipse(hipX, cy + 280, shadowR, 14, 0, 0, Math.PI * 2);
+        ctx.fillStyle = 'rgba(0,0,0,0.32)';
+        ctx.filter = 'blur(8px)';
+        ctx.fill();
+        ctx.restore();
+
+        // ---- arrow trail (drawn first so figure overlays the hand end) ----
+        drawArrowTrail(ctx, rFoArm.x, rFoArm.y, cx + 220, cy - 240);
+
+        // ---- stick figure ----
+        ctx.strokeStyle = '#FFFFFF';
+        ctx.lineWidth = 44;
+        ctx.lineCap = 'round';
+        ctx.lineJoin = 'round';
+        ctx.fillStyle = '#FFFFFF';
+
+        // Body.
+        stroke(ctx, hipX, hipY, shoulderX, shoulderY);
+        stroke(ctx, shoulderX, shoulderY, neckX, neckY);
+
+        // Head.
+        ctx.beginPath();
+        ctx.arc(headX, headY, 52, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Legs.
+        stroke(ctx, hipX, hipY, lThigh.x, lThigh.y);
+        stroke(ctx, lThigh.x, lThigh.y, lShin.x, lShin.y);
+        stroke(ctx, hipX, hipY, rThigh.x, rThigh.y);
+        stroke(ctx, rThigh.x, rThigh.y, rShin.x, rShin.y);
+
+        // Arms.
+        stroke(ctx, shoulderX, shoulderY, lUpArm.x, lUpArm.y);
+        stroke(ctx, lUpArm.x, lUpArm.y, lFoArm.x, lFoArm.y);
+        stroke(ctx, shoulderX, shoulderY, rUpArm.x, rUpArm.y);
+        stroke(ctx, rUpArm.x, rUpArm.y, rFoArm.x, rFoArm.y);
+      }
+
+      function polar(x, y, r, ang) {
+        return { x: x + Math.cos(ang) * r, y: y + Math.sin(ang) * r };
+      }
+
+      function stroke(ctx, x1, y1, x2, y2) {
+        ctx.beginPath();
+        ctx.moveTo(x1, y1);
+        ctx.lineTo(x2, y2);
+        ctx.stroke();
+      }
+
+      function drawArrowTrail(ctx, sx, sy, ex, ey) {
+        ctx.save();
+        ctx.strokeStyle = 'rgba(255,255,255,0.85)';
+        ctx.lineWidth = 36;
+        ctx.lineCap = 'round';
+        ctx.lineJoin = 'round';
+
+        ctx.beginPath();
+        ctx.moveTo(sx, sy);
+        const c1x = sx + 60;
+        const c1y = sy - 80;
+        const c2x = ex - 80;
+        const c2y = ey + 100;
+        ctx.bezierCurveTo(c1x, c1y, c2x, c2y, ex, ey);
+        ctx.stroke();
+
+        // Arrowhead wings.
+        const tipAng = Math.atan2(ey - c2y, ex - c2x);
+        const wing = 60;
+        const a = tipAng + Math.PI - 0.55;
+        const b = tipAng + Math.PI + 0.55;
+        ctx.beginPath();
+        ctx.moveTo(ex, ey);
+        ctx.lineTo(ex + Math.cos(a) * wing, ey + Math.sin(a) * wing);
+        ctx.moveTo(ex, ey);
+        ctx.lineTo(ex + Math.cos(b) * wing, ey + Math.sin(b) * wing);
+        ctx.stroke();
+        ctx.restore();
+      }
+
+      // -----------------------------------------------------------------
+      // Timeline — one linear tween drives drawScene(progress); a second
+      // tween sweeps the hairline fill twice across the bar. Both end in
+      // their loop-seam positions so the 2-second clip can repeat
+      // without a visible jump.
+      // -----------------------------------------------------------------
+      window.__timelines = window.__timelines || {};
+      const tl = gsap.timeline({ paused: true });
+
+      const state = { t: 0 };
+      tl.to(state, {
+        t: 1,
+        duration: 2,
+        ease: 'none',
+        onUpdate: () => drawScene(state.t),
+      }, 0);
+
+      tl.fromTo('#hairFill',
+        { left: '-40%' },
+        { left: '100%', duration: 1, ease: 'sine.inOut', repeat: 1 },
+        0
+      );
+
+      // Paint frame 0 immediately so capture never sees a blank canvas.
+      drawScene(0);
+
+      window.__timelines['main'] = tl;
+    </script>
+  </body>
+</html>

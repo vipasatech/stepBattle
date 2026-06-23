@@ -77,6 +77,117 @@ class _BattlesScreenState extends ConsumerState<BattlesScreen> {
   }
 }
 
+/// Returns the `onStartTeamBattle` callback to pass to [BattleCard] when the
+/// current user is the creator of a pending team battle. Tap → confirm dialog
+/// then [BattleService.startTeamBattle].
+VoidCallback? _startTeamBattleCallback(
+  BuildContext context,
+  WidgetRef ref,
+  BattleModel b,
+  String uid,
+) {
+  if (b.type != BattleType.team) return null;
+  if (b.status != BattleStatus.pending) return null;
+  if (b.createdBy != uid) return null;
+  return () async {
+    final pending = b.participants
+        .where((p) => p.inviteStatus == ParticipantInviteStatus.pending)
+        .length;
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Start team battle now?'),
+        content: Text(
+          pending == 0
+              ? 'Roster locks and the clock starts immediately.'
+              : '$pending player${pending == 1 ? "" : "s"} still pending. '
+                  "They'll be dropped and the clock starts immediately.",
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('Keep waiting'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('Start now'),
+          ),
+        ],
+      ),
+    );
+    if (confirm != true) return;
+    try {
+      await ref.read(battleServiceProvider).startTeamBattle(
+            battleId: b.battleId,
+            actorId: uid,
+          );
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Team battle started!')),
+        );
+      }
+    } catch (e) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Failed to start: $e')),
+        );
+      }
+    }
+  };
+}
+
+/// Returns the `onStopRecurring` callback to pass to [BattleCard] for `b`,
+/// or null when the action shouldn't render (battle isn't part of a series,
+/// or the current user isn't its creator). The callback prompts the user
+/// for confirmation and then calls [BattleService.stopSeries].
+VoidCallback? _stopRecurringCallback(
+  BuildContext context,
+  WidgetRef ref,
+  BattleModel b,
+  String uid,
+) {
+  if (b.seriesId == null || b.createdBy != uid) return null;
+  return () async {
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Stop daily recurrence?'),
+        content: const Text(
+          "Today's battle still finishes normally. No new daily instances "
+          'will be created starting tomorrow.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('Keep recurring'),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: AppColors.error),
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('Stop recurring'),
+          ),
+        ],
+      ),
+    );
+    if (confirm != true) return;
+    try {
+      await ref.read(battleServiceProvider).stopSeries(b.seriesId!);
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+              content: Text('Daily series stopped. No new instances tomorrow.')),
+        );
+      }
+    } catch (e) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Failed to stop: $e')),
+        );
+      }
+    }
+  };
+}
+
 class _BattlesBody extends ConsumerWidget {
   const _BattlesBody();
 
@@ -131,6 +242,13 @@ class _BattlesBody extends ConsumerWidget {
         return ListView(
           padding: const EdgeInsets.fromLTRB(20, 8, 20, 120),
           children: [
+            // Always-on entry into public lobbies — Q10 ("Discover" tab + Open
+            // section preview). Tap → /battles/discover.
+            _DiscoverEntryTile(
+              onTap: () => context.push('/battles/discover'),
+            ),
+            const SizedBox(height: 20),
+
             // Section: Incoming invites (needs user action)
             if (incomingInvites.isNotEmpty) ...[
               _SectionHeader(
@@ -157,6 +275,8 @@ class _BattlesBody extends ConsumerWidget {
                       currentUserId: uid,
                       onTap: () =>
                           context.push('/battle-ground/${b.battleId}'),
+                      onStopRecurring:
+                          _stopRecurringCallback(context, ref, b, uid),
                     ),
                   )),
               const SizedBox(height: 24),
@@ -172,7 +292,14 @@ class _BattlesBody extends ConsumerWidget {
               const SizedBox(height: 12),
               ...scheduled.map((b) => Padding(
                     padding: const EdgeInsets.only(bottom: 12),
-                    child: BattleCard(battle: b, currentUserId: uid),
+                    child: BattleCard(
+                      battle: b,
+                      currentUserId: uid,
+                      onStopRecurring:
+                          _stopRecurringCallback(context, ref, b, uid),
+                      onStartTeamBattle:
+                          _startTeamBattleCallback(context, ref, b, uid),
+                    ),
                   )),
               const SizedBox(height: 24),
             ],
@@ -308,7 +435,11 @@ class _IncomingInviteCardState extends ConsumerState<_IncomingInviteCard> {
       orElse: () => battle.participants.first,
     );
 
-    final typeLabel = battle.type == BattleType.oneVsOne ? '1v1' : 'Group';
+    final typeLabel = switch (battle.type) {
+      BattleType.oneVsOne => '1v1',
+      BattleType.group => 'Multi-player',
+      BattleType.team => 'Team',
+    };
 
     return GlassCard(
       padding: const EdgeInsets.all(16),
@@ -333,11 +464,15 @@ class _IncomingInviteCardState extends ConsumerState<_IncomingInviteCard> {
                   children: [
                     Text('${inviter.displayName} challenged you',
                         style: theme.textTheme.titleSmall
-                            ?.copyWith(fontWeight: FontWeight.w700)),
+                            ?.copyWith(fontWeight: FontWeight.w700),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis),
                     Text(
                       '$typeLabel battle · ${battle.durationDays}-day duration · +${battle.xpReward} XP on win',
                       style: theme.textTheme.bodySmall?.copyWith(
                           color: AppColors.onSurfaceVariant),
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
                     ),
                   ],
                 ),
@@ -378,6 +513,125 @@ class _IncomingInviteCardState extends ConsumerState<_IncomingInviteCard> {
               ],
             ),
         ],
+      ),
+    );
+  }
+}
+
+/// Persistent tile that points to the public lobby list. Doubles as a
+/// "paste join code" entry point (long-press → dialog).
+class _DiscoverEntryTile extends ConsumerWidget {
+  final VoidCallback onTap;
+  const _DiscoverEntryTile({required this.onTap});
+
+  Future<void> _pasteCode(BuildContext context, WidgetRef ref) async {
+    final controller = TextEditingController();
+    final code = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: AppColors.surfaceContainer,
+        title: const Text('Join with code'),
+        content: TextField(
+          controller: controller,
+          textCapitalization: TextCapitalization.characters,
+          maxLength: 6,
+          decoration: const InputDecoration(
+            hintText: 'e.g. A4X9KP',
+            counterText: '',
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () =>
+                Navigator.pop(ctx, controller.text.trim().toUpperCase()),
+            child: const Text('Join'),
+          ),
+        ],
+      ),
+    );
+    if (code == null || code.length != 6) return;
+    final me = ref.read(currentUserProvider).valueOrNull;
+    if (me == null) return;
+    try {
+      final battleId =
+          await ref.read(battleServiceProvider).joinByCode(
+                code: code,
+                userId: me.userId,
+                displayName: me.displayName,
+                avatarUrl: me.avatarURL,
+              );
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Joined!')),
+        );
+        context.push('/battle-ground/$battleId');
+      }
+    } catch (e) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Failed: $e')),
+        );
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final theme = Theme.of(context);
+    return GlassCard(
+      padding: EdgeInsets.zero,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(20),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+          child: Row(
+            children: [
+              Container(
+                width: 42,
+                height: 42,
+                decoration: BoxDecoration(
+                  color: AppColors.primary.withValues(alpha: 0.15),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: const Icon(Icons.travel_explore,
+                    color: AppColors.primary),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text('Discover open battles',
+                        style: theme.textTheme.titleSmall
+                            ?.copyWith(fontWeight: FontWeight.w700),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis),
+                    Text(
+                      'Public lobbies you can drop into',
+                      style: theme.textTheme.labelSmall?.copyWith(
+                        color: AppColors.onSurfaceVariant,
+                      ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ],
+                ),
+              ),
+              IconButton(
+                tooltip: 'Join with code',
+                visualDensity: VisualDensity.compact,
+                icon: const Icon(Icons.qr_code, color: AppColors.primary),
+                onPressed: () => _pasteCode(context, ref),
+              ),
+              const Icon(Icons.chevron_right, color: AppColors.primary),
+            ],
+          ),
+        ),
       ),
     );
   }

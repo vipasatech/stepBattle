@@ -14,6 +14,7 @@ import '../../providers/step_provider.dart';
 import '../../providers/user_provider.dart';
 import '../../services/background_sync.dart';
 import '../../services/notification_service.dart';
+import '../../services/persistent_notifications.dart';
 import '../../services/step_source_aggregator.dart';
 import '../../widgets/friend_request_toast_host.dart';
 import '../../widgets/permission_gate.dart';
@@ -43,12 +44,21 @@ class _MainShellState extends ConsumerState<MainShell>
     // Listen for messages from the foreground-service isolate, including
     // notification action-button taps (forwarded as `btn:<id>`).
     FlutterForegroundTask.addTaskDataCallback(_onTaskData);
+    // Battle/Track persistent notifications: the plugin's top-level tap
+    // callback writes the target route here; we consume it via context.go.
+    pendingDeepLinkNotifier.addListener(_consumePendingDeepLink);
+    // Handle cold-launch case: route the user immediately if the app was
+    // opened from a tap on one of these notifications.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _consumePendingDeepLink();
+    });
   }
 
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     FlutterForegroundTask.removeTaskDataCallback(_onTaskData);
+    pendingDeepLinkNotifier.removeListener(_consumePendingDeepLink);
     // We deliberately do NOT stop the foreground service here. The shell can
     // unmount for benign reasons (navigating to a root-level route like
     // /track or /profile re-creates the shell on the way back), and stopping
@@ -56,6 +66,15 @@ class _MainShellState extends ConsumerState<MainShell>
     // the live battle/track state. The service is torn down explicitly in
     // SupabaseAuthService.signOut() instead.
     super.dispose();
+  }
+
+  /// Consume any pending deep-link from a battle/track persistent notification
+  /// tap. Clears the notifier so re-listening doesn't refire the same route.
+  void _consumePendingDeepLink() {
+    final route = pendingDeepLinkNotifier.value;
+    if (route == null || !mounted) return;
+    pendingDeepLinkNotifier.value = null;
+    context.go(route);
   }
 
   /// Handler for messages forwarded from the foreground-service isolate.

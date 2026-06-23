@@ -1,0 +1,94 @@
+<template id="s7-template">
+  <div data-composition-id="s7" data-width="1920" data-height="1080">
+    <style>
+      [data-composition-id="s7"] {
+        width:100%; height:100%;
+        background: radial-gradient(ellipse at 30% 50%, #1C0E38 0%, #120A24 55%, #08040F 100%);
+        font-family:'Manrope',sans-serif; position:relative; overflow:hidden;
+      }
+      [data-composition-id="s7"] .leak-l { position:absolute; left:-200px; top:-160px; width:820px; height:820px; background:radial-gradient(circle, rgba(124,58,237,0.3) 0%, transparent 60%); filter:blur(80px); }
+      [data-composition-id="s7"] .leak-r { position:absolute; right:-220px; bottom:-200px; width:820px; height:820px; background:radial-gradient(circle, rgba(168,85,247,0.22) 0%, transparent 60%); filter:blur(80px); }
+      [data-composition-id="s7"] .world { position:absolute; inset:0; transform-origin:center center; z-index:2; }
+
+      [data-composition-id="s7"] .phone { position:absolute; left:330px; top:100px; width:430px; height:880px; border-radius:48px; background:#05030B; padding:13px; box-shadow:0 50px 130px rgba(124,58,237,0.45), 0 0 0 2px rgba(168,85,247,0.28); }
+      [data-composition-id="s7"] .screen { width:100%; height:100%; border-radius:36px; overflow:hidden; background:#0E0E10; position:relative; }
+      [data-composition-id="s7"] .ch { font-family:'Space Grotesk',sans-serif; font-size:20px; font-weight:700; font-style:italic; color:#A855F7; padding:36px 22px 14px; letter-spacing:0.5px; }
+
+      [data-composition-id="s7"] .vs { margin:0 18px; border-radius:20px; padding:22px; background:rgba(255,255,255,0.035); border:1px solid rgba(168,85,247,0.16); display:flex; align-items:center; justify-content:space-around; }
+      [data-composition-id="s7"] .vs .team { text-align:center; }
+      [data-composition-id="s7"] .vs .sq { width:78px; height:78px; border-radius:20px; margin:0 auto 8px; display:flex; align-items:center; justify-content:center; font-size:32px; }
+      [data-composition-id="s7"] .vs .sq.a { background:linear-gradient(135deg,#7C3AED,#A855F7); box-shadow:0 0 26px rgba(168,85,247,0.6); }
+      [data-composition-id="s7"] .vs .sq.b { background:rgba(255,255,255,0.05); border:1px dashed rgba(168,85,247,0.4); }
+      [data-composition-id="s7"] .vs .nm { font-size:15px; font-weight:700; color:#fff; }
+      [data-composition-id="s7"] .vs .nm.dim { color:rgba(216,180,254,0.55); font-weight:600; }
+      [data-composition-id="s7"] .vs .x { font-family:'Space Grotesk',sans-serif; font-size:22px; font-weight:800; color:rgba(216,180,254,0.45); }
+
+      [data-composition-id="s7"] .search { margin:14px 18px; border-radius:14px; padding:13px 16px; background:rgba(255,255,255,0.04); border:1px solid rgba(168,85,247,0.14); font-size:14px; color:rgba(216,180,254,0.5); }
+      [data-composition-id="s7"] .cfg-lab { font-size:11px; font-weight:700; letter-spacing:1px; text-transform:uppercase; color:rgba(216,180,254,0.55); padding:8px 22px 8px; }
+      [data-composition-id="s7"] .cfg { margin:0 18px; border-radius:18px; background:rgba(255,255,255,0.035); border:1px solid rgba(168,85,247,0.14); overflow:hidden; }
+      [data-composition-id="s7"] .cfg .row { display:flex; align-items:center; gap:12px; padding:16px; border-bottom:1px solid rgba(168,85,247,0.08); }
+      [data-composition-id="s7"] .cfg .row:last-child { border-bottom:none; }
+      [data-composition-id="s7"] .cfg .ic { font-size:18px; }
+      [data-composition-id="s7"] .cfg .ttl { font-size:15px; font-weight:700; color:#fff; }
+      [data-composition-id="s7"] .cfg .right { margin-left:auto; display:flex; gap:7px; align-items:center; }
+      [data-composition-id="s7"] .cfg .opt { font-size:12px; font-weight:700; color:#cbb8e6; background:rgba(0,0,0,0.45); border-radius:999px; padding:6px 13px; }
+      [data-composition-id="s7"] .cfg .opt.sel { background:linear-gradient(135deg,#7C3AED,#A855F7); color:#fff; box-shadow:0 6px 16px rgba(124,58,237,0.5); }
+      [data-composition-id="s7"] .cfg .val { font-size:14px; font-weight:700; color:#A855F7; }
+      [data-composition-id="s7"] .cbtn { margin:16px 18px 0; border-radius:999px; padding:15px; text-align:center; font-weight:800; font-size:16px; color:#fff; background:linear-gradient(135deg,#7C3AED,#A855F7); box-shadow:0 10px 28px rgba(124,58,237,0.55); }
+
+      [data-composition-id="s7"] .cap { position:absolute; left:980px; top:0; bottom:0; width:820px; display:flex; flex-direction:column; justify-content:center; padding-right:60px; z-index:3; }
+      [data-composition-id="s7"] .cap .k { font-size:22px; font-weight:700; letter-spacing:5px; text-transform:uppercase; color:#A855F7; margin-bottom:20px; opacity:0; }
+      [data-composition-id="s7"] .cap .h { font-family:'Space Grotesk',sans-serif; font-size:82px; font-weight:700; line-height:1.07; letter-spacing:-1.5px; color:#fff; }
+      [data-composition-id="s7"] .cap .h .v { background:linear-gradient(135deg,#D8B4FE,#7C3AED); -webkit-background-clip:text; background-clip:text; -webkit-text-fill-color:transparent; }
+      [data-composition-id="s7"] .cap .s { font-size:26px; color:rgba(216,180,254,0.8); margin-top:24px; line-height:1.45; opacity:0; }
+    </style>
+
+    <div class="leak-l"></div><div class="leak-r"></div>
+
+    <div class="world" id="s7-world">
+      <div class="phone" id="s7-phone">
+        <div class="screen">
+          <div class="ch">CREATE CLAN BATTLE</div>
+          <div class="vs">
+            <div class="team"><div class="sq a">👥</div><div class="nm">knights</div></div>
+            <div class="x">VS</div>
+            <div class="team"><div class="sq b">🔍</div><div class="nm dim">Search</div></div>
+          </div>
+          <div class="search">🔍&nbsp; Find a rival clan…</div>
+          <div class="cfg-lab">Battle Configuration</div>
+          <div class="cfg">
+            <div class="row"><span class="ic">⏱</span><span class="ttl">Duration</span><div class="right"><span class="opt">1 Day</span><span class="opt sel">3 Days</span><span class="opt">7 Days</span></div></div>
+            <div class="row"><span class="ic">📊</span><span class="ttl">Battle Type</span><div class="right"><span class="val">Total Steps ▾</span></div></div>
+            <div class="row"><span class="ic">🏅</span><span class="ttl">Reward Pool</span><div class="right"><span class="val">+300 XP</span></div></div>
+          </div>
+          <div class="cbtn" id="s7-cbtn">CREATE BATTLE</div>
+        </div>
+      </div>
+
+      <div class="cap">
+        <div class="k" id="s7-k">Clans</div>
+        <div class="h" id="s7-h">Rally your<br><span class="v">clan.</span></div>
+        <div class="s" id="s7-s">Form a squad, challenge rival clans, and win XP for every member.</div>
+      </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/gsap@3.14.2/dist/gsap.min.js"></script>
+    <script>
+      window.__timelines = window.__timelines || {};
+      const tl = gsap.timeline({ paused: true });
+
+      gsap.set("#s7-world", { x:50, scale:1.06 });
+      tl.from("#s7-phone", { x:-80, autoAlpha:0, duration:0.6, ease:"power3.out" }, 0);
+      tl.to("#s7-k", { opacity:1, duration:0.4 }, 0.4);
+      tl.from("#s7-h", { autoAlpha:0, y:30, duration:0.6, ease:"power3.out" }, 0.6);
+      tl.to("#s7-s", { opacity:1, duration:0.5 }, 1.2);
+
+      // button press near the end
+      tl.to("#s7-cbtn", { scale:0.95, duration:0.12, ease:"power2.in" }, 3.0);
+      tl.to("#s7-cbtn", { scale:1.0, duration:0.25, ease:"back.out(2)" }, 3.12);
+
+      tl.to("#s7-world", { x:-10, scale:1.11, duration:3.9, ease:"sine.inOut" }, 0.4);
+      window.__timelines["s7"] = tl;
+    </script>
+  </div>
+</template>

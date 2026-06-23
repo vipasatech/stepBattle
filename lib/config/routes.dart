@@ -6,6 +6,7 @@ import '../utils/app_logger.dart';
 import '../screens/shell/main_shell.dart';
 import '../screens/home/home_screen.dart';
 import '../screens/battles/battles_screen.dart';
+import '../screens/battles/discover_battles_screen.dart';
 import '../screens/battles/pending_battles_screen.dart';
 import '../screens/battle_ground/battle_ground_screen.dart';
 import '../screens/missions/missions_screen.dart';
@@ -19,6 +20,7 @@ import '../screens/clan_battle/join_clan_battle_screen.dart';
 import '../screens/map/map_screen.dart';
 import '../screens/onboarding/health_setup_screen.dart';
 import '../screens/profile/profile_screen.dart';
+import '../screens/splash_screen.dart';
 import '../screens/profile/step_sources_screen.dart';
 import '../screens/track/track_hub_screen.dart';
 import '../screens/track/track_live_screen.dart';
@@ -62,12 +64,27 @@ final routerProvider = Provider<GoRouter>((ref) {
 
   return GoRouter(
     navigatorKey: _rootNavigatorKey,
-    initialLocation: '/home',
+    initialLocation: '/splash',
     observers: [_NavLoggingObserver()],
     redirect: (context, state) {
+      final location = state.matchedLocation;
+      final isOnSplash = location == '/splash';
+
+      // The splash screen owns the routing decision for the cold-launch
+      // window — it waits for auth + onboarding to resolve then calls
+      // context.go itself. Don't second-guess it from here.
+      if (isOnSplash) return null;
+
+      // While Supabase is still restoring the persisted session on cold
+      // start, `authState` is in AsyncLoading and `valueOrNull` is null.
+      // Treating that as "signed out" briefly flashes /login for users
+      // who actually ARE signed in. Stay wherever we are until we know.
+      if (authState.isLoading) {
+        return null;
+      }
+
       final user = authState.valueOrNull;
       final isLoggedIn = user != null;
-      final location = state.matchedLocation;
       final isOnLoginPage = location == '/login';
       final isOnOnboarding = location == '/onboarding';
 
@@ -76,22 +93,41 @@ final routerProvider = Provider<GoRouter>((ref) {
         return isOnLoginPage ? null : '/login';
       }
 
-      // Logged in but on login page → go to onboarding or home
+      // After sign-in we leave /login. Optimistically route to /home — the
+      // onboarding check below will catch unfinished profiles on the next
+      // redirect pass and bounce them to /onboarding without surfacing the
+      // wrong screen. Sending everyone to /onboarding here re-prompts the
+      // name-entry screen on every login for users who already onboarded.
       if (isOnLoginPage) {
-        return '/onboarding';
+        return '/home';
       }
 
-      // Check if user has completed onboarding (Firestore doc exists)
+      // Onboarding gate. `valueOrNull` is null while the profile fetch is
+      // in-flight — we leave the user where they are during that brief
+      // window rather than guessing.
       final onboarded = hasOnboarded.valueOrNull;
       if (onboarded == false && !isOnOnboarding) {
-        // User is authenticated but no Firestore doc → force onboarding
         return '/onboarding';
+      }
+      // Already-onboarded user landed on /onboarding (deep link, race, or
+      // legacy nav) — send them home instead of re-prompting for a name.
+      if (onboarded == true && isOnOnboarding) {
+        return '/home';
       }
 
       // All other pages allowed
       return null;
     },
     routes: [
+      // Cold-launch splash. Renders the running-character animation +
+      // pulsing rings while Supabase restores the persisted session, then
+      // routes to /home, /onboarding, or /login itself via context.go.
+      GoRoute(
+        path: '/splash',
+        name: 'splash',
+        builder: (context, state) => const SplashScreen(),
+      ),
+
       // Auth routes
       GoRoute(
         path: '/login',
@@ -211,6 +247,12 @@ final routerProvider = Provider<GoRouter>((ref) {
                     name: 'pendingBattles',
                     builder: (context, state) =>
                         const PendingBattlesScreen(),
+                  ),
+                  GoRoute(
+                    path: 'discover',
+                    name: 'discoverBattles',
+                    builder: (context, state) =>
+                        const DiscoverBattlesScreen(),
                   ),
                 ],
               ),

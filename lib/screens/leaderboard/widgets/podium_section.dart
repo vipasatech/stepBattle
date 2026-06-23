@@ -2,8 +2,13 @@ import 'package:flutter/material.dart';
 import '../../../config/colors.dart';
 import '../../../models/leaderboard_entry_model.dart';
 import '../../../widgets/avatar_circle.dart';
+import '../../../widgets/glass_card.dart';
 
-/// Top 3 leaderboard display — rank 1 full-width gold, ranks 2-3 side by side.
+/// Top 3 leaderboard display. All three ranks share the **clan member row**
+/// layout (full-width GlassCard, avatar on the left with a rank badge, name +
+/// medal pill in the middle, XP on the right) so the visual rhythm matches
+/// the Clan tab. Rank 1 is differentiated only by a gold accent bar, brighter
+/// avatar border, and slightly larger XP — same dimensions, same font sizes.
 class PodiumSection extends StatelessWidget {
   final List<LeaderboardEntry> topThree;
   final void Function(LeaderboardEntry) onTap;
@@ -16,233 +21,169 @@ class PodiumSection extends StatelessWidget {
 
     return Column(
       children: [
-        // Rank 1 — gold, full width
-        if (topThree.isNotEmpty)
+        for (var i = 0; i < topThree.length && i < 3; i++) ...[
           GestureDetector(
-            onTap: () => onTap(topThree[0]),
-            child: _RankOneCard(entry: topThree[0]),
+            onTap: () => onTap(topThree[i]),
+            child: _RankRowCard(entry: topThree[i], rank: i + 1),
           ),
-        const SizedBox(height: 12),
-
-        // Ranks 2-3 side by side
-        if (topThree.length >= 2)
-          Row(
-            children: [
-              Expanded(
-                child: GestureDetector(
-                  onTap: () => onTap(topThree[1]),
-                  child: _SmallPodiumCard(
-                    entry: topThree[1],
-                    medalEmoji: '\ud83e\udd48',
-                    accentColor: AppColors.silver,
-                    rank: 2,
-                  ),
-                ),
-              ),
-              const SizedBox(width: 12),
-              if (topThree.length >= 3)
-                Expanded(
-                  child: GestureDetector(
-                    onTap: () => onTap(topThree[2]),
-                    child: _SmallPodiumCard(
-                      entry: topThree[2],
-                      medalEmoji: '\ud83e\udd49',
-                      accentColor: AppColors.bronze,
-                      rank: 3,
-                    ),
-                  ),
-                ),
-            ],
-          ),
+          if (i < topThree.length - 1 && i < 2) const SizedBox(height: 10),
+        ],
       ],
     );
   }
 }
 
-class _RankOneCard extends StatelessWidget {
+/// One leaderboard row, styled to mirror the clan-tab member row exactly
+/// (same `GlassCard`, same 14dp padding, same avatar size, same titleSmall
+/// name with w600). Rank-specific accent (gold/silver/bronze) lives only on:
+/// the avatar border, the rank-pill background, the side accent bar (rank 1
+/// only), and the XP color. Everything else stays uniform.
+class _RankRowCard extends StatelessWidget {
   final LeaderboardEntry entry;
-  const _RankOneCard({required this.entry});
+  final int rank;
+
+  const _RankRowCard({required this.entry, required this.rank});
+
+  Color get _accent => switch (rank) {
+        1 => AppColors.gold,
+        2 => AppColors.silver,
+        _ => AppColors.bronze,
+      };
+
+  String get _medalEmoji => switch (rank) {
+        1 => '🥇',
+        2 => '🥈',
+        _ => '🥉',
+      };
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    return Container(
-      padding: const EdgeInsets.all(20),
-      decoration: BoxDecoration(
-        color: AppColors.surfaceContainerHigh,
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: Colors.white.withValues(alpha: 0.05)),
-        boxShadow: [
-          BoxShadow(
-            color: AppColors.gold.withValues(alpha: 0.08),
-            blurRadius: 20,
-          ),
-        ],
-      ),
+    final isChampion = rank == 1;
+
+    return GlassCard(
+      padding: const EdgeInsets.all(14),
+      borderRadius: 16,
       child: Row(
         children: [
-          // Gold accent bar
-          Container(
-            width: 5,
-            height: 60,
-            margin: const EdgeInsets.only(right: 16),
-            decoration: BoxDecoration(
-              color: AppColors.gold,
-              borderRadius: BorderRadius.circular(3),
+          // Side accent bar for rank 1 only — same width/proportions as the
+          // original gold bar so the championship row still feels heavier
+          // without breaking the clan-row dimensions.
+          if (isChampion) ...[
+            Container(
+              width: 4,
+              height: 44,
+              decoration: BoxDecoration(
+                color: AppColors.gold,
+                borderRadius: BorderRadius.circular(2),
+              ),
             ),
-          ),
-          // Avatar
+            const SizedBox(width: 12),
+          ],
+
+          // Avatar with rank-number badge in the corner (parallels the
+          // captain-star badge on the clan row).
           Stack(
             clipBehavior: Clip.none,
             children: [
               AvatarCircle(
-                radius: 30,
+                radius: 22,
                 imageUrl: entry.avatarURL,
                 initials: entry.displayName.isNotEmpty
-                    ? entry.displayName[0]
+                    ? entry.displayName[0].toUpperCase()
                     : '?',
-                borderColor: AppColors.gold,
+                borderColor: _accent,
                 borderWidth: 2,
               ),
               Positioned(
-                bottom: -4,
-                right: -4,
+                bottom: -2,
+                right: -2,
                 child: Container(
-                  width: 22,
-                  height: 22,
+                  width: 18,
+                  height: 18,
                   decoration: BoxDecoration(
-                    color: AppColors.gold,
+                    color: _accent,
                     shape: BoxShape.circle,
-                    boxShadow: [
-                      BoxShadow(
-                          color: AppColors.gold.withValues(alpha: 0.5),
-                          blurRadius: 6),
-                    ],
+                    boxShadow: isChampion
+                        ? [
+                            BoxShadow(
+                              color: AppColors.gold.withValues(alpha: 0.5),
+                              blurRadius: 6,
+                            ),
+                          ]
+                        : null,
                   ),
-                  child: const Center(
-                    child: Text('1',
-                        style: TextStyle(
-                            fontSize: 12,
-                            fontWeight: FontWeight.w900,
-                            color: Colors.black)),
+                  child: Center(
+                    child: Text(
+                      '$rank',
+                      style: const TextStyle(
+                        fontSize: 10,
+                        fontWeight: FontWeight.w900,
+                        color: Colors.black,
+                      ),
+                    ),
                   ),
                 ),
               ),
             ],
           ),
-          const SizedBox(width: 16),
+          const SizedBox(width: 14),
+
+          // Name + medal pill. Same dimensions/fonts as the clan card so
+          // "Mogulagani Prashanth" renders in full instead of truncating.
           Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
+            child: Row(
               children: [
-                Row(
-                  children: [
-                    const Text('\ud83e\udd47 ', style: TextStyle(fontSize: 18)),
-                    Text(entry.displayName,
-                        style: theme.textTheme.titleMedium
-                            ?.copyWith(fontWeight: FontWeight.w700)),
-                  ],
+                Flexible(
+                  child: Text(
+                    entry.displayName,
+                    style: theme.textTheme.titleSmall
+                        ?.copyWith(fontWeight: FontWeight.w600),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
                 ),
-                Text(
-                  '${_fmt(entry.totalXP)} XP',
-                  style: theme.textTheme.headlineSmall?.copyWith(
-                    color: AppColors.gold,
-                    fontWeight: FontWeight.w700,
+                const SizedBox(width: 8),
+                // Medal pill — parallels the "Captain"/"Soldier" pill on the
+                // clan row. Emoji-only so the chip stays narrow at any rank.
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 6,
+                    vertical: 2,
+                  ),
+                  decoration: BoxDecoration(
+                    color: _accent.withValues(alpha: 0.12),
+                    borderRadius: BorderRadius.circular(6),
+                  ),
+                  child: Text(
+                    _medalEmoji,
+                    style: const TextStyle(fontSize: 11),
                   ),
                 ),
               ],
             ),
           ),
-          Icon(Icons.workspace_premium,
-              color: AppColors.gold.withValues(alpha: 0.3), size: 36),
-        ],
-      ),
-    );
-  }
-}
 
-class _SmallPodiumCard extends StatelessWidget {
-  final LeaderboardEntry entry;
-  final String medalEmoji;
-  final Color accentColor;
-  final int rank;
-
-  const _SmallPodiumCard({
-    required this.entry,
-    required this.medalEmoji,
-    required this.accentColor,
-    required this.rank,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: AppColors.surfaceContainerLow,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: Colors.white.withValues(alpha: 0.05)),
-      ),
-      child: Column(
-        children: [
-          Stack(
-            clipBehavior: Clip.none,
+          // XP — same column treatment as the clan row's "666 Steps" stack:
+          // value on top in titleMedium + w700, label below.
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.end,
             children: [
-              AvatarCircle(
-                radius: 26,
-                imageUrl: entry.avatarURL,
-                initials: entry.displayName.isNotEmpty
-                    ? entry.displayName[0]
-                    : '?',
-                borderColor: accentColor,
-                borderWidth: 2,
+              Text(
+                _fmt(entry.totalXP),
+                style: theme.textTheme.titleMedium?.copyWith(
+                  color: _accent,
+                  fontWeight: FontWeight.w700,
+                ),
               ),
-              Positioned(
-                bottom: -3,
-                right: -3,
-                child: Container(
-                  width: 18,
-                  height: 18,
-                  decoration: BoxDecoration(
-                    color: accentColor,
-                    shape: BoxShape.circle,
-                  ),
-                  child: Center(
-                    child: Text('$rank',
-                        style: const TextStyle(
-                            fontSize: 10,
-                            fontWeight: FontWeight.w900,
-                            color: Colors.black)),
-                  ),
+              Text(
+                'XP',
+                style: theme.textTheme.labelSmall?.copyWith(
+                  color: AppColors.onSurfaceVariant,
+                  letterSpacing: 1,
                 ),
               ),
             ],
-          ),
-          const SizedBox(height: 8),
-          Row(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Text(medalEmoji, style: const TextStyle(fontSize: 13)),
-              const SizedBox(width: 3),
-              Flexible(
-                child: Text(
-                  entry.displayName.length > 10
-                      ? '${entry.displayName.substring(0, 10)}.'
-                      : entry.displayName,
-                  style: theme.textTheme.titleSmall
-                      ?.copyWith(fontWeight: FontWeight.w700),
-                  overflow: TextOverflow.ellipsis,
-                ),
-              ),
-            ],
-          ),
-          Text(
-            '${_fmt(entry.totalXP)} XP',
-            style: theme.textTheme.titleSmall?.copyWith(
-              color: accentColor,
-              fontWeight: FontWeight.w700,
-            ),
           ),
         ],
       ),

@@ -20,6 +20,12 @@ android {
     ndkVersion = flutter.ndkVersion
 
     compileOptions {
+        // `flutter_local_notifications` >= 18 uses java.time APIs that aren't
+        // available below API 26 without desugaring. Even though our minSdk is
+        // 26 (so the runtime ships them), AGP still enforces the AAR-metadata
+        // requirement → desugaring must be enabled. Library coords pinned to
+        // the version flutter_local_notifications publishes against.
+        coreLibraryDesugaringEnabled = true
         sourceCompatibility = JavaVersion.VERSION_11
         targetCompatibility = JavaVersion.VERSION_11
     }
@@ -58,4 +64,28 @@ android {
 
 flutter {
     source = "../.."
+}
+
+// -----------------------------------------------------------------------------
+// AndroidX WorkManager dedupe.
+//
+// home_widget → androidx.glance:glance-appwidget:1.0.0 pulls
+// `androidx.work:work-runtime-ktx:2.7.1`. Our other plugins (workmanager +
+// flutter_foreground_task) pull `androidx.work:work-runtime:2.8.1`, where
+// the KTX classes (`OneTimeWorkRequestKt`, `PeriodicWorkRequestKt`, etc.)
+// have been merged into the runtime jar. The result is a duplicate-class
+// build error: same FQNs appear in both jars.
+//
+// Fix: globally exclude the legacy ktx artifact. Code that was relying on
+// the KTX extensions still finds them, because the same APIs ship inside
+// work-runtime 2.8+.
+// -----------------------------------------------------------------------------
+configurations.all {
+    exclude group: 'androidx.work', module: 'work-runtime-ktx'
+}
+
+dependencies {
+    // Required by `coreLibraryDesugaringEnabled = true` above. Version pin
+    // follows the latest published by flutter_local_notifications' README.
+    coreLibraryDesugaring 'com.android.tools:desugar_jdk_libs:2.1.4'
 }

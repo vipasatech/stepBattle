@@ -1,0 +1,129 @@
+<template id="s6-template">
+  <div data-composition-id="s6" data-width="1920" data-height="1080">
+    <style>
+      [data-composition-id="s6"] {
+        width:100%; height:100%;
+        background: radial-gradient(ellipse at 70% 50%, #1C0E38 0%, #120A24 55%, #08040F 100%);
+        font-family:'Manrope',sans-serif; position:relative; overflow:hidden;
+      }
+      [data-composition-id="s6"] .leak-l { position:absolute; left:-220px; bottom:-200px; width:820px; height:820px; background:radial-gradient(circle, rgba(124,58,237,0.3) 0%, transparent 60%); filter:blur(80px); }
+      [data-composition-id="s6"] .leak-r { position:absolute; right:-200px; top:-160px; width:820px; height:820px; background:radial-gradient(circle, rgba(168,85,247,0.22) 0%, transparent 60%); filter:blur(80px); }
+      [data-composition-id="s6"] .world { position:absolute; inset:0; transform-origin:center center; z-index:2; }
+
+      [data-composition-id="s6"] .phone { position:absolute; left:1160px; top:100px; width:430px; height:880px; border-radius:48px; background:#05030B; padding:13px; box-shadow:0 50px 130px rgba(124,58,237,0.45), 0 0 0 2px rgba(168,85,247,0.28); }
+      [data-composition-id="s6"] .screen { width:100%; height:100%; border-radius:36px; overflow:hidden; background:#0E0E10; position:relative; }
+
+      [data-composition-id="s6"] .mh { display:flex; align-items:center; padding:36px 22px 6px; }
+      [data-composition-id="s6"] .mh .t { font-family:'Space Grotesk',sans-serif; font-size:24px; font-weight:700; color:#A855F7; }
+      [data-composition-id="s6"] .mh .xp { margin-left:auto; background:rgba(124,58,237,0.25); border:1px solid rgba(168,85,247,0.4); border-radius:999px; padding:5px 12px; font-size:12px; font-weight:700; color:#D8B4FE; }
+      [data-composition-id="s6"] .reset { font-size:12px; color:rgba(216,180,254,0.6); padding:2px 22px 10px; }
+      [data-composition-id="s6"] .lab { font-family:'Space Grotesk',sans-serif; font-size:18px; font-weight:700; color:#fff; padding:8px 22px 8px; }
+
+      [data-composition-id="s6"] .mc { margin:6px 18px; border-radius:18px; padding:15px 16px; background:rgba(255,255,255,0.035); border:1px solid rgba(168,85,247,0.14); position:relative; }
+      [data-composition-id="s6"] .mc.on { border-left:4px solid #A855F7; background:rgba(124,58,237,0.12); }
+      [data-composition-id="s6"] .mc .top { display:flex; align-items:center; gap:12px; }
+      [data-composition-id="s6"] .mc .ico { width:42px; height:42px; border-radius:12px; background:rgba(124,58,237,0.3); display:flex; align-items:center; justify-content:center; font-size:18px; flex-shrink:0; }
+      [data-composition-id="s6"] .mc .ico.lock { background:rgba(255,255,255,0.06); }
+      [data-composition-id="s6"] .mc .ttl { font-size:15px; font-weight:700; color:#fff; }
+      [data-composition-id="s6"] .mc .ds { font-size:11.5px; color:rgba(216,180,254,0.6); margin-top:2px; }
+      [data-composition-id="s6"] .mc .rew { margin-left:auto; text-align:right; }
+      [data-composition-id="s6"] .mc .rew b { font-size:14px; font-weight:800; color:#A855F7; }
+      [data-composition-id="s6"] .mc .rew s { display:block; font-size:10px; color:#34A853; text-decoration:none; margin-top:2px; }
+      [data-composition-id="s6"] .mc.lk .ttl, [data-composition-id="s6"] .mc.lk .rew b { color:rgba(255,255,255,0.4); }
+      [data-composition-id="s6"] .mc.lk .rew s { color:rgba(255,255,255,0.35); }
+      [data-composition-id="s6"] .mc .pb { margin-top:12px; height:9px; border-radius:6px; background:rgba(255,255,255,0.08); overflow:hidden; }
+      [data-composition-id="s6"] .mc .pf { height:100%; width:0%; border-radius:6px; background:linear-gradient(90deg,#7C3AED,#A855F7); box-shadow:0 0 12px rgba(168,85,247,0.6); }
+      [data-composition-id="s6"] .mc .pn { display:flex; justify-content:space-between; margin-top:6px; font-size:11px; color:rgba(216,180,254,0.7); }
+
+      [data-composition-id="s6"] .elite { margin:6px 18px; border-radius:18px; padding:16px; background:linear-gradient(120deg, rgba(124,58,237,0.25), rgba(168,85,247,0.12)); border:1px solid rgba(168,85,247,0.3); }
+      [data-composition-id="s6"] .elite .badge { display:inline-block; font-size:10px; font-weight:800; letter-spacing:1px; color:#D8B4FE; background:rgba(255,255,255,0.08); padding:3px 9px; border-radius:6px; }
+      [data-composition-id="s6"] .elite .t { font-family:'Space Grotesk',sans-serif; font-size:21px; font-weight:700; color:#fff; margin-top:8px; }
+      [data-composition-id="s6"] .elite .x { font-size:14px; color:#A855F7; font-weight:700; }
+
+      [data-composition-id="s6"] .ding { position:absolute; right:30px; top:140px; background:linear-gradient(135deg,#7C3AED,#A855F7); color:#fff; font-weight:800; font-size:16px; padding:8px 16px; border-radius:999px; box-shadow:0 10px 30px rgba(124,58,237,0.6); opacity:0; z-index:9; }
+
+      [data-composition-id="s6"] .cap { position:absolute; left:120px; top:0; bottom:0; width:820px; display:flex; flex-direction:column; justify-content:center; z-index:3; }
+      [data-composition-id="s6"] .cap .k { font-size:22px; font-weight:700; letter-spacing:5px; text-transform:uppercase; color:#A855F7; margin-bottom:20px; opacity:0; }
+      [data-composition-id="s6"] .cap .h { font-family:'Space Grotesk',sans-serif; font-size:80px; font-weight:700; line-height:1.07; letter-spacing:-1.5px; color:#fff; }
+      [data-composition-id="s6"] .cap .h .v { background:linear-gradient(135deg,#D8B4FE,#7C3AED); -webkit-background-clip:text; background-clip:text; -webkit-text-fill-color:transparent; }
+      [data-composition-id="s6"] .cap .s { font-size:26px; color:rgba(216,180,254,0.8); margin-top:24px; line-height:1.45; opacity:0; }
+    </style>
+
+    <div class="leak-l"></div><div class="leak-r"></div>
+
+    <div class="world" id="s6-world">
+      <div class="cap">
+        <div class="k" id="s6-k">Missions</div>
+        <div class="h" id="s6-h">Daily &amp; weekly<br><span class="v">challenges.</span></div>
+        <div class="s" id="s6-s">Hit structured goals, stack bonus XP, keep your streak alive.</div>
+      </div>
+
+      <div class="phone" id="s6-phone">
+        <div class="screen">
+          <div class="mh"><div class="t">Missions</div><div class="xp">20 XP today</div></div>
+          <div class="reset">⏱ Daily missions reset in 4h 6m</div>
+          <div class="lab">Daily</div>
+
+          <div class="mc on">
+            <div class="top">
+              <div class="ico">🚶</div>
+              <div><div class="ttl">Walk 5,000 Steps</div><div class="ds">Hit your daily step target</div></div>
+              <div class="rew"><b>+100 XP</b><s id="s6-stat">In Progress</s></div>
+            </div>
+            <div class="pb"><div class="pf" id="s6-pf"></div></div>
+            <div class="pn"><span id="s6-pnum">2,855 / 5,000</span><span id="s6-ppct">57%</span></div>
+          </div>
+
+          <div class="mc lk">
+            <div class="top">
+              <div class="ico lock">🔒</div>
+              <div><div class="ttl">Win a Battle</div><div class="ds">Defeat an opponent</div></div>
+              <div class="rew"><b>+150 XP</b><s>Locked</s></div>
+            </div>
+          </div>
+
+          <div class="mc on">
+            <div class="top">
+              <div class="ico">🔥</div>
+              <div><div class="ttl">Keep Streak Alive</div><div class="ds">Log steps another day</div></div>
+              <div class="rew"><b>+50 XP</b><s>In Progress</s></div>
+            </div>
+          </div>
+
+          <div class="lab">Weekly</div>
+          <div class="elite">
+            <span class="badge">ELITE CHALLENGE</span>
+            <div class="t">Walk 50,000 Steps</div>
+            <div class="x">+500 XP</div>
+          </div>
+
+          <div class="ding" id="s6-ding">+100 XP ⚡</div>
+        </div>
+      </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/gsap@3.14.2/dist/gsap.min.js"></script>
+    <script>
+      window.__timelines = window.__timelines || {};
+      const tl = gsap.timeline({ paused: true });
+
+      gsap.set("#s6-world", { x:-50, scale:1.06 });
+      tl.from("#s6-phone", { x:80, autoAlpha:0, duration:0.6, ease:"power3.out" }, 0);
+      tl.to("#s6-k", { opacity:1, duration:0.4 }, 0.4);
+      tl.from("#s6-h", { autoAlpha:0, y:30, duration:0.6, ease:"power3.out" }, 0.6);
+      tl.to("#s6-s", { opacity:1, duration:0.5 }, 1.2);
+
+      // walk-mission bar fills to 57% then completes to 100% with a ding
+      tl.to("#s6-pf", { width:"57%", duration:1.0, ease:"power2.out" }, 0.9);
+      tl.to("#s6-pf", { width:"100%", duration:0.8, ease:"power2.inOut" }, 2.4);
+      tl.to("#s6-pnum", { textContent:"5,000 / 5,000", duration:0.1 }, 3.2);
+      tl.to("#s6-ppct", { textContent:"100%", duration:0.1, color:"#34A853" }, 3.2);
+      tl.to("#s6-stat", { textContent:"Completed", duration:0.1, color:"#34A853" }, 3.2);
+      tl.fromTo("#s6-ding", { opacity:0, y:14, scale:0.7 }, { opacity:1, y:0, scale:1, duration:0.4, ease:"back.out(2)" }, 3.25);
+      tl.to("#s6-ding", { opacity:0, y:-20, duration:0.5, ease:"power2.in" }, 4.1);
+
+      tl.to("#s6-world", { x:10, scale:1.11, duration:4.4, ease:"sine.inOut" }, 0.4);
+      window.__timelines["s6"] = tl;
+    </script>
+  </div>
+</template>

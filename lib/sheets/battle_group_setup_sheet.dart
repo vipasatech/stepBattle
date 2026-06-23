@@ -10,10 +10,11 @@ import '../providers/battle_provider.dart';
 import '../services/battle_service.dart';
 import '../widgets/avatar_circle.dart';
 import '../widgets/battle_duration_picker.dart';
+import '../widgets/battle_visibility_toggle.dart';
 import '../widgets/bottom_sheet_handle.dart';
 import 'add_friends_sheet.dart';
 
-/// Group battle setup — invite up to N participants.
+/// Multi-player battle setup — invite up to N participants for a free-for-all.
 ///
 /// Mirror of [Battle1v1SetupSheet]:
 ///   • "+ Add players" opens [AddFriendsSheet] in multi-select picker mode
@@ -34,6 +35,9 @@ class _BattleGroupSetupSheetState
   bool _creating = false;
   BattleWindow? _window;
 
+  /// Public lobby toggle — see [Battle1v1SetupSheet] for design.
+  bool _isPublic = false;
+
   final _battleCode = BattleService.generateBattleCode();
 
   bool _isInvited(String userId) =>
@@ -41,6 +45,71 @@ class _BattleGroupSetupSheetState
 
   void _removeInvited(UserModel user) {
     setState(() => _invited.removeWhere((u) => u.userId == user.userId));
+  }
+
+  Future<void> _showJoinCodeDialog(String code,
+      {required bool recurring}) async {
+    if (!mounted) return;
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: AppColors.surfaceContainer,
+        title: Text(
+          recurring ? 'Daily Battle Created' : 'Invites Sent',
+          style: const TextStyle(fontWeight: FontWeight.w800),
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              _isPublic
+                  ? 'Listed in Discover. Anyone can also paste this code:'
+                  : 'Share this code to let anyone you invited join directly:',
+              style: const TextStyle(color: AppColors.onSurfaceVariant),
+            ),
+            const SizedBox(height: 16),
+            GestureDetector(
+              onTap: () => Clipboard.setData(ClipboardData(text: code)),
+              child: Container(
+                width: double.infinity,
+                padding: const EdgeInsets.symmetric(vertical: 18),
+                decoration: BoxDecoration(
+                  color: AppColors.glassBackground,
+                  borderRadius: BorderRadius.circular(16),
+                  border: Border.all(
+                    color: AppColors.primary.withValues(alpha: 0.3),
+                  ),
+                ),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Text(
+                      code,
+                      style: const TextStyle(
+                        fontSize: 28,
+                        fontWeight: FontWeight.w900,
+                        letterSpacing: 6,
+                        color: AppColors.primary,
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    const Icon(Icons.content_copy,
+                        size: 18, color: AppColors.primary),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Done'),
+          ),
+        ],
+      ),
+    );
   }
 
   Future<void> _pickInvitees() async {
@@ -93,19 +162,30 @@ class _BattleGroupSetupSheetState
             )),
       ];
 
-      await ref.read(battleServiceProvider).createBattle(
-            type: BattleType.group,
-            participants: participants,
-            startTime: window.start,
-            endTime: window.end,
-            createdBy: me.userId,
-          );
+      final service = ref.read(battleServiceProvider);
+      final visibility =
+          _isPublic ? BattleVisibility.public : BattleVisibility.private;
+      // Daily preset → recurring series; otherwise one-off battle.
+      final result = window.recurring
+          ? await service.createDailySeries(
+              type: BattleType.group,
+              participants: participants,
+              startTime: window.start,
+              endTime: window.end,
+              createdBy: me.userId,
+              visibility: visibility,
+            )
+          : await service.createBattle(
+              type: BattleType.group,
+              participants: participants,
+              startTime: window.start,
+              endTime: window.end,
+              createdBy: me.userId,
+              visibility: visibility,
+            );
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-              content: Text('Invites sent! Battle starts when all accept.')),
-        );
         Navigator.pop(context);
+        await _showJoinCodeDialog(result.joinCode, recurring: window.recurring);
       }
     } catch (e) {
       if (mounted) {
@@ -146,7 +226,7 @@ class _BattleGroupSetupSheetState
                   Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text('GROUP BATTLE',
+                      Text('MULTI-PLAYER',
                           style: theme.textTheme.headlineSmall?.copyWith(
                               color: AppColors.primary,
                               fontWeight: FontWeight.w700)),
@@ -189,6 +269,11 @@ class _BattleGroupSetupSheetState
                     onChanged: (window) {
                       _window = window;
                     },
+                  ),
+                  const SizedBox(height: 16),
+                  BattleVisibilityToggle(
+                    isPublic: _isPublic,
+                    onChanged: (v) => setState(() => _isPublic = v),
                   ),
                   const SizedBox(height: 24),
 

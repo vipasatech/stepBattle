@@ -26,6 +26,9 @@ class BattleParticipant {
   /// (1v1) or is removed for that user (group).
   final ParticipantInviteStatus inviteStatus;
 
+  /// Team label for team battles ('A'/'B'/'C'/'D'). Null for 1v1 / group.
+  final String? teamLabel;
+
   const BattleParticipant({
     required this.userId,
     required this.displayName,
@@ -35,6 +38,7 @@ class BattleParticipant {
     this.endStepsBaseline,
     this.isWinner = false,
     this.inviteStatus = ParticipantInviteStatus.pending,
+    this.teamLabel,
   });
 
   /// Firestore-style nested map (still used by [BattleModel.toFirestore]).
@@ -68,6 +72,7 @@ class BattleParticipant {
       isWinner: d['is_winner'] as bool? ?? false,
       inviteStatus: ParticipantInviteStatus.fromString(
           d['invite_status'] as String? ?? 'pending'),
+      teamLabel: d['team_label'] as String?,
     );
   }
 }
@@ -84,8 +89,6 @@ enum ParticipantInviteStatus {
       };
 }
 
-enum BattleType { oneVsOne, group }
-
 /// Battle lifecycle:
 ///   • pending   — at least one invitee hasn't responded
 ///   • scheduled — all accepted, waiting for [BattleModel.startTime] to arrive
@@ -93,6 +96,21 @@ enum BattleType { oneVsOne, group }
 ///   • completed — end_time has passed, scores are frozen
 ///   • cancelled — aborted before activation (1v1 reject, creator delete)
 enum BattleStatus { pending, scheduled, active, completed, cancelled }
+
+/// Battle visibility. Public battles surface in Battles → Discover and can be
+/// joined by anyone using the join code (no invite required). Private battles
+/// are invite-or-code-only.
+enum BattleVisibility { private, public }
+
+/// Battle topology.
+///   • oneVsOne — exactly 2 individuals.
+///   • group    — 2–10 individuals, free-for-all (the user-facing label is
+///                "Multi-player" now; the enum value is kept stable for
+///                schema compatibility).
+///   • team     — 2–4 teams, up to 10 participants total. Scoring sums each
+///                team's `current_steps`; winning team's members all get
+///                `xp_reward × team_size` XP.
+enum BattleType { oneVsOne, group, team }
 
 class BattleModel {
   final String battleId;
@@ -125,6 +143,29 @@ class BattleModel {
   /// When the invite was created. Used for 24h auto-expire check.
   final DateTime createdAt;
 
+  /// Non-null when this battle is one instance of a recurring **Daily**
+  /// series (see `battle_series` table + migration 0014). The cron spawns
+  /// the next day's instance with the same series_id; the creator can stop
+  /// the series via `BattleService.stopSeries`.
+  final String? seriesId;
+
+  /// Visibility (migration 0015). Public battles surface in Battles →
+  /// Discover and can be joined by anyone via the join code; private battles
+  /// are invite-or-code-only.
+  final BattleVisibility visibility;
+
+  /// 6-char shareable code (e.g. `A4X9KP`). Anyone with the code can join a
+  /// public battle and pasting it works for private too. Set on every battle
+  /// going forward (migration 0015 backfilled existing rows).
+  final String? joinCode;
+
+  /// For team battles: how many teams (2–4). Null otherwise.
+  final int? teamCount;
+
+  /// For team battles: label → display name override (creator-set).
+  /// Defaults to "Team A" / "Team B" if missing.
+  final Map<String, String> teamNames;
+
   const BattleModel({
     required this.battleId,
     required this.type,
@@ -137,7 +178,37 @@ class BattleModel {
     this.winnerId,
     required this.createdBy,
     required this.createdAt,
+    this.seriesId,
+    this.visibility = BattleVisibility.private,
+    this.joinCode,
+    this.teamCount,
+    this.teamNames = const {},
   });
+
+  /// Display name for a team label (e.g. 'A' → 'Crimson Wolves' or 'Team A').
+  String teamDisplayName(String label) =>
+      teamNames[label] ?? 'Team $label';
+
+  /// Sum of `currentSteps` for all accepted participants in [label].
+  int teamSteps(String label) {
+    var sum = 0;
+    for (final p in participants) {
+      if (p.teamLabel != label) continue;
+      if (p.inviteStatus != ParticipantInviteStatus.accepted) continue;
+      sum += p.currentSteps;
+    }
+    return sum;
+  }
+
+  /// Distinct team labels in this battle, sorted ('A','B','C','D').
+  List<String> get teamLabels {
+    final set = <String>{
+      for (final p in participants)
+        if (p.teamLabel != null) p.teamLabel!,
+    };
+    final out = set.toList()..sort();
+    return out;
+  }
 
   factory BattleModel.fromFirestore(
       DocumentSnapshot<Map<String, dynamic>> doc) {
@@ -174,6 +245,18 @@ class BattleModel {
             p as Map<String, dynamic>))
         .toList();
 
+    final teamsRaw =
+        (d['battle_teams'] as List<dynamic>? ?? const []);
+    final teamNames = <String, String>{};
+    for (final t in teamsRaw) {
+      final m = t as Map<String, dynamic>;
+      final label = m['team_label'] as String?;
+      final name = m['team_name'] as String?;
+      if (label != null && name != null && name.isNotEmpty) {
+        teamNames[label] = name;
+      }
+    }
+
     final start = parseTs(d['start_time']);
     final end = parseTs(d['end_time']);
     final duration = end.difference(start);
@@ -191,11 +274,18 @@ class BattleModel {
       winnerId: d['winner_id'] as String?,
       createdBy: d['created_by'] as String? ?? '',
       createdAt: parseTs(d['created_at']),
+      seriesId: d['series_id'] as String?,
+      visibility: (d['visibility'] as String?) == 'public'
+          ? BattleVisibility.public
+          : BattleVisibility.private,
+      joinCode: d['join_code'] as String?,
+      teamCount: (d['team_count'] as num?)?.toInt(),
+      teamNames: teamNames,
     );
   }
 
   Map<String, dynamic> toFirestore() => {
-        'type': type == BattleType.oneVsOne ? '1v1' : 'group',
+        'type': BattleModel.typeToString(type),
         'status': status.name,
         'participants': participants.map((p) => p.toMap()).toList(),
         'invitedUserIds': invitedUserIds,
@@ -275,8 +365,18 @@ class BattleModel {
     return '#${battleId.toUpperCase()}';
   }
 
-  static BattleType _parseType(String s) =>
-      s == 'group' ? BattleType.group : BattleType.oneVsOne;
+  static BattleType _parseType(String s) => switch (s) {
+        'group' => BattleType.group,
+        'team' => BattleType.team,
+        _ => BattleType.oneVsOne,
+      };
+
+  /// Inverse of [_parseType]; used by writers that need the DB string.
+  static String typeToString(BattleType t) => switch (t) {
+        BattleType.oneVsOne => '1v1',
+        BattleType.group => 'group',
+        BattleType.team => 'team',
+      };
 
   static BattleStatus _parseStatus(String s) => switch (s) {
         'scheduled' => BattleStatus.scheduled,

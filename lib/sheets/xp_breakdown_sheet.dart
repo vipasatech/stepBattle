@@ -12,9 +12,9 @@ class XPBreakdownSheet extends StatelessWidget {
     ('Win a 1 vs 1 battle', '+200 XP'),
     ('Maintain a 7-day streak', '+100 XP'),
     ('Reach daily step goal', '+75 XP'),
-    ('Win a group battle', '+300 XP'),
+    ('Win a multi-player battle', '+300 XP'),
     ('Complete all daily missions (bonus)', '+150 XP'),
-    ('Win a clan battle (per member)', '+300 XP'),
+    ('Win a team battle (per member × team size)', '+300 XP each'),
     ('Every 1,000 steps', '+10 XP'),
     ('Complete weekly challenge', '+300–500 XP'),
   ];
