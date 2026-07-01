@@ -1,4 +1,4 @@
-import 'package:flutter/material.dart';
+﻿import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../config/colors.dart';
@@ -88,7 +88,7 @@ class _CreateClanSheetState extends ConsumerState<CreateClanSheet> {
     final name = _nameController.text.trim();
 
     return Container(
-      decoration: const BoxDecoration(
+      decoration: BoxDecoration(
         color: AppColors.surfaceContainer,
         borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
       ),
@@ -158,7 +158,7 @@ class _CreateClanSheetState extends ConsumerState<CreateClanSheet> {
                   ? '+ Add Friends'
                   : '${_invitedMembers.length} invited · Tap to edit'),
               style: OutlinedButton.styleFrom(
-                side: const BorderSide(color: AppColors.primary),
+                side: BorderSide(color: AppColors.primary),
                 foregroundColor: AppColors.primary,
               ),
             ),

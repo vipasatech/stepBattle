@@ -1,4 +1,4 @@
-import 'package:flutter/material.dart';
+﻿import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../../../config/colors.dart';
 import '../../../models/battle_model.dart';
@@ -68,7 +68,7 @@ class _DailyBadge extends StatelessWidget {
           color: AppColors.tertiary.withValues(alpha: 0.5),
         ),
       ),
-      child: const Text(
+      child: Text(
         'DAILY',
         style: TextStyle(
           color: AppColors.tertiary,
@@ -134,7 +134,7 @@ class _TeamBadge extends StatelessWidget {
           color: AppColors.secondary.withValues(alpha: 0.5),
         ),
       ),
-      child: const Text(
+      child: Text(
         'TEAM',
         style: TextStyle(
           color: AppColors.secondary,
@@ -181,11 +181,11 @@ class _JoinCodeChip extends StatelessWidget {
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const Icon(Icons.key, size: 12, color: AppColors.secondary),
+            Icon(Icons.key, size: 12, color: AppColors.secondary),
             const SizedBox(width: 6),
             Text(
               code,
-              style: const TextStyle(
+              style: TextStyle(
                 color: AppColors.secondary,
                 fontWeight: FontWeight.w800,
                 letterSpacing: 2,
@@ -193,7 +193,7 @@ class _JoinCodeChip extends StatelessWidget {
               ),
             ),
             const SizedBox(width: 6),
-            const Icon(Icons.content_copy,
+            Icon(Icons.content_copy,
                 size: 11, color: AppColors.secondary),
           ],
         ),
@@ -356,6 +356,8 @@ class _ActiveCard extends StatelessWidget {
                     children: [
                       Text(
                         'BATTLE ID ${battle.shortId}',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
                         style: theme.textTheme.labelSmall?.copyWith(
                           color: AppColors.onSurfaceVariant,
                           letterSpacing: 2,

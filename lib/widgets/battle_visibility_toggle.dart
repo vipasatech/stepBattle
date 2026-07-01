@@ -39,16 +39,17 @@ class BattleVisibilityToggle extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
+                // Label + description are stable regardless of toggle
+                // state — the toggle answers "is this Public Battle on?"
+                // rather than relabelling between two different modes.
                 Text(
-                  isPublic ? 'Public lobby' : 'Private battle',
+                  'Public Battle',
                   style: theme.textTheme.bodyMedium
                       ?.copyWith(fontWeight: FontWeight.w700),
                 ),
                 const SizedBox(height: 2),
                 Text(
-                  isPublic
-                      ? 'Anyone can find & join from Discover'
-                      : 'Invite-only — share code to add players',
+                  'Anyone can find and join this battle from Discover. Turn off for invite-only.',
                   style: theme.textTheme.labelSmall
                       ?.copyWith(color: AppColors.onSurfaceVariant),
                 ),

@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import 'package:material_design_icons_flutter/material_design_icons_flutter.dart';
 import '../../config/colors.dart';
 import '../../providers/auth_provider.dart';
 import '../../providers/battle_provider.dart';
@@ -11,6 +12,7 @@ import '../../providers/mission_provider.dart';
 import '../../providers/notification_provider.dart';
 import '../../providers/run_session_provider.dart';
 import '../../providers/step_provider.dart';
+import '../../providers/tab_focus_provider.dart';
 import '../../providers/user_provider.dart';
 import '../../services/background_sync.dart';
 import '../../services/notification_service.dart';
@@ -36,6 +38,12 @@ class MainShell extends ConsumerStatefulWidget {
 class _MainShellState extends ConsumerState<MainShell>
     with WidgetsBindingObserver {
   bool _backfillTriggered = false;
+
+  /// Previously-rendered shell branch index. Used to detect transitions
+  /// to Home (tab 0) so animations on the Home screen can re-fire even
+  /// though the indexedStack keeps the widget alive — see
+  /// [homeTabFocusTickProvider].
+  int? _prevShellIndex;
 
   @override
   void initState() {
@@ -290,15 +298,37 @@ class _MainShellState extends ConsumerState<MainShell>
     });
 
     final shell = widget.navigationShell;
+    // Detect "user just landed on Home" (idx 0) or "Ranks" (idx 4)
+    // transitions and tick the matching focus provider so affordances
+    // on those screens can replay animations. Skips the initial mount —
+    // each screen's own initState handles the first run.
+    final shellIdx = shell.currentIndex;
+    if (_prevShellIndex != shellIdx) {
+      final oldIdx = _prevShellIndex;
+      _prevShellIndex = shellIdx;
+      if (oldIdx != null && oldIdx != shellIdx) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (!mounted) return;
+          if (shellIdx == 0) {
+            ref.read(homeTabFocusTickProvider.notifier).state++;
+          } else if (shellIdx == 4) {
+            ref.read(ranksTabFocusTickProvider.notifier).state++;
+          }
+        });
+      }
+    }
+
     final trackActive = ref.watch(isTrackActiveProvider);
     return PermissionGate(
       child: FriendRequestToastHost(
         child: Scaffold(
           body: shell,
           extendBody: true,
-          floatingActionButton: _TrackFab(active: trackActive),
-          floatingActionButtonLocation: FloatingActionButtonLocation.endFloat,
+          // FAB removed: Track now lives in the bottom nav as a dedicated
+          // tab. The `trackActive` flag is still surfaced inside the Track
+          // tab itself (pulsing icon when a session is live).
           bottomNavigationBar: _BottomNavBar(
+            trackActive: trackActive,
             currentIndex: shell.currentIndex,
             onTap: (index) => shell.goBranch(
               index,
@@ -311,47 +341,58 @@ class _MainShellState extends ConsumerState<MainShell>
   }
 }
 
-/// Persistent floating button (bottom-right) for launching/opening the Track
-/// session. Renders an active state (pulsing accent + "Live" label) while a
-/// session is in flight so the user can jump back in from any tab.
-class _TrackFab extends StatelessWidget {
-  final bool active;
-  const _TrackFab({required this.active});
-
-  @override
-  Widget build(BuildContext context) {
-    if (active) {
-      return FloatingActionButton.extended(
-        heroTag: 'track-fab',
-        onPressed: () => GoRouter.of(context).go('/track/live'),
-        backgroundColor: AppColors.success,
-        foregroundColor: Colors.white,
-        icon: const Icon(Icons.directions_run),
-        label: const Text('Live'),
-      );
-    }
-    return FloatingActionButton(
-      heroTag: 'track-fab',
-      onPressed: () => GoRouter.of(context).go('/track'),
-      backgroundColor: AppColors.primary,
-      foregroundColor: Colors.white,
-      child: const Icon(Icons.directions_run),
-    );
-  }
-}
-
 class _BottomNavBar extends StatelessWidget {
   final int currentIndex;
   final ValueChanged<int> onTap;
 
-  const _BottomNavBar({required this.currentIndex, required this.onTap});
+  /// When true, the Track tab's icon switches to its "live" variant
+  /// (running figure + accent dot) so the user can see a session is in
+  /// flight from any tab.
+  final bool trackActive;
 
-  static const _items = [
-    _NavItem(icon: Icons.sports_score, activeIcon: Icons.sports_score, label: 'Home'),
-    _NavItem(icon: Icons.bolt_outlined, activeIcon: Icons.bolt, label: 'Battles'),
-    _NavItem(icon: Icons.military_tech_outlined, activeIcon: Icons.military_tech, label: 'Missions'),
-    _NavItem(icon: Icons.shield_outlined, activeIcon: Icons.shield, label: 'Clan'),
-    _NavItem(icon: Icons.leaderboard_outlined, activeIcon: Icons.leaderboard, label: 'Ranks'),
+  const _BottomNavBar({
+    required this.currentIndex,
+    required this.onTap,
+    required this.trackActive,
+  });
+
+  // Missions tab dropped in favour of Track. Order matches the
+  // StatefulShellRoute branch order in routes.dart.
+  // `final` (not `const`) because MdiIcons.swordCross resolves at
+  // runtime — one of the entries below can't be const-evaluated.
+  static final _items = [
+    const _NavItem(
+      icon: Icons.home_outlined,
+      activeIcon: Icons.home,
+      label: 'Home',
+    ),
+    // MDI `swordCross` — two zig-zag crossed swords. Not part of
+    // Flutter's built-in Material Icons, hence the extra
+    // `material_design_icons_flutter` package. Same glyph for
+    // active + inactive since the outline / filled distinction is
+    // carried by the foreground colour swap in `_NavButton`. This
+    // entry isn't `const` because MdiIcons.swordCross is a runtime
+    // getter — that's why the enclosing list dropped its `const`.
+    _NavItem(
+      icon: MdiIcons.swordCross,
+      activeIcon: MdiIcons.swordCross,
+      label: 'Battles',
+    ),
+    const _NavItem(
+      icon: Icons.directions_run_outlined,
+      activeIcon: Icons.directions_run,
+      label: 'Track',
+    ),
+    const _NavItem(
+      icon: Icons.shield_outlined,
+      activeIcon: Icons.shield,
+      label: 'Clan',
+    ),
+    const _NavItem(
+      icon: Icons.leaderboard_outlined,
+      activeIcon: Icons.leaderboard,
+      label: 'Ranks',
+    ),
   ];
 
   @override
@@ -366,7 +407,7 @@ class _BottomNavBar extends StatelessWidget {
             borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
             border: Border(
               top: BorderSide(
-                color: Colors.white.withValues(alpha: 0.05),
+                color: AppColors.onSurface.withValues(alpha: 0.05),
               ),
             ),
             boxShadow: [
@@ -386,9 +427,14 @@ class _BottomNavBar extends StatelessWidget {
                 children: List.generate(_items.length, (i) {
                   final item = _items[i];
                   final isActive = i == currentIndex;
+                  // The Track tab (index 2) gets a small green dot
+                  // overlay when a session is live, so the user spots it
+                  // from any other tab.
+                  final showLiveDot = i == 2 && trackActive;
                   return _NavButton(
                     item: item,
                     isActive: isActive,
+                    showLiveDot: showLiveDot,
                     onTap: () => onTap(i),
                   );
                 }),
@@ -404,41 +450,64 @@ class _BottomNavBar extends StatelessWidget {
 class _NavButton extends StatelessWidget {
   final _NavItem item;
   final bool isActive;
+  final bool showLiveDot;
   final VoidCallback onTap;
 
   const _NavButton({
     required this.item,
     required this.isActive,
     required this.onTap,
+    this.showLiveDot = false,
   });
 
   @override
   Widget build(BuildContext context) {
+    // Light mode reads better with pure-black inactive icons/labels;
+    // dark mode keeps the softer grey so inactive tabs don't punch on
+    // the dark surface. Hoisted so the ternary stays terse below.
+    final Color foreground = isActive
+        ? AppColors.primary
+        : (AppColors.isLight ? Colors.black : Colors.grey);
     return GestureDetector(
       onTap: onTap,
       behavior: HitTestBehavior.opaque,
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 200),
+      child: Padding(
+        // Active state is now indicated by colour-only tinting of the
+        // icon + label (no surrounding pill / glow). The padding stays
+        // so the tap target keeps the same size as before — only the
+        // visual chrome around the active tab is removed.
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-        decoration: isActive
-            ? BoxDecoration(
-                color: AppColors.primaryBrand.withValues(alpha: 0.15),
-                borderRadius: BorderRadius.circular(16),
-                boxShadow: [
-                  BoxShadow(
-                    color: AppColors.primary.withValues(alpha: 0.3),
-                    blurRadius: 15,
-                  ),
-                ],
-              )
-            : null,
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(
-              isActive ? item.activeIcon : item.icon,
-              color: isActive ? AppColors.primary : Colors.grey,
-              size: 24,
+            Stack(
+              clipBehavior: Clip.none,
+              children: [
+                Icon(
+                  isActive ? item.activeIcon : item.icon,
+                  color: foreground,
+                  size: 24,
+                ),
+                if (showLiveDot)
+                  Positioned(
+                    top: -2,
+                    right: -4,
+                    child: Container(
+                      width: 9,
+                      height: 9,
+                      decoration: BoxDecoration(
+                        color: AppColors.success,
+                        shape: BoxShape.circle,
+                        boxShadow: [
+                          BoxShadow(
+                            color: AppColors.success.withValues(alpha: 0.6),
+                            blurRadius: 6,
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+              ],
             ),
             const SizedBox(height: 4),
             Text(
@@ -448,7 +517,7 @@ class _NavButton extends StatelessWidget {
                 fontSize: 10,
                 fontWeight: FontWeight.w700,
                 letterSpacing: 0.5,
-                color: isActive ? AppColors.primary : Colors.grey,
+                color: foreground,
               ),
             ),
           ],

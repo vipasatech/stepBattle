@@ -1,4 +1,4 @@
-import 'package:flutter/material.dart';
+﻿import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -11,6 +11,7 @@ import '../../widgets/avatar_circle.dart';
 import '../../widgets/dual_fill_bar.dart';
 import '../../widgets/glass_card.dart';
 import '../../widgets/status_pill.dart';
+import 'widgets/top_clans_card.dart';
 
 /// Clan dashboard — members list + active clan battle + action buttons.
 class ClanDashboardView extends ConsumerWidget {
@@ -87,6 +88,14 @@ class ClanDashboardView extends ConsumerWidget {
             ),
           ],
         ),
+
+        const SizedBox(height: 28),
+
+        // ===== TOP CLANS LEADERBOARD =====
+        // Surfaces the global Top 10 clans by `clans.clan_xp`. The
+        // currency is separate from per-user XP — only earned via clan
+        // battles and topped up by captains.
+        const TopClansCard(),
       ],
     );
   }
@@ -175,7 +184,7 @@ class _SoldiersSection extends ConsumerWidget {
                     color: AppColors.surfaceContainerLow,
                     borderRadius: BorderRadius.circular(20),
                     border: Border.all(
-                        color: Colors.white.withValues(alpha: 0.05)),
+                        color: AppColors.onSurface.withValues(alpha: 0.05)),
                   ),
                   child: Row(
                     mainAxisSize: MainAxisSize.min,
@@ -238,7 +247,7 @@ class _SoldiersSection extends ConsumerWidget {
             label: const Text('+ Add Members'),
             style: OutlinedButton.styleFrom(
               side: BorderSide(
-                  color: Colors.white.withValues(alpha: 0.1),
+                  color: AppColors.onSurface.withValues(alpha: 0.1),
                   width: 2,
                   strokeAlign: BorderSide.strokeAlignInside),
               foregroundColor: AppColors.primary,
@@ -275,7 +284,7 @@ class _MemberRow extends StatelessWidget {
                     : '?',
                 borderColor: member.isCaptain
                     ? AppColors.primary
-                    : Colors.white.withValues(alpha: 0.05),
+                    : AppColors.onSurface.withValues(alpha: 0.05),
                 borderWidth: member.isCaptain ? 2 : 1,
               ),
               if (member.isCaptain)
@@ -285,7 +294,7 @@ class _MemberRow extends StatelessWidget {
                   child: Container(
                     width: 16,
                     height: 16,
-                    decoration: const BoxDecoration(
+                    decoration: BoxDecoration(
                       color: AppColors.primary,
                       shape: BoxShape.circle,
                     ),

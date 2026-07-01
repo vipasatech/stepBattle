@@ -1,4 +1,4 @@
-import 'package:flutter/material.dart';
+﻿import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../../config/colors.dart';
@@ -47,6 +47,12 @@ class _BattlesScreenState extends ConsumerState<BattlesScreen> {
               ),
         ),
         actions: [
+          // B/W Ratio pill — sits to the LEFT of "New Battle" so the
+          // user sees their win rate at a glance every time they open
+          // the tab. Hidden gracefully when the user has no completed
+          // battles (returns "--").
+          const _BwRatioPill(),
+          const SizedBox(width: 8),
           FilledButton.icon(
             onPressed: () => _showNewBattleSheet(context),
             icon: const Icon(Icons.add, size: 18),
@@ -188,6 +194,39 @@ VoidCallback? _stopRecurringCallback(
   };
 }
 
+/// "B/W X%" pill next to the New Battle button. Reads from
+/// [battleWinStatsProvider] for the signed-in user. Null total → "--".
+class _BwRatioPill extends ConsumerWidget {
+  const _BwRatioPill();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final uid = ref.watch(authStateProvider).valueOrNull?.id;
+    if (uid == null) return const SizedBox.shrink();
+    final stats = ref.watch(battleWinStatsProvider(uid)).valueOrNull;
+    final ratio = stats == null ? null : battleWinRatioOf(stats);
+    final label = ratio == null
+        ? 'B/W --'
+        : 'B/W ${(ratio * 100).toStringAsFixed(0)}%';
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      decoration: BoxDecoration(
+        color: AppColors.amber.withValues(alpha: 0.15),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: AppColors.amber.withValues(alpha: 0.35)),
+      ),
+      child: Text(
+        label,
+        style: TextStyle(
+          color: AppColors.amber,
+          fontSize: 12,
+          fontWeight: FontWeight.w800,
+        ),
+      ),
+    );
+  }
+}
+
 class _BattlesBody extends ConsumerWidget {
   const _BattlesBody();
 
@@ -207,7 +246,7 @@ class _BattlesBody extends ConsumerWidget {
 
     Widget body;
     body = allBattles.when(
-      loading: () => const Center(
+      loading: () => Center(
           child: CircularProgressIndicator(color: AppColors.primary)),
       // Non-transient errors only — transient realtime drops are caught
       // by the retry wrapper before they ever reach this branch.
@@ -304,7 +343,9 @@ class _BattlesBody extends ConsumerWidget {
               const SizedBox(height: 24),
             ],
 
-            // Completed
+            // Completed — tap opens the post-battle Status page (drag
+            // cards, swap background, see winner with star particles)
+            // rather than the live arena.
             if (completed.isNotEmpty) ...[
               _SectionHeader(title: 'Completed', count: completed.length),
               const SizedBox(height: 12),
@@ -314,7 +355,7 @@ class _BattlesBody extends ConsumerWidget {
                       battle: b,
                       currentUserId: uid,
                       onTap: () =>
-                          context.push('/battle-ground/${b.battleId}'),
+                          context.push('/battle-status/${b.battleId}'),
                     ),
                   )),
             ],
@@ -347,7 +388,7 @@ class _BattlesBody extends ConsumerWidget {
                 child: Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    const SizedBox(
+                    SizedBox(
                       width: 12,
                       height: 12,
                       child: CircularProgressIndicator(
@@ -481,7 +522,7 @@ class _IncomingInviteCardState extends ConsumerState<_IncomingInviteCard> {
           ),
           const SizedBox(height: 14),
           if (_busy)
-            const Center(
+            Center(
               child: SizedBox(
                 width: 20,
                 height: 20,
@@ -598,7 +639,7 @@ class _DiscoverEntryTile extends ConsumerWidget {
                   color: AppColors.primary.withValues(alpha: 0.15),
                   borderRadius: BorderRadius.circular(12),
                 ),
-                child: const Icon(Icons.travel_explore,
+                child: Icon(Icons.travel_explore,
                     color: AppColors.primary),
               ),
               const SizedBox(width: 12),
@@ -625,10 +666,10 @@ class _DiscoverEntryTile extends ConsumerWidget {
               IconButton(
                 tooltip: 'Join with code',
                 visualDensity: VisualDensity.compact,
-                icon: const Icon(Icons.qr_code, color: AppColors.primary),
+                icon: Icon(Icons.qr_code, color: AppColors.primary),
                 onPressed: () => _pasteCode(context, ref),
               ),
-              const Icon(Icons.chevron_right, color: AppColors.primary),
+              Icon(Icons.chevron_right, color: AppColors.primary),
             ],
           ),
         ),

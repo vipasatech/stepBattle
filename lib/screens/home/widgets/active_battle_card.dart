@@ -94,11 +94,21 @@ class _ActiveState extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text('You vs $opponentName',
+              // Title takes whatever space is left; ellipsis on overflow
+              // so long opponent names don't push the time-left chip
+              // off-screen at large text scales.
+              Expanded(
+                child: Text(
+                  'You vs $opponentName',
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
                   style: theme.textTheme.titleMedium
-                      ?.copyWith(fontWeight: FontWeight.w700)),
+                      ?.copyWith(fontWeight: FontWeight.w700),
+                ),
+              ),
+              const SizedBox(width: 8),
               Text(timeLeft, style: theme.textTheme.bodySmall),
             ],
           ),

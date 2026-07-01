@@ -1,4 +1,4 @@
-import 'package:flutter/material.dart';
+﻿import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -215,8 +215,79 @@ class _BattleTeamSetupSheetState extends ConsumerState<BattleTeamSetupSheet> {
     }
   }
 
-  Future<void> _removeLastTeam() async {
+  /// Remove a SPECIFIC team (not just the last one). Workflow:
+  ///   1. Confirm with the user.
+  ///   2. Move all members of [label] to Team A.
+  ///   3. Shift every subsequent team's members down one slot
+  ///      (e.g. removing B → C becomes B, D becomes C). Keeps the
+  ///      label set A..N contiguous so the labels in _labels stay
+  ///      aligned with the rendered cards.
+  ///   4. Drop the now-empty last label by decrementing the team count.
+  Future<void> _removeSpecificTeam(String label) async {
     if (_teamCount <= _minTeams) return;
+    // Never remove Team A — the creator is always on A and labels
+    // wouldn't have a stable "shift target" without it.
+    if (label == 'A') return;
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: AppColors.surfaceContainer,
+        title: Text('Remove Team ${_displayName(label)}?'),
+        content: Text(
+          'Any players on Team ${_displayName(label)} will be reassigned to Team ${_displayName('A')}.',
+          style: TextStyle(color: AppColors.onSurfaceVariant),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            style: FilledButton.styleFrom(
+              backgroundColor: AppColors.error,
+            ),
+            child: const Text('Remove'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+
+    // 1. Move members of `label` → A.
+    final labelMembers = _roster.entries
+        .where((e) => e.value.teamLabel == label)
+        .map((e) => e.key)
+        .toList();
+    for (final uid in labelMembers) {
+      await _moveToTeam(uid, 'A');
+    }
+
+    // 2. Shift every later team down one slot.
+    final allLabels =
+        List<String>.generate(_teamCount, (i) => String.fromCharCode(65 + i));
+    final removedIdx = allLabels.indexOf(label);
+    for (var i = removedIdx + 1; i < allLabels.length; i++) {
+      final from = allLabels[i];
+      final to = allLabels[i - 1];
+      final fromMembers = _roster.entries
+          .where((e) => e.value.teamLabel == from)
+          .map((e) => e.key)
+          .toList();
+      for (final uid in fromMembers) {
+        await _moveToTeam(uid, to);
+      }
+      // Shift the friendly name down too.
+      if (_teamNames.containsKey(from)) {
+        setState(() {
+          _teamNames[to] = _teamNames[from]!;
+          _teamNames.remove(from);
+        });
+      }
+    }
+
+    // 3. Drop the now-empty last slot.
     await _setTeamCount(_teamCount - 1);
   }
 
@@ -388,7 +459,7 @@ class _BattleTeamSetupSheetState extends ConsumerState<BattleTeamSetupSheet> {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text(
+            Text(
               'Invites sent. Share this code so anyone can join:',
               style: TextStyle(color: AppColors.onSurfaceVariant),
             ),
@@ -410,7 +481,7 @@ class _BattleTeamSetupSheetState extends ConsumerState<BattleTeamSetupSheet> {
                   children: [
                     Text(
                       code,
-                      style: const TextStyle(
+                      style: TextStyle(
                         fontSize: 28,
                         fontWeight: FontWeight.w900,
                         letterSpacing: 6,
@@ -418,7 +489,7 @@ class _BattleTeamSetupSheetState extends ConsumerState<BattleTeamSetupSheet> {
                       ),
                     ),
                     const SizedBox(width: 10),
-                    const Icon(Icons.content_copy,
+                    Icon(Icons.content_copy,
                         size: 18, color: AppColors.primary),
                   ],
                 ),
@@ -451,7 +522,7 @@ class _BattleTeamSetupSheetState extends ConsumerState<BattleTeamSetupSheet> {
       maxChildSize: 0.95,
       expand: false,
       builder: (context, scrollController) => Container(
-        decoration: const BoxDecoration(
+        decoration: BoxDecoration(
           color: AppColors.surfaceContainer,
           borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
         ),
@@ -553,53 +624,41 @@ class _BattleTeamSetupSheetState extends ConsumerState<BattleTeamSetupSheet> {
                         .toList(),
                     otherTeams: _labels.where((l) => l != label).toList(),
                     canAdd: _roster.length + 1 < _maxParticipants,
+                    // Per-team remove button. Hidden on Team A (creator's
+                    // team) and when we'd drop below the 2-team minimum.
+                    canRemoveTeam: label != 'A' && _teamCount > _minTeams,
                     onRename: () => _renameTeam(label),
                     onAdd: () => _addPlayers(label),
                     onMove: (userId, target) => _moveToTeam(userId, target),
                     onRemove: _removePlayer,
+                    onRemoveTeam: () => _removeSpecificTeam(label),
                   ),
                 ),
 
-              Row(
-                children: [
-                  Expanded(
-                    child: OutlinedButton.icon(
-                      onPressed: _teamCount < _maxTeams
-                          ? () => _setTeamCount(_teamCount + 1)
-                          : null,
-                      icon: const Icon(Icons.add, size: 18),
-                      label: Text(
-                        _teamCount < _maxTeams
-                            ? 'Add Team ${String.fromCharCode(65 + _teamCount)}'
-                            : 'Max $_maxTeams teams',
-                      ),
-                      style: OutlinedButton.styleFrom(
-                        side: BorderSide(
-                          color: AppColors.primary.withValues(alpha: 0.4),
-                        ),
-                        foregroundColor: AppColors.primary,
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 12, vertical: 12),
-                      ),
-                    ),
+              // Add Team button only. Each team card now owns its own
+              // remove button (next to the per-team add-players icon) so
+              // the user can drop any team, not just the last.
+              SizedBox(
+                width: double.infinity,
+                child: OutlinedButton.icon(
+                  onPressed: _teamCount < _maxTeams
+                      ? () => _setTeamCount(_teamCount + 1)
+                      : null,
+                  icon: const Icon(Icons.add, size: 18),
+                  label: Text(
+                    _teamCount < _maxTeams
+                        ? 'Add Team ${String.fromCharCode(65 + _teamCount)}'
+                        : 'Max $_maxTeams teams',
                   ),
-                  if (_teamCount > _minTeams) ...[
-                    const SizedBox(width: 10),
-                    OutlinedButton.icon(
-                      onPressed: _removeLastTeam,
-                      icon: const Icon(Icons.remove, size: 18),
-                      label: Text('Remove ${_labels.last}'),
-                      style: OutlinedButton.styleFrom(
-                        side: BorderSide(
-                          color: AppColors.error.withValues(alpha: 0.4),
-                        ),
-                        foregroundColor: AppColors.error,
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 12, vertical: 12),
-                      ),
+                  style: OutlinedButton.styleFrom(
+                    side: BorderSide(
+                      color: AppColors.primary.withValues(alpha: 0.4),
                     ),
-                  ],
-                ],
+                    foregroundColor: AppColors.primary,
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 12, vertical: 12),
+                  ),
+                ),
               ),
 
               const SizedBox(height: 12),
@@ -685,9 +744,9 @@ class _ShareCodeBar extends StatelessWidget {
         ),
         child: Row(
           children: [
-            const Icon(Icons.key, size: 16, color: AppColors.primary),
+            Icon(Icons.key, size: 16, color: AppColors.primary),
             const SizedBox(width: 10),
-            const Text(
+            Text(
               'Join code',
               style: TextStyle(
                 color: AppColors.onSurfaceVariant,
@@ -700,7 +759,7 @@ class _ShareCodeBar extends StatelessWidget {
             Expanded(
               child: Text(
                 code,
-                style: const TextStyle(
+                style: TextStyle(
                   color: AppColors.primary,
                   fontSize: 22,
                   fontWeight: FontWeight.w900,
@@ -710,7 +769,7 @@ class _ShareCodeBar extends StatelessWidget {
                 overflow: TextOverflow.ellipsis,
               ),
             ),
-            const Icon(Icons.content_copy,
+            Icon(Icons.content_copy,
                 size: 16, color: AppColors.primary),
           ],
         ),
@@ -724,15 +783,15 @@ class _LobbyLoadingView extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return const Padding(
-      padding: EdgeInsets.symmetric(vertical: 60),
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 60),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          BottomSheetHandle(),
-          SizedBox(height: 40),
+          const BottomSheetHandle(),
+          const SizedBox(height: 40),
           CircularProgressIndicator(color: AppColors.primary),
-          SizedBox(height: 16),
+          const SizedBox(height: 16),
           Text(
             'Preparing lobby…',
             style: TextStyle(color: AppColors.onSurfaceVariant),
@@ -758,7 +817,7 @@ class _LobbyErrorView extends StatelessWidget {
           const SizedBox(height: 24),
           const Icon(Icons.error_outline, color: AppColors.error, size: 48),
           const SizedBox(height: 12),
-          const Text(
+          Text(
             'Could not prepare lobby',
             style: TextStyle(
                 color: AppColors.onSurface, fontWeight: FontWeight.w700),
@@ -767,7 +826,7 @@ class _LobbyErrorView extends StatelessWidget {
           Text(
             message,
             textAlign: TextAlign.center,
-            style: const TextStyle(
+            style: TextStyle(
               color: AppColors.onSurfaceVariant,
               fontSize: 12,
             ),
@@ -792,10 +851,12 @@ class _TeamBlock extends StatelessWidget {
   final List<UserModel> members;
   final List<String> otherTeams;
   final bool canAdd;
+  final bool canRemoveTeam;
   final VoidCallback onRename;
   final VoidCallback onAdd;
   final void Function(String userId, String target) onMove;
   final void Function(String userId) onRemove;
+  final VoidCallback onRemoveTeam;
 
   const _TeamBlock({
     required this.label,
@@ -803,10 +864,12 @@ class _TeamBlock extends StatelessWidget {
     required this.members,
     required this.otherTeams,
     required this.canAdd,
+    required this.canRemoveTeam,
     required this.onRename,
     required this.onAdd,
     required this.onMove,
     required this.onRemove,
+    required this.onRemoveTeam,
   });
 
   Color get _accent {
@@ -880,6 +943,14 @@ class _TeamBlock extends StatelessWidget {
                 icon: const Icon(Icons.person_add, size: 20),
                 tooltip: 'Add players',
               ),
+              if (canRemoveTeam)
+                IconButton(
+                  onPressed: onRemoveTeam,
+                  visualDensity: VisualDensity.compact,
+                  color: AppColors.error,
+                  icon: const Icon(Icons.remove_circle_outline, size: 20),
+                  tooltip: 'Remove this team',
+                ),
             ],
           ),
           const SizedBox(height: 8),

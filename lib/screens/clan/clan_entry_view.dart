@@ -1,4 +1,4 @@
-import 'package:flutter/material.dart';
+﻿import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../config/colors.dart';
@@ -64,7 +64,7 @@ class ClanEntryView extends ConsumerWidget {
                 decoration: BoxDecoration(
                   shape: BoxShape.circle,
                   color: AppColors.surfaceContainerLow,
-                  border: Border.all(color: Colors.white.withValues(alpha: 0.05)),
+                  border: Border.all(color: AppColors.onSurface.withValues(alpha: 0.05)),
                 ),
                 child: Icon(Icons.shield,
                     size: 80, color: AppColors.primary.withValues(alpha: 0.8)),
@@ -75,7 +75,7 @@ class ClanEntryView extends ConsumerWidget {
                 child: Container(
                   width: 8,
                   height: 8,
-                  decoration: const BoxDecoration(
+                  decoration: BoxDecoration(
                     color: AppColors.tertiary,
                     shape: BoxShape.circle,
                   ),
@@ -243,7 +243,7 @@ class _PendingInviteCardState extends ConsumerState<_PendingInviteCard> {
           ),
           const SizedBox(height: 14),
           if (_busy)
-            const Center(
+            Center(
               child: SizedBox(
                 width: 20,
                 height: 20,

@@ -104,7 +104,7 @@ class _Divider extends StatelessWidget {
   Widget build(BuildContext context) {
     return SizedBox(
       height: 1,
-      child: ColoredBox(color: Colors.white.withValues(alpha: 0.05)),
+      child: ColoredBox(color: AppColors.onSurface.withValues(alpha: 0.05)),
     );
   }
 }

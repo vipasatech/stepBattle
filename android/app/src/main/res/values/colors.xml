@@ -4,4 +4,9 @@
     <!-- Tint colour applied by Android to the monochrome notification status
          icon (ic_stat_logo) and the small accent strip in the expanded view. -->
     <color name="notification_accent">#7C3AED</color>
+    <!-- Solid black backdrop for the native splash screen. Kept distinct
+         from `ic_launcher_background` so changing one doesn't drag the
+         other (the launcher icon's adaptive bg stays brand purple even
+         when the splash goes black). -->
+    <color name="splash_background">#000000</color>
 </resources>

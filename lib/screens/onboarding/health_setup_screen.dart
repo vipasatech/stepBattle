@@ -1,4 +1,4 @@
-import 'package:flutter/material.dart';
+﻿import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -102,7 +102,7 @@ class _HealthSetupScreenState extends ConsumerState<HealthSetupScreen> {
                 ?.copyWith(fontWeight: FontWeight.w700)),
       ),
       body: advice == null
-          ? const Center(
+          ? Center(
               child: CircularProgressIndicator(color: AppColors.primary))
           : ListView(
               padding: const EdgeInsets.fromLTRB(20, 12, 20, 32),
@@ -270,7 +270,7 @@ class _StepList extends StatelessWidget {
       decoration: BoxDecoration(
         color: AppColors.surfaceContainerLow,
         borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: Colors.white.withValues(alpha: 0.05)),
+        border: Border.all(color: AppColors.onSurface.withValues(alpha: 0.05)),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -433,7 +433,7 @@ class _FitFallbackCard extends StatelessWidget {
             ),
           ),
           if (busy)
-            const SizedBox(
+            SizedBox(
                 width: 18,
                 height: 18,
                 child: CircularProgressIndicator(

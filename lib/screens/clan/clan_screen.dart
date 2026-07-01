@@ -1,4 +1,4 @@
-import 'package:flutter/material.dart';
+﻿import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../../config/colors.dart';
@@ -75,14 +75,14 @@ class ClanScreen extends ConsumerWidget {
           const SizedBox(width: 8),
           if (hasClan == true)
             IconButton(
-              icon: const Icon(Icons.settings, color: AppColors.onSurfaceVariant),
+              icon: Icon(Icons.settings, color: AppColors.onSurfaceVariant),
               tooltip: 'Clan details',
               onPressed: () => context.go('/clan/details'),
             ),
         ],
       ),
       body: switch (hasClan) {
-        null => const Center(
+        null => Center(
             child: CircularProgressIndicator(color: AppColors.primary),
           ),
         true => const ClanDashboardView(),

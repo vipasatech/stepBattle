@@ -1,9 +1,11 @@
-import 'package:flutter/material.dart';
+﻿import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
+
 import '../config/colors.dart';
 import '../config/constants.dart';
-import 'package:supabase_flutter/supabase_flutter.dart';
 import '../providers/auth_provider.dart';
+import '../services/goal_formula.dart';
 import '../widgets/bottom_sheet_handle.dart';
 
 /// Set daily step goal sheet — presets + custom stepper.
@@ -20,12 +22,26 @@ class _SetGoalSheetState extends ConsumerState<SetGoalSheet> {
   late int _goal;
   bool _saving = false;
 
-  static const _presets = [5000, 8000, 10000, 15000];
+  /// Personalized [min, max] range — populated in build() from the
+  /// current user's onboarding fields (DOB/gender/fitness_level). If
+  /// any are missing (pre-survey users), falls back to
+  /// [GoalFormula.fallback]'s loose range.
+  StepGoalRecommendation? _range;
 
   @override
   void initState() {
     super.initState();
     _goal = widget.currentGoal;
+  }
+
+  /// Personalized presets — the formula-recommended target plus snapped
+  /// points evenly distributed across the allowed range. Falls back to
+  /// the legacy [5K, 8K, 10K, 15K] chips when the user hasn't completed
+  /// the survey yet.
+  List<int> _presetsFor(StepGoalRecommendation r) {
+    // Three chips: min, target, max — all clamped multiples of 500.
+    final p = <int>{r.min, r.target, r.max}.toList()..sort();
+    return p;
   }
 
   Future<void> _save() async {
@@ -50,14 +66,30 @@ class _SetGoalSheetState extends ConsumerState<SetGoalSheet> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
 
+    // Personalized range. If the user hasn't completed the new survey
+    // we fall back to a wide [4,000, 11,000] range so they're not blocked
+    // from editing — the "Complete your profile" sheet catches them
+    // separately to tighten this later.
+    final user = ref.watch(currentUserProvider).valueOrNull;
+    _range = user == null
+        ? GoalFormula.fallback
+        : (GoalFormula.forUser(user) ?? GoalFormula.fallback);
+    final range = _range!;
+    // Clamp any out-of-range value the caller passed in. Defensive — should
+    // never trip in practice unless the user's fitness level just changed.
+    if (_goal < range.min || _goal > range.max) {
+      _goal = range.clamp(_goal);
+    }
+    final presets = _presetsFor(range);
+
     return DraggableScrollableSheet(
       initialChildSize: 0.8,
       minChildSize: 0.5,
       maxChildSize: 0.95,
       builder: (context, scrollController) => Container(
-        decoration: const BoxDecoration(
-          color: Color(0xFF1A1A1C),
-          borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
+        decoration: BoxDecoration(
+          color: AppColors.surfaceContainer,
+          borderRadius: const BorderRadius.vertical(top: Radius.circular(28)),
         ),
         child: ListView(
           controller: scrollController,
@@ -87,7 +119,7 @@ class _SetGoalSheetState extends ConsumerState<SetGoalSheet> {
               decoration: BoxDecoration(
                 color: AppColors.surfaceContainerLow.withValues(alpha: 0.5),
                 borderRadius: BorderRadius.circular(28),
-                border: Border.all(color: Colors.white.withValues(alpha: 0.05)),
+                border: Border.all(color: AppColors.onSurface.withValues(alpha: 0.05)),
               ),
               child: Column(
                 children: [
@@ -107,10 +139,10 @@ class _SetGoalSheetState extends ConsumerState<SetGoalSheet> {
                     padding: const EdgeInsets.symmetric(
                         horizontal: 14, vertical: 6),
                     decoration: BoxDecoration(
-                      color: Colors.white.withValues(alpha: 0.05),
+                      color: AppColors.onSurface.withValues(alpha: 0.05),
                       borderRadius: BorderRadius.circular(20),
                       border: Border.all(
-                          color: Colors.white.withValues(alpha: 0.1)),
+                          color: AppColors.onSurface.withValues(alpha: 0.1)),
                     ),
                     child: Row(
                       mainAxisSize: MainAxisSize.min,
@@ -136,10 +168,47 @@ class _SetGoalSheetState extends ConsumerState<SetGoalSheet> {
 
             const SizedBox(height: 24),
 
-            // Preset chips
+            // Recommendation strip + preset chips (min / target / max
+            // from the personalized formula).
+            Container(
+              padding: const EdgeInsets.symmetric(
+                  horizontal: 14, vertical: 10),
+              decoration: BoxDecoration(
+                color: AppColors.primary.withValues(alpha: 0.08),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(
+                  color: AppColors.primary.withValues(alpha: 0.2),
+                ),
+              ),
+              child: Row(
+                children: [
+                  Icon(Icons.auto_awesome,
+                      size: 16, color: AppColors.primary),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      'Recommended: ${_fmt(range.target)} '
+                      '· Range ${_fmt(range.min)} – ${_fmt(range.max)}',
+                      style: theme.textTheme.labelSmall?.copyWith(
+                        color: AppColors.primary,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 12),
             Row(
-              children: _presets.map((p) {
+              children: presets.map((p) {
                 final sel = p == _goal;
+                final label = p == range.target
+                    ? 'Suggested'
+                    : p == range.min
+                        ? 'Min'
+                        : p == range.max
+                            ? 'Max'
+                            : '${p ~/ 1000}K';
                 return Expanded(
                   child: Padding(
                     padding: const EdgeInsets.symmetric(horizontal: 4),
@@ -147,7 +216,7 @@ class _SetGoalSheetState extends ConsumerState<SetGoalSheet> {
                       onTap: () => setState(() => _goal = p),
                       child: AnimatedContainer(
                         duration: const Duration(milliseconds: 200),
-                        padding: const EdgeInsets.symmetric(vertical: 14),
+                        padding: const EdgeInsets.symmetric(vertical: 12),
                         decoration: BoxDecoration(
                           color: sel
                               ? AppColors.primary.withValues(alpha: 0.2)
@@ -158,24 +227,23 @@ class _SetGoalSheetState extends ConsumerState<SetGoalSheet> {
                                   color: AppColors.primary
                                       .withValues(alpha: 0.3))
                               : null,
-                          boxShadow: sel
-                              ? [
-                                  BoxShadow(
-                                    color: AppColors.primary
-                                        .withValues(alpha: 0.2),
-                                    blurRadius: 15,
-                                  ),
-                                ]
-                              : null,
                         ),
-                        child: Center(
-                          child: Text('${p ~/ 1000}K',
-                              style: theme.textTheme.titleSmall?.copyWith(
-                                color: sel
-                                    ? AppColors.primary
-                                    : AppColors.onSurface,
-                                fontWeight: FontWeight.w700,
-                              )),
+                        child: Column(
+                          children: [
+                            Text('${p ~/ 1000}K',
+                                style: theme.textTheme.titleSmall?.copyWith(
+                                  color: sel
+                                      ? AppColors.primary
+                                      : AppColors.onSurface,
+                                  fontWeight: FontWeight.w700,
+                                )),
+                            Text(label,
+                                style: theme.textTheme.labelSmall?.copyWith(
+                                  color: AppColors.onSurfaceVariant,
+                                  fontSize: 9,
+                                  letterSpacing: 0.5,
+                                )),
+                          ],
                         ),
                       ),
                     ),
@@ -196,9 +264,17 @@ class _SetGoalSheetState extends ConsumerState<SetGoalSheet> {
               children: [
                 _StepperBtn(
                   icon: Icons.remove,
-                  onTap: _goal > AppConstants.minStepGoal
-                      ? () => setState(
-                          () => _goal -= AppConstants.stepGoalIncrement)
+                  // Clamp to the formula's [min, max] — the user can't
+                  // dial below their personalized floor (e.g., 2,500 for
+                  // a sedentary elderly user, 5,000 for an advanced
+                  // young adult). Going below would lie about health
+                  // benefit; going above would invent a target out of
+                  // their fitness band.
+                  onTap: _goal > range.min
+                      ? () => setState(() {
+                            final next = _goal - AppConstants.stepGoalIncrement;
+                            _goal = next < range.min ? range.min : next;
+                          })
                       : null,
                 ),
                 const SizedBox(width: 24),
@@ -212,9 +288,11 @@ class _SetGoalSheetState extends ConsumerState<SetGoalSheet> {
                 const SizedBox(width: 24),
                 _StepperBtn(
                   icon: Icons.add,
-                  onTap: _goal < AppConstants.maxStepGoal
-                      ? () => setState(
-                          () => _goal += AppConstants.stepGoalIncrement)
+                  onTap: _goal < range.max
+                      ? () => setState(() {
+                            final next = _goal + AppConstants.stepGoalIncrement;
+                            _goal = next > range.max ? range.max : next;
+                          })
                       : null,
                 ),
               ],

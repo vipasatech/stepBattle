@@ -1,4 +1,4 @@
-import 'package:flutter/material.dart';
+﻿import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -6,14 +6,19 @@ import '../../config/colors.dart';
 import '../../providers/auth_provider.dart';
 import '../../providers/friend_provider.dart';
 import '../../providers/step_provider.dart';
+import '../../providers/theme_mode_provider.dart';
 import '../../providers/user_provider.dart';
 import '../../services/step_source_aggregator.dart';
+import '../../models/avatar.dart';
+import '../../models/user_model.dart';
 import '../../sheets/add_friends_sheet.dart';
+import '../../sheets/avatar_picker_sheet.dart';
+import '../../sheets/edit_survey_sheet.dart';
 import '../../sheets/set_goal_sheet.dart';
 import '../../sheets/set_home_sheet.dart';
 import '../../sheets/streak_history_sheet.dart';
 import 'widgets/user_identity_section.dart';
-import 'widgets/this_week_stats.dart';
+import 'widgets/this_week_trend_chart.dart';
 import 'widgets/all_time_stats.dart';
 import 'widgets/account_details.dart';
 
@@ -35,7 +40,10 @@ class ProfileScreen extends ConsumerWidget {
             style: theme.textTheme.headlineSmall?.copyWith(
                 fontWeight: FontWeight.w700)),
         actions: [
-          // Streak badge
+          // Streak badge — flame + border both tinted the same deep
+          // orange the Home tab's StreakStrip uses (`0xFFD97706`), so
+          // the streak signal reads the same across pages regardless
+          // of theme.
           GestureDetector(
             onTap: () => _showStreakHistory(context),
             child: Container(
@@ -44,13 +52,13 @@ class ProfileScreen extends ConsumerWidget {
                 color: AppColors.surfaceContainerHigh,
                 borderRadius: BorderRadius.circular(20),
                 border: Border.all(
-                    color: AppColors.primary.withValues(alpha: 0.2)),
+                    color: const Color(0xFFD97706).withValues(alpha: 0.25)),
               ),
               child: Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  Icon(Icons.local_fire_department,
-                      color: AppColors.tertiary, size: 16),
+                  const Icon(Icons.local_fire_department,
+                      color: Color(0xFFD97706), size: 16),
                   const SizedBox(width: 4),
                   Text('${profile?.currentStreak ?? 0}',
                       style: theme.textTheme.titleSmall
@@ -100,15 +108,19 @@ class ProfileScreen extends ConsumerWidget {
               ),
             )
           : ListView(
-              padding: const EdgeInsets.fromLTRB(24, 8, 24, 120),
+              // Horizontal padding lives PER-ITEM (see `_pad`) instead
+              // of on the ListView so the trend chart can run
+              // edge-to-edge while every other section stays inside
+              // the 24 dp inset.
+              padding: const EdgeInsets.fromLTRB(0, 8, 0, 120),
               children: [
                 // Section 1: User identity
-                UserIdentitySection(user: profile),
+                _pad(UserIdentitySection(user: profile)),
 
                 const SizedBox(height: 28),
 
                 // Section 2: Set Goal button
-                SizedBox(
+                _pad(SizedBox(
                   width: double.infinity,
                   height: 52,
                   child: OutlinedButton(
@@ -129,32 +141,36 @@ class ProfileScreen extends ConsumerWidget {
                       ],
                     ),
                   ),
-                ),
+                )),
 
                 const SizedBox(height: 28),
 
                 // Your Code section (share with friends)
-                _YourCodeSection(userCode: profile.userCode),
+                _pad(_YourCodeSection(userCode: profile.userCode)),
 
                 const SizedBox(height: 20),
 
                 // Friends — live count + pending badge, opens Friends Hub
-                _FriendsTile(),
+                _pad(_FriendsTile()),
 
                 const SizedBox(height: 28),
 
-                // Section 3: This Week
-                const ThisWeekStats(),
+                // Section 3: This Week — step trendline chart.
+                // Rendered unpadded so the chart body runs to the
+                // screen edges; the widget's own header re-adds the
+                // 24 dp inset so its title aligns with the other
+                // section headers.
+                const ThisWeekTrendChart(),
 
                 const SizedBox(height: 28),
 
                 // Section 4: All Time
-                AllTimeStats(user: profile),
+                _pad(AllTimeStats(user: profile)),
 
                 const SizedBox(height: 28),
 
                 // Section 5: Account
-                AccountDetails(user: profile),
+                _pad(AccountDetails(user: profile)),
 
                 const SizedBox(height: 20),
 
@@ -163,10 +179,27 @@ class ProfileScreen extends ConsumerWidget {
 
                 const SizedBox(height: 8),
 
+                // Survey edit — DOB / gender / fitness level. Recomputes
+                // the daily-step-goal recommendation on save and offers
+                // to adopt it.
+                _EditSurveyTile(),
+
+                const SizedBox(height: 8),
+
+                // Battle-ground runner picker — opens [AvatarPickerSheet].
+                _BattleAvatarTile(),
+
+                const SizedBox(height: 8),
+
                 // Step Sources diagnostic — for users on OEMs where Health
                 // Connect isn't getting fed (Realme/Motorola) so they can
                 // see exactly which source is producing their step count.
                 _StepSourcesTile(),
+
+                const SizedBox(height: 8),
+
+                // Light/dark/system theme switcher.
+                _ThemeModeTile(),
 
                 const SizedBox(height: 28),
 
@@ -189,6 +222,14 @@ class ProfileScreen extends ConsumerWidget {
             ),
     );
   }
+
+  /// Wrap a Profile-body child in the standard 24 dp horizontal inset.
+  /// Kept as a helper so the ListView's own padding stays 0 and the
+  /// trend chart can opt out to run edge-to-edge.
+  Widget _pad(Widget child) => Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 24),
+        child: child,
+      );
 
   void _showSetGoal(BuildContext context, int currentGoal) {
     showModalBottomSheet(
@@ -231,6 +272,91 @@ class ProfileScreen extends ConsumerWidget {
       ),
     );
   }
+}
+
+// =============================================================================
+// Theme-mode tile — 3-segment toggle (System / Light / Dark). The choice
+// is persisted via [themeModePrefProvider]; MaterialApp picks up the new
+// value automatically and rebuilds with the matching ThemeData.
+// =============================================================================
+class _ThemeModeTile extends ConsumerWidget {
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final theme = Theme.of(context);
+    final mode = ref.watch(themeModePrefProvider);
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: AppColors.surfaceContainerLow,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: AppColors.onSurface.withValues(alpha: 0.05)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                width: 40,
+                height: 40,
+                decoration: BoxDecoration(
+                  color: AppColors.primary.withValues(alpha: 0.12),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: Icon(Icons.dark_mode_outlined,
+                    color: AppColors.primary),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text('Appearance',
+                        style: theme.textTheme.titleSmall
+                            ?.copyWith(fontWeight: FontWeight.w700)),
+                    Text(_subtitleFor(mode),
+                        style: theme.textTheme.labelSmall?.copyWith(
+                          color: AppColors.onSurfaceVariant,
+                        )),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          SegmentedButton<ThemeMode>(
+            segments: const [
+              ButtonSegment(
+                value: ThemeMode.system,
+                label: Text('System'),
+                icon: Icon(Icons.brightness_auto, size: 16),
+              ),
+              ButtonSegment(
+                value: ThemeMode.light,
+                label: Text('Light'),
+                icon: Icon(Icons.light_mode, size: 16),
+              ),
+              ButtonSegment(
+                value: ThemeMode.dark,
+                label: Text('Dark'),
+                icon: Icon(Icons.dark_mode, size: 16),
+              ),
+            ],
+            selected: {mode},
+            showSelectedIcon: false,
+            onSelectionChanged: (set) =>
+                ref.read(themeModePrefProvider.notifier).set(set.first),
+          ),
+        ],
+      ),
+    );
+  }
+
+  static String _subtitleFor(ThemeMode m) => switch (m) {
+        ThemeMode.system => 'Match phone setting',
+        ThemeMode.light => 'Always light',
+        ThemeMode.dark => 'Always dark',
+      };
 }
 
 // =============================================================================
@@ -301,7 +427,7 @@ class _ProfileLinkTile extends StatelessWidget {
             color: AppColors.surfaceContainerLow,
             borderRadius: BorderRadius.circular(16),
             border:
-                Border.all(color: Colors.white.withValues(alpha: 0.05)),
+                Border.all(color: AppColors.onSurface.withValues(alpha: 0.05)),
           ),
           child: Row(
             children: [
@@ -328,7 +454,166 @@ class _ProfileLinkTile extends StatelessWidget {
                   ],
                 ),
               ),
-              const Icon(Icons.chevron_right,
+              Icon(Icons.chevron_right,
+                  color: AppColors.onSurfaceVariant),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+// =============================================================================
+// Battle avatar tile — shows the user's chosen battle-ground runner.
+// Tap opens [AvatarPickerSheet] for browsing/changing the catalog.
+// =============================================================================
+// =============================================================================
+// Survey-edit tile — opens [EditSurveySheet] to update DOB / gender /
+// fitness level. Shows the current values inline.
+// =============================================================================
+class _EditSurveyTile extends ConsumerWidget {
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final theme = Theme.of(context);
+    final me = ref.watch(currentUserProvider).valueOrNull;
+    final age = me?.age;
+    final genderLabel = _genderLabel(me?.gender);
+    final fitnessLabel = _fitnessLabel(me?.fitnessLevel);
+
+    // Summary line: "27 · Man · Advanced". Falls back gracefully when
+    // any of the three is missing (pre-survey or partial data).
+    final parts = <String>[
+      if (age != null) '$age',
+      if (genderLabel != null) genderLabel,
+      if (fitnessLabel != null) fitnessLabel,
+    ];
+    final summary =
+        parts.isEmpty ? 'Tap to add' : parts.join('  ·  ');
+
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: () => showEditSurveySheet(context),
+        borderRadius: BorderRadius.circular(16),
+        child: Container(
+          padding: const EdgeInsets.all(14),
+          decoration: BoxDecoration(
+            color: AppColors.surfaceContainerLow,
+            borderRadius: BorderRadius.circular(16),
+            border:
+                Border.all(color: AppColors.onSurface.withValues(alpha: 0.05)),
+          ),
+          child: Row(
+            children: [
+              Container(
+                width: 40,
+                height: 40,
+                decoration: BoxDecoration(
+                  color: AppColors.primary.withValues(alpha: 0.12),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: Icon(Icons.fact_check_outlined,
+                    color: AppColors.primary),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text('Personal info',
+                        style: theme.textTheme.titleSmall
+                            ?.copyWith(fontWeight: FontWeight.w700)),
+                    const SizedBox(height: 2),
+                    Text(
+                      summary,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: theme.textTheme.labelSmall?.copyWith(
+                        color: AppColors.onSurfaceVariant,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              Icon(Icons.chevron_right,
+                  color: AppColors.onSurfaceVariant),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  static String? _genderLabel(Gender? g) => switch (g) {
+        Gender.man => 'Man',
+        Gender.woman => 'Woman',
+        Gender.nonBinary => 'Non-binary',
+        Gender.preferNotToSay => 'Private',
+        null => null,
+      };
+
+  static String? _fitnessLabel(FitnessLevel? f) => switch (f) {
+        FitnessLevel.beginner => 'Beginner',
+        FitnessLevel.intermediate => 'Intermediate',
+        FitnessLevel.advanced => 'Advanced',
+        FitnessLevel.pro => 'Pro',
+        null => null,
+      };
+}
+
+class _BattleAvatarTile extends ConsumerWidget {
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final theme = Theme.of(context);
+    final me = ref.watch(currentUserProvider).valueOrNull;
+    final avatar = Avatar.byId(me?.battleAvatarId);
+
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: () => showAvatarPickerSheet(context),
+        borderRadius: BorderRadius.circular(16),
+        child: Container(
+          padding: const EdgeInsets.all(14),
+          decoration: BoxDecoration(
+            color: AppColors.surfaceContainerLow,
+            borderRadius: BorderRadius.circular(16),
+            border:
+                Border.all(color: AppColors.onSurface.withValues(alpha: 0.05)),
+          ),
+          child: Row(
+            children: [
+              // Live preview of the currently-selected runner.
+              Container(
+                width: 44,
+                height: 44,
+                decoration: BoxDecoration(
+                  color: AppColors.primary.withValues(alpha: 0.12),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                padding: const EdgeInsets.all(2),
+                child: Image.asset(
+                  avatar.assetPath,
+                  fit: BoxFit.contain,
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text('Battle avatar',
+                        style: theme.textTheme.titleSmall
+                            ?.copyWith(fontWeight: FontWeight.w700)),
+                    Text('Tap to change · ${avatar.label}',
+                        style: theme.textTheme.labelSmall?.copyWith(
+                          color: AppColors.onSurfaceVariant,
+                        )),
+                  ],
+                ),
+              ),
+              Icon(Icons.chevron_right,
                   color: AppColors.onSurfaceVariant),
             ],
           ),
@@ -362,7 +647,7 @@ class _HomeDistrictTile extends ConsumerWidget {
             borderRadius: BorderRadius.circular(16),
             border: Border.all(
               color: hasHome
-                  ? Colors.white.withValues(alpha: 0.05)
+                  ? AppColors.onSurface.withValues(alpha: 0.05)
                   : AppColors.amber.withValues(alpha: 0.4),
               width: hasHome ? 1 : 1.5,
             ),
@@ -407,7 +692,7 @@ class _HomeDistrictTile extends ConsumerWidget {
                   ],
                 ),
               ),
-              const Icon(Icons.chevron_right,
+              Icon(Icons.chevron_right,
                   color: AppColors.onSurfaceVariant),
             ],
           ),
@@ -491,7 +776,7 @@ class _YourCodeSection extends StatelessWidget {
                 ),
               ),
               IconButton(
-                icon: const Icon(Icons.copy, color: AppColors.primary),
+                icon: Icon(Icons.copy, color: AppColors.primary),
                 tooltip: 'Copy',
                 onPressed: () {
                   Clipboard.setData(ClipboardData(text: userCode));
@@ -543,7 +828,7 @@ class _FriendsTile extends ConsumerWidget {
             border: Border.all(
               color: pendingCount > 0
                   ? AppColors.primary.withValues(alpha: 0.4)
-                  : Colors.white.withValues(alpha: 0.05),
+                  : AppColors.onSurface.withValues(alpha: 0.05),
               width: pendingCount > 0 ? 1.5 : 1,
             ),
           ),
@@ -556,7 +841,7 @@ class _FriendsTile extends ConsumerWidget {
                   color: AppColors.primary.withValues(alpha: 0.12),
                   borderRadius: BorderRadius.circular(10),
                 ),
-                child: const Icon(Icons.group, color: AppColors.primary),
+                child: Icon(Icons.group, color: AppColors.primary),
               ),
               const SizedBox(width: 12),
               Expanded(
@@ -599,7 +884,7 @@ class _FriendsTile extends ConsumerWidget {
                 ),
                 const SizedBox(width: 8),
               ],
-              const Icon(Icons.chevron_right,
+              Icon(Icons.chevron_right,
                   color: AppColors.onSurfaceVariant),
             ],
           ),

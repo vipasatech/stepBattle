@@ -24,70 +24,72 @@ class OverviewCard extends ConsumerWidget {
     final totalXP = profile?.totalXP ?? 0;
 
     return GlassCard(
-      padding: const EdgeInsets.all(24),
+      padding: const EdgeInsets.all(18),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           // Level badge
           Container(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
             decoration: BoxDecoration(
               color: AppColors.primaryBrand.withValues(alpha: 0.2),
-              borderRadius: BorderRadius.circular(20),
+              borderRadius: BorderRadius.circular(16),
               border: Border.all(
                 color: AppColors.primaryBrand.withValues(alpha: 0.3),
               ),
             ),
             child: Text(
               'Level $level',
-              style: theme.textTheme.labelMedium?.copyWith(
+              style: theme.textTheme.labelSmall?.copyWith(
                 color: AppColors.primary,
                 fontWeight: FontWeight.w700,
               ),
             ),
           ),
 
-          const SizedBox(height: 20),
+          const SizedBox(height: 14),
 
-          // Step count — massive display per design system. Shimmer
-          // skeleton while neither pedometer nor Supabase has produced a
-          // value yet (avoids the misleading "0" cold-start flash).
+          // Step count — large display, shrunk from 56 → 44 so the
+          // card overall feels more compact and gives more breathing
+          // room to surrounding sections.
           Center(
             child: todayStepsAsync.when(
               data: (steps) => Text(
                 _formatNumber(steps),
                 style: theme.textTheme.displayLarge?.copyWith(
-                  fontSize: 56,
+                  fontSize: 44,
                   color: AppColors.onSurface,
                   height: 1.0,
                 ),
               ),
               loading: () => const ShimmerLoader(
-                width: 200,
-                height: 56,
-                borderRadius: 12,
+                width: 160,
+                height: 44,
+                borderRadius: 10,
               ),
               error: (_, __) => Text(
                 '—',
                 style: theme.textTheme.displayLarge?.copyWith(
-                  fontSize: 56,
+                  fontSize: 44,
                   color: AppColors.onSurfaceVariant,
                   height: 1.0,
                 ),
               ),
             ),
           ),
+          const SizedBox(height: 2),
           Center(
             child: Text(
               'STEPS TODAY',
               style: theme.textTheme.labelSmall?.copyWith(
                 color: AppColors.onSurfaceVariant,
-                letterSpacing: 3,
+                letterSpacing: 2.5,
+                fontSize: 10,
               ),
             ),
           ),
 
-          const SizedBox(height: 16),
+          const SizedBox(height: 10),
 
           // XP delta line
           Center(
@@ -96,7 +98,7 @@ class OverviewCard extends ConsumerWidget {
               children: [
                 Icon(
                   Icons.trending_up,
-                  size: 16,
+                  size: 14,
                   color: AppColors.success,
                 ),
                 const SizedBox(width: 4),
@@ -104,14 +106,15 @@ class OverviewCard extends ConsumerWidget {
                   '+${_formatNumber(totalXP)} XP total',
                   style: theme.textTheme.bodySmall?.copyWith(
                     color: AppColors.success,
-                    fontWeight: FontWeight.w600,
+                    fontWeight: FontWeight.w700,
+                    fontSize: 12,
                   ),
                 ),
               ],
             ),
           ),
 
-          const SizedBox(height: 24),
+          const SizedBox(height: 18),
 
           // Level progress labels
           Row(
@@ -121,22 +124,24 @@ class OverviewCard extends ConsumerWidget {
                 'LVL $level',
                 style: theme.textTheme.labelSmall?.copyWith(
                   color: AppColors.onSurfaceVariant,
+                  fontSize: 10,
                 ),
               ),
               Text(
                 'LVL ${level + 1}',
                 style: theme.textTheme.labelSmall?.copyWith(
                   color: AppColors.onSurfaceVariant,
+                  fontSize: 10,
                 ),
               ),
             ],
           ),
-          const SizedBox(height: 6),
+          const SizedBox(height: 5),
 
           // Progress bar with spark
-          StepProgressBar(progress: progress, height: 10),
+          StepProgressBar(progress: progress, height: 8),
 
-          const SizedBox(height: 8),
+          const SizedBox(height: 6),
 
           // Steps to go
           Center(
@@ -144,6 +149,7 @@ class OverviewCard extends ConsumerWidget {
               '$xpToNext XP to go',
               style: theme.textTheme.bodySmall?.copyWith(
                 color: AppColors.onSurfaceVariant,
+                fontSize: 11,
               ),
             ),
           ),

@@ -1,4 +1,4 @@
-import 'package:flutter/material.dart';
+﻿import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../config/colors.dart';
@@ -178,9 +178,9 @@ class _AddFriendsSheetState extends ConsumerState<AddFriendsSheet> {
       maxChildSize: 0.95,
       expand: false,
       builder: (context, scrollController) => Container(
-        decoration: const BoxDecoration(
-          color: Color(0xFF1A1A1C),
-          borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
+        decoration: BoxDecoration(
+          color: AppColors.surfaceContainer,
+          borderRadius: const BorderRadius.vertical(top: Radius.circular(28)),
         ),
         child: Column(
           children: [
@@ -282,8 +282,8 @@ class _AddFriendsSheetState extends ConsumerState<AddFriendsSheet> {
                     begin: Alignment.topCenter,
                     end: Alignment.bottomCenter,
                     colors: [
-                      const Color(0xFF1A1A1C).withValues(alpha: 0),
-                      const Color(0xFF1A1A1C),
+                      AppColors.surfaceContainer.withValues(alpha: 0),
+                      AppColors.surfaceContainer,
                     ],
                   ),
                 ),
@@ -448,7 +448,7 @@ class _FriendKebab extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return PopupMenuButton<String>(
-      icon: const Icon(Icons.more_vert, color: AppColors.onSurfaceVariant),
+      icon: Icon(Icons.more_vert, color: AppColors.onSurfaceVariant),
       color: AppColors.surfaceContainerHigh,
       onSelected: (v) {
         if (v == 'remove') onRemove();
@@ -515,7 +515,7 @@ class _SearchTab extends StatelessWidget {
             onSubmitted: (_) => onSearch(),
             decoration: InputDecoration(
               hintText: 'Enter @username or #CODE',
-              prefixIcon: const Icon(Icons.search, color: AppColors.outline),
+              prefixIcon: Icon(Icons.search, color: AppColors.outline),
               suffixIcon: IconButton(
                 icon: const Icon(Icons.arrow_forward, size: 20),
                 onPressed: onSearch,
@@ -526,7 +526,7 @@ class _SearchTab extends StatelessWidget {
         const SizedBox(height: 12),
         Expanded(
           child: searching
-              ? const Center(
+              ? Center(
                   child: CircularProgressIndicator(color: AppColors.primary))
               : results.isEmpty
                   ? Center(
@@ -577,7 +577,7 @@ class _SearchTab extends StatelessWidget {
 // =============================================================================
 // Dual-action search-row trailing (picker mode only)
 //
-// Renders a primary "+ Select" / "✓ Selected" chip and a small icon-sized
+// Renders a primary "+ Select" / "âœ“ Selected" chip and a small icon-sized
 // friend-request button to its left. Both actions are independent — selecting
 // for a battle doesn't auto-send a friend request, and vice versa.
 // =============================================================================
@@ -645,7 +645,7 @@ class _PickerSearchTrailingState
             onTap: null,
           )
         else if (_sendingFriend)
-          const SizedBox(
+          SizedBox(
             width: 36,
             height: 36,
             child: Center(
@@ -778,7 +778,7 @@ class _RequestsTab extends ConsumerWidget {
     final outgoing = ref.watch(outgoingRequestProfilesProvider);
 
     if (incoming.isLoading || (showOutgoing && outgoing.isLoading)) {
-      return const Center(
+      return Center(
           child: CircularProgressIndicator(color: AppColors.primary));
     }
     if (incoming.hasError || (showOutgoing && outgoing.hasError)) {
@@ -932,11 +932,11 @@ class _OutgoingRequestRowState extends ConsumerState<_OutgoingRequestRow> {
             ),
           ),
           if (_processing)
-            const SizedBox(
+            SizedBox(
               width: 18,
               height: 18,
               child: CircularProgressIndicator(
-                  strokeWidth: 2, color: AppColors.primary),
+                  strokeWidth: 2, color: AppColors.primary,),
             )
           else
             OutlinedButton(
@@ -1018,7 +1018,7 @@ class _IncomingRequestRowState extends ConsumerState<_IncomingRequestRow> {
             ),
           ),
           if (_processing)
-            const SizedBox(
+            SizedBox(
               width: 18,
               height: 18,
               child:
@@ -1191,7 +1191,7 @@ class _RequestButtonState extends ConsumerState<_RequestButton> {
     final incoming = ref.watch(incomingRequestsProvider).valueOrNull ?? const [];
 
     if (_processing) {
-      return const SizedBox(
+      return SizedBox(
         width: 36,
         height: 36,
         child: Center(

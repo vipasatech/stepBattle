@@ -76,7 +76,7 @@ class DualFillBar extends StatelessWidget {
                       color: Colors.white,
                       boxShadow: [
                         BoxShadow(
-                          color: Colors.white.withValues(alpha: 0.8),
+                          color: AppColors.onSurface.withValues(alpha: 0.8),
                           blurRadius: 4,
                         ),
                       ],

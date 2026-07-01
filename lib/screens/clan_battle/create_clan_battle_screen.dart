@@ -1,4 +1,4 @@
-import 'package:flutter/material.dart';
+﻿import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../config/colors.dart';
 import '../../models/clan_model.dart';
@@ -102,7 +102,7 @@ class _CreateClanBattleScreenState
                               color:
                                   AppColors.primary.withValues(alpha: 0.4)),
                         ),
-                        child: const Icon(Icons.groups,
+                        child: Icon(Icons.groups,
                             color: AppColors.primary, size: 36),
                       ),
                       const SizedBox(height: 8),
@@ -143,7 +143,7 @@ class _CreateClanBattleScreenState
                           child: _selectedOpponent != null
                               ? Icon(Icons.shield,
                                   color: AppColors.primary, size: 36)
-                              : const Icon(Icons.person_search,
+                              : Icon(Icons.person_search,
                                   color: AppColors.onSurfaceVariant,
                                   size: 28),
                         ),
@@ -170,7 +170,7 @@ class _CreateClanBattleScreenState
             decoration: InputDecoration(
               hintText: 'Find a rival clan...',
               prefixIcon:
-                  const Icon(Icons.search, color: AppColors.outline),
+                  Icon(Icons.search, color: AppColors.outline),
             ),
           ),
           const SizedBox(height: 12),

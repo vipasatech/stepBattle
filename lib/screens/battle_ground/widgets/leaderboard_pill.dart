@@ -37,7 +37,7 @@ class _LeaderboardPillState extends State<LeaderboardPill> {
         color: Colors.black.withValues(alpha: 0.55),
         borderRadius: BorderRadius.circular(20),
         border: Border.all(
-          color: Colors.white.withValues(alpha: 0.08),
+          color: AppColors.onSurface.withValues(alpha: 0.08),
         ),
       ),
       child: InkWell(
@@ -54,9 +54,9 @@ class _LeaderboardPillState extends State<LeaderboardPill> {
                       size: 16, color: AppColors.primary),
                   const SizedBox(width: 6),
                   Text(
-                    'LEADERBOARD',
+                    'BATTLE BOARD',
                     style: theme.textTheme.labelSmall?.copyWith(
-                      color: Colors.white.withValues(alpha: 0.85),
+                      color: AppColors.onSurface.withValues(alpha: 0.85),
                       letterSpacing: 1.6,
                       fontWeight: FontWeight.w800,
                     ),
@@ -67,7 +67,7 @@ class _LeaderboardPillState extends State<LeaderboardPill> {
                         ? Icons.keyboard_arrow_down
                         : Icons.keyboard_arrow_up,
                     size: 18,
-                    color: Colors.white.withValues(alpha: 0.7),
+                    color: AppColors.onSurface.withValues(alpha: 0.7),
                   ),
                 ],
               ),
@@ -108,7 +108,7 @@ class _Collapsed extends StatelessWidget {
               width: 1,
               height: 22,
               margin: const EdgeInsets.symmetric(horizontal: 8),
-              color: Colors.white.withValues(alpha: 0.08),
+              color: AppColors.onSurface.withValues(alpha: 0.08),
             ),
         ],
         if (sorted.length > 4) ...[
@@ -314,7 +314,7 @@ class _FullRow extends StatelessWidget {
                 '-${_fmt(gap)}',
                 style: TextStyle(
                   fontFamily: 'Manrope',
-                  color: Colors.white.withValues(alpha: 0.5),
+                  color: AppColors.onSurface.withValues(alpha: 0.5),
                   fontSize: 10,
                 ),
               ),

@@ -187,14 +187,25 @@ class SupabaseAuthService {
   /// Fill in the onboarding-collected fields on the profile row (which the
   /// auth trigger already created). We never INSERT — the trigger handles
   /// that — we only UPDATE.
+  ///
+  /// As of migration 0016 the survey is **mandatory**: every new user
+  /// must provide DOB + gender + fitness_level so the personalized step
+  /// goal formula has the inputs it needs.
   Future<void> completeOnboarding({
     required String userId,
     required String displayName,
     required int dailyStepGoal,
+    required DateTime dateOfBirth,
+    required String gender,
+    required String fitnessLevel,
     String? avatarUrl,
   }) async {
-    AppLogger.auth.i('completeOnboarding:start',
-        fields: {'uid': userId, 'displayName': displayName});
+    AppLogger.auth.i('completeOnboarding:start', fields: {
+      'uid': userId,
+      'displayName': displayName,
+      'gender': gender,
+      'fitnessLevel': fitnessLevel,
+    });
     try {
       // Generate a unique user code (retry up to 5 times on collision).
       final userCode = await _generateUniqueUserCode();
@@ -202,12 +213,66 @@ class SupabaseAuthService {
         'display_name': displayName,
         'daily_step_goal': dailyStepGoal,
         'user_code': userCode,
+        'date_of_birth': dateOfBirth.toIso8601String().split('T').first,
+        'gender': gender,
+        'fitness_level': fitnessLevel,
         if (avatarUrl != null) 'avatar_url': avatarUrl,
       }).eq('id', userId);
       AppLogger.auth.i('completeOnboarding:done',
           fields: {'uid': userId, 'userCode': userCode});
     } catch (e, s) {
       AppLogger.auth.e('completeOnboarding:failed',
+          fields: {'uid': userId}, error: e, stack: s);
+      rethrow;
+    }
+  }
+
+  /// Update only the user's selected battle-ground avatar (migration
+  /// 0019). The id is one of the catalog strings ('avatar_01' …
+  /// 'avatar_12'); we don't validate the value here because the catalog
+  /// is closed and the picker UI only ever passes a known id.
+  Future<void> updateBattleAvatar({
+    required String userId,
+    required String avatarId,
+  }) async {
+    try {
+      await _supabase
+          .from('profiles')
+          .update({'battle_avatar_id': avatarId}).eq('id', userId);
+      AppLogger.auth
+          .i('updateBattleAvatar', fields: {'uid': userId, 'id': avatarId});
+    } catch (e, s) {
+      AppLogger.auth.e('updateBattleAvatar:failed',
+          fields: {'uid': userId, 'id': avatarId}, error: e, stack: s);
+      rethrow;
+    }
+  }
+
+  /// Update only the survey-derived profile fields (DOB / gender /
+  /// fitness level). Used by the "Complete your profile" sheet for
+  /// pre-survey users who already have a display_name and goal set —
+  /// we don't want to overwrite their existing user_code or goal here.
+  Future<void> updateSurveyFields({
+    required String userId,
+    required DateTime dateOfBirth,
+    required String gender,
+    required String fitnessLevel,
+  }) async {
+    AppLogger.auth.i('updateSurveyFields:start', fields: {
+      'uid': userId,
+      'gender': gender,
+      'fitnessLevel': fitnessLevel,
+    });
+    try {
+      await _supabase.from('profiles').update({
+        'date_of_birth': dateOfBirth.toIso8601String().split('T').first,
+        'gender': gender,
+        'fitness_level': fitnessLevel,
+      }).eq('id', userId);
+      AppLogger.auth
+          .i('updateSurveyFields:done', fields: {'uid': userId});
+    } catch (e, s) {
+      AppLogger.auth.e('updateSurveyFields:failed',
           fields: {'uid': userId}, error: e, stack: s);
       rethrow;
     }

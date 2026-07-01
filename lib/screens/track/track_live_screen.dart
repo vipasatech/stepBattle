@@ -1,4 +1,4 @@
-import 'dart:math' as math;
+﻿import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
@@ -29,7 +29,6 @@ class _TrackLiveScreenState extends ConsumerState<TrackLiveScreen> {
   static const int _durationTargetSec = 60 * 60; // 1h
   static const int _caloriesTarget = 500;
 
-  bool _ending = false;
   final MapController _map = MapController();
 
   /// Open a small dialog to set/clear the in-flight session name. Blank
@@ -67,56 +66,12 @@ class _TrackLiveScreenState extends ConsumerState<TrackLiveScreen> {
     ref.read(runTrackingServiceProvider).setName(result);
   }
 
-  /// Confirm before actually ending. End is destructive (you can't resume a
-  /// closed session) so we want an explicit yes from the user.
-  Future<void> _confirmEnd() async {
-    if (_ending) return;
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('End run?'),
-        content: const Text(
-          'This will stop tracking and save your session to history.',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(ctx).pop(false),
-            child: const Text('Keep going'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.of(ctx).pop(true),
-            style: FilledButton.styleFrom(backgroundColor: AppColors.error),
-            child: const Text('End run'),
-          ),
-        ],
-      ),
-    );
-    if (ok == true) {
-      await _end();
-    }
-  }
-
-  Future<void> _end() async {
-    if (_ending) return;
-    setState(() => _ending = true);
-    try {
-      final saved =
-          await ref.read(runTrackingServiceProvider).end();
-      if (!mounted) return;
-      // Refresh history list so the just-saved session shows up.
-      ref.invalidate(runSessionHistoryProvider);
-      if (saved != null) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text(
-            'Saved · ${(saved.distanceMeters / 1000).toStringAsFixed(2)} km · '
-            '${saved.steps} steps',
-          ),
-        ));
-      }
-      context.go('/track');
-    } finally {
-      if (mounted) setState(() => _ending = false);
-    }
+  /// "End run" now opens the Save Activity page instead of an inline
+  /// confirm dialog. The save page lets the runner caption the session
+  /// and attach up to 5 photos before the row hits the server — and
+  /// "Resume" there pops them back here with the session still alive.
+  void _confirmEnd() {
+    context.push('/track/save');
   }
 
   @override
@@ -139,10 +94,14 @@ class _TrackLiveScreenState extends ConsumerState<TrackLiveScreen> {
     final kcal = session?.calories ?? 0;
     final pace = session?.avgPaceSecPerKm;
     // Pill colour + label come from the live trust state, not just source.
+    // `state` is `_TrackState.name`, e.g. 'gpsSteady' (camelCase) — the
+    // previous switch used snake_case keys and silently fell through to
+    // INDOOR for every actual outdoor state, which is why "INDOOR" was
+    // showing while the map clearly had a GPS track.
     final state = session?.trackState ?? 'indoor';
     final (pillLabel, pillColor) = switch (state) {
-      'gps_steady' => ('GPS · STEADY', AppColors.success),
-      'gps_stationary' => ('GPS · STATIONARY', AppColors.amber),
+      'gpsSteady' => ('GPS · STEADY', AppColors.success),
+      'gpsStationary' => ('GPS · STATIONARY', AppColors.amber),
       'estimated' => ('ESTIMATED', AppColors.amber),
       _ => ('INDOOR', AppColors.onSurfaceVariant),
     };
@@ -210,7 +169,7 @@ class _TrackLiveScreenState extends ConsumerState<TrackLiveScreen> {
                       ),
                     ),
                     const SizedBox(width: 6),
-                    const Icon(Icons.edit,
+                    Icon(Icons.edit,
                         size: 14, color: AppColors.onSurfaceVariant),
                   ],
                 ),
@@ -289,9 +248,9 @@ class _TrackLiveScreenState extends ConsumerState<TrackLiveScreen> {
               child: SizedBox(
                 width: double.infinity,
                 child: FilledButton.icon(
-                  onPressed: _ending ? null : _confirmEnd,
+                  onPressed: _confirmEnd,
                   icon: const Icon(Icons.stop_circle),
-                  label: Text(_ending ? 'Saving…' : 'End run'),
+                  label: const Text('End run'),
                   style: FilledButton.styleFrom(
                     backgroundColor: AppColors.error,
                     foregroundColor: Colors.white,

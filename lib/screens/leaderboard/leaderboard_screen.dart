@@ -1,14 +1,15 @@
-import 'package:flutter/material.dart';
+﻿import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../config/colors.dart';
 import '../../models/leaderboard_entry_model.dart';
 import '../../providers/leaderboard_provider.dart';
 import '../../providers/user_provider.dart';
+import '../../sheets/location_permission_sheet.dart';
 import '../../sheets/public_profile_sheet.dart';
 import '../../sheets/set_home_sheet.dart';
 import '../../widgets/empty_state.dart';
 import '../../widgets/needs_location_card.dart';
-import 'widgets/podium_section.dart';
+import 'widgets/leaderboard_hero.dart';
 import 'widgets/rank_row.dart';
 import 'widgets/floating_rank_card.dart';
 
@@ -24,7 +25,7 @@ import 'widgets/floating_rank_card.dart';
 /// because that's the most personally relevant board for most users. The
 /// tabs bar iterates `_Tab.values` so reordering the enum drives the visual
 /// order; all switches stay correct because they're keyed by case, not index.
-enum _Tab { friends, district, state, country }
+enum _Tab { friends, district, state, country, worldwide }
 
 extension on _Tab {
   String get label => switch (this) {
@@ -32,6 +33,7 @@ extension on _Tab {
         _Tab.district => 'District',
         _Tab.state => 'State',
         _Tab.country => 'Country',
+        _Tab.worldwide => 'World',
       };
 
   IconData get icon => switch (this) {
@@ -39,6 +41,7 @@ extension on _Tab {
         _Tab.district => Icons.location_city,
         _Tab.state => Icons.map,
         _Tab.country => Icons.public,
+        _Tab.worldwide => Icons.public_off,
       };
 }
 
@@ -52,6 +55,29 @@ class LeaderboardScreen extends ConsumerStatefulWidget {
 class _LeaderboardScreenState extends ConsumerState<LeaderboardScreen> {
   // Default to Friends — leftmost tab, most personally relevant board.
   _Tab _tab = _Tab.friends;
+
+  /// Tracks whether we've already attempted the one-time location
+  /// re-prompt for this session. Guard so the sheet doesn't keep
+  /// appearing every time the user navigates back to Ranks.
+  bool _locationPromptShown = false;
+
+  @override
+  void initState() {
+    super.initState();
+    // Re-prompt for location once per session on the first Ranks open.
+    // Reason: geo-scoped leaderboards (district/state/country) only
+    // populate when the user has a home set, which itself needs
+    // location. Better to ask here than have empty tabs.
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      if (!mounted || _locationPromptShown) return;
+      _locationPromptShown = true;
+      await ensureLocationPermission(
+        context,
+        reason:
+            'StepBattle uses your location to place you on local leaderboards (district, state, country) and to show you how you rank among nearby players.',
+      );
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -80,29 +106,48 @@ class _LeaderboardScreenState extends ConsumerState<LeaderboardScreen> {
                 onTap: (t) => setState(() => _tab = t),
               ),
               const SizedBox(height: 8),
-              _ScopeBanner(tab: _tab, user: user),
+              // The scope banner used to render here, but was moved
+              // INTO `LeaderboardHero` so the rays background can
+              // span both the banner AND the top-user profile (per
+              // the reference the user shared). It's built here and
+              // handed down as a widget so `_Tab` can stay private.
               Expanded(
                 child: switch (_tab) {
-                  _Tab.friends => const _BoardView(provider: 'friends'),
+                  _Tab.friends => _BoardView(
+                      provider: 'friends',
+                      scopeBanner: _ScopeBanner(tab: _tab, user: user),
+                    ),
                   _Tab.district => _GeoTabContent(
                       scope: 'district',
                       hasHome: hasHome,
+                      scopeBanner: _ScopeBanner(tab: _tab, user: user),
                     ),
                   _Tab.state => _GeoTabContent(
                       scope: 'state',
                       hasHome: hasHome,
+                      scopeBanner: _ScopeBanner(tab: _tab, user: user),
                     ),
                   _Tab.country => _GeoTabContent(
                       scope: 'country',
                       hasHome: hasHome,
+                      scopeBanner: _ScopeBanner(tab: _tab, user: user),
+                    ),
+                  // Worldwide doesn't depend on the user having set a
+                  // home district — it's the global leaderboard.
+                  _Tab.worldwide => _BoardView(
+                      provider: 'worldwide',
+                      scopeBanner: _ScopeBanner(tab: _tab, user: user),
                     ),
                 },
               ),
             ],
           ),
 
-          // Floating rank card
-          if (myRank != null)
+          // Sticky "You" card — only rendered when the user is
+          // outside the top 5 (per the redesign spec). If they're
+          // already visible in the main list, the card would just
+          // duplicate the row and eat scroll real estate.
+          if (myRank != null && myRank.rank > 5)
             Positioned(
               left: 16,
               right: 16,
@@ -116,7 +161,10 @@ class _LeaderboardScreenState extends ConsumerState<LeaderboardScreen> {
 }
 
 // =============================================================================
-// Tabs bar
+// Tabs bar — chip-style, horizontally scrollable. Each tab is its own
+// pill with a border; the active tab uses the brand-violet outline +
+// text, inactive tabs use a subtle outline + muted text. Matches the
+// Strava reference the user shared.
 // =============================================================================
 class _TabsBar extends StatelessWidget {
   final _Tab active;
@@ -125,34 +173,33 @@ class _TabsBar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      margin: const EdgeInsets.fromLTRB(16, 4, 16, 0),
-      padding: const EdgeInsets.all(3),
-      decoration: BoxDecoration(
-        color: AppColors.surfaceContainerHigh,
-        borderRadius: BorderRadius.circular(20),
-      ),
-      child: Row(
-        children: [
-          for (final t in _Tab.values)
-            Expanded(
-              child: _TabButton(
-                tab: t,
-                isActive: t == active,
-                onTap: () => onTap(t),
-              ),
+    return SizedBox(
+      height: 42,
+      child: ListView.separated(
+        scrollDirection: Axis.horizontal,
+        padding: const EdgeInsets.symmetric(horizontal: 16),
+        itemCount: _Tab.values.length,
+        separatorBuilder: (_, __) => const SizedBox(width: 8),
+        itemBuilder: (_, i) {
+          final t = _Tab.values[i];
+          return Center(
+            child: _TabChip(
+              tab: t,
+              isActive: t == active,
+              onTap: () => onTap(t),
             ),
-        ],
+          );
+        },
       ),
     );
   }
 }
 
-class _TabButton extends StatelessWidget {
+class _TabChip extends StatelessWidget {
   final _Tab tab;
   final bool isActive;
   final VoidCallback onTap;
-  const _TabButton({
+  const _TabChip({
     required this.tab,
     required this.isActive,
     required this.onTap,
@@ -160,38 +207,32 @@ class _TabButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
     return GestureDetector(
       onTap: onTap,
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 180),
-        padding: const EdgeInsets.symmetric(vertical: 10),
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
         decoration: BoxDecoration(
-          color: isActive ? AppColors.primary : Colors.transparent,
-          borderRadius: BorderRadius.circular(18),
+          borderRadius: BorderRadius.circular(22),
+          border: Border.all(
+            color: isActive
+                ? AppColors.primary
+                : AppColors.outlineVariant.withValues(alpha: 0.55),
+            width: isActive ? 1.5 : 1,
+          ),
         ),
-        child: Row(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(
-              tab.icon,
-              size: 14,
-              color: isActive
-                  ? AppColors.onPrimary
-                  : AppColors.onSurfaceVariant,
-            ),
-            const SizedBox(width: 6),
-            Text(
-              tab.label,
-              style: theme.textTheme.labelSmall?.copyWith(
-                color: isActive
-                    ? AppColors.onPrimary
-                    : AppColors.onSurfaceVariant,
-                fontWeight: FontWeight.w800,
-                fontSize: 11,
-              ),
-            ),
-          ],
+        child: Text(
+          tab.label,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: TextStyle(
+            fontFamily: 'Manrope',
+            fontSize: 13,
+            fontWeight: FontWeight.w800,
+            color: isActive
+                ? AppColors.primary
+                : AppColors.onSurfaceVariant,
+          ),
         ),
       ),
     );
@@ -246,6 +287,7 @@ class _ScopeBanner extends StatelessWidget {
       _Tab.state => (user.stateName as String?)?.toUpperCase(),
       _Tab.country => (user.countryName as String?)?.toUpperCase() ??
           (user.countryCode as String?)?.toUpperCase(),
+      _Tab.worldwide => 'GLOBAL',
     };
   }
 }
@@ -312,7 +354,16 @@ class _GeoTabContent extends StatefulWidget {
   final String scope;
   final bool hasHome;
 
-  const _GeoTabContent({required this.scope, required this.hasHome});
+  /// Scope banner (built by the leaderboard screen because it needs the
+  /// private `_Tab`) — passed through to `_BoardView` so it renders
+  /// inside the hero's rays area.
+  final Widget scopeBanner;
+
+  const _GeoTabContent({
+    required this.scope,
+    required this.hasHome,
+    required this.scopeBanner,
+  });
 
   @override
   State<_GeoTabContent> createState() => _GeoTabContentState();
@@ -354,9 +405,14 @@ class _GeoTabContentState extends State<_GeoTabContent> {
 
   @override
   Widget build(BuildContext context) {
-    if (widget.hasHome) return _BoardView(provider: widget.scope);
+    if (widget.hasHome) {
+      return _BoardView(
+        provider: widget.scope,
+        scopeBanner: widget.scopeBanner,
+      );
+    }
     if (_checking) {
-      return const Center(
+      return Center(
         child: CircularProgressIndicator(color: AppColors.primary),
       );
     }
@@ -379,7 +435,12 @@ class _GeoTabContentState extends State<_GeoTabContent> {
 // =============================================================================
 class _BoardView extends ConsumerWidget {
   final String provider;
-  const _BoardView({required this.provider});
+  final Widget scopeBanner;
+
+  const _BoardView({
+    required this.provider,
+    required this.scopeBanner,
+  });
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -388,11 +449,12 @@ class _BoardView extends ConsumerWidget {
       'state' => ref.watch(stateLeaderboardProvider),
       'country' => ref.watch(countryLeaderboardProvider),
       'friends' => ref.watch(friendsLeaderboardProvider),
+      'worldwide' => ref.watch(globalLeaderboardProvider),
       _ => ref.watch(globalLeaderboardProvider),
     };
 
     return async.when(
-      loading: () => const Center(
+      loading: () => Center(
           child: CircularProgressIndicator(color: AppColors.primary)),
       error: (e, _) => Center(child: Text('Could not load: $e')),
       data: (entries) {
@@ -407,7 +469,10 @@ class _BoardView extends ConsumerWidget {
                 : 'Be the first — start walking to claim the top spot!',
           );
         }
-        return _LeaderboardList(entries: entries);
+        return _LeaderboardList(
+          entries: entries,
+          scopeBanner: scopeBanner,
+        );
       },
     );
   }
@@ -418,38 +483,59 @@ class _BoardView extends ConsumerWidget {
 // =============================================================================
 class _LeaderboardList extends StatelessWidget {
   final List<LeaderboardEntry> entries;
+  final Widget scopeBanner;
 
-  const _LeaderboardList({required this.entries});
+  const _LeaderboardList({
+    required this.entries,
+    required this.scopeBanner,
+  });
 
   @override
   Widget build(BuildContext context) {
-    final topThree = entries.length >= 3
-        ? entries.sublist(0, 3)
-        : entries;
-    final rest = entries.length > 3 ? entries.sublist(3) : <LeaderboardEntry>[];
-
+    // New Strava-style layout:
+    //   • Hero at top spotlighting the #1 (laurel wreath + XP + name)
+    //   • Small-caps column headers row
+    //   • Full ranked list — the #1 appears here too, with a crown
+    //     icon in the rank cell, matching Strava's leaderboard design
     return ListView(
-      padding: const EdgeInsets.fromLTRB(16, 8, 16, 200),
+      padding: const EdgeInsets.fromLTRB(0, 8, 0, 200),
       children: [
-        PodiumSection(
-          topThree: topThree,
-          onTap: (entry) => _showProfile(context, entry),
+        LeaderboardHero(
+          topEntry: entries.first,
+          scopeBanner: scopeBanner,
         ),
-        const SizedBox(height: 20),
-        ...rest.map((entry) => Padding(
-              padding: const EdgeInsets.only(bottom: 8),
-              child: RankRow(
-                entry: entry,
-                onTap: () => _showProfile(context, entry),
-              ),
-            )),
+        const SizedBox(height: 12),
+        const RankColumnHeaders(),
+        // Segregating line between the column-header caps row and the
+        // first data row, so the caps read as a header for the table
+        // below. Matches the divider style used between rank rows.
+        Divider(
+          height: 1,
+          thickness: 1,
+          color: AppColors.outlineVariant.withValues(alpha: 0.4),
+        ),
+        for (final entry in entries)
+          RankRow(
+            entry: entry,
+            onTap: () => _showProfile(context, entry),
+          ),
       ],
     );
   }
 
   void _showProfile(BuildContext context, LeaderboardEntry entry) {
+    // `useRootNavigator: true` is the critical one — without it the
+    // modal opens inside the tab's Navigator, which sits BEHIND the
+    // shell's persistent bottom nav bar, so the sheet's action
+    // buttons were being obscured. Escaping to the root Navigator
+    // makes the sheet cover the whole screen. `isScrollControlled +
+    // useSafeArea` still matter so the sheet sizes to its content
+    // and respects the system-level intrusions.
     showModalBottomSheet(
       context: context,
+      isScrollControlled: true,
+      useSafeArea: true,
+      useRootNavigator: true,
       backgroundColor: Colors.transparent,
       builder: (_) => PublicProfileSheet(entry: entry),
     );

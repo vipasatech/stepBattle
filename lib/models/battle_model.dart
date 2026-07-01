@@ -29,6 +29,13 @@ class BattleParticipant {
   /// Team label for team battles ('A'/'B'/'C'/'D'). Null for 1v1 / group.
   final String? teamLabel;
 
+  /// Snapshot of the user's `profiles.battle_avatar_id` at the moment they
+  /// joined this battle. Null for legacy rows from before migration 0019 —
+  /// the renderer falls back to the default avatar in that case (see
+  /// [Avatar.byId]). Snapshotting prevents a later avatar change from
+  /// retroactively swapping the runner on historical battle screens.
+  final String? battleAvatarId;
+
   const BattleParticipant({
     required this.userId,
     required this.displayName,
@@ -39,6 +46,7 @@ class BattleParticipant {
     this.isWinner = false,
     this.inviteStatus = ParticipantInviteStatus.pending,
     this.teamLabel,
+    this.battleAvatarId,
   });
 
   /// Firestore-style nested map (still used by [BattleModel.toFirestore]).
@@ -73,6 +81,7 @@ class BattleParticipant {
       inviteStatus: ParticipantInviteStatus.fromString(
           d['invite_status'] as String? ?? 'pending'),
       teamLabel: d['team_label'] as String?,
+      battleAvatarId: d['battle_avatar_id'] as String?,
     );
   }
 }
@@ -137,6 +146,13 @@ class BattleModel {
   final DateTime endTime;
   final int durationDays;
   final int xpReward;
+
+  /// Per-participant XP stake (migration 0016). Zero for legacy
+  /// free-play battles, ≥100 for stake battles. Total pot is
+  /// `stakeXp × acceptedParticipantCount` and is split by
+  /// `settle_stake_battle()` on the server.
+  final int stakeXp;
+
   final String? winnerId;
   final String createdBy;
 
@@ -175,6 +191,7 @@ class BattleModel {
     required this.endTime,
     required this.durationDays,
     required this.xpReward,
+    this.stakeXp = 0,
     this.winnerId,
     required this.createdBy,
     required this.createdAt,
@@ -271,6 +288,7 @@ class BattleModel {
       durationDays:
           duration.inHours >= 24 ? duration.inDays : 1,
       xpReward: (d['xp_reward'] as num?)?.toInt() ?? 200,
+      stakeXp: (d['stake_xp'] as num?)?.toInt() ?? 0,
       winnerId: d['winner_id'] as String?,
       createdBy: d['created_by'] as String? ?? '',
       createdAt: parseTs(d['created_at']),

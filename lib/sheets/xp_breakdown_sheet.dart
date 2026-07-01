@@ -1,4 +1,4 @@
-import 'package:flutter/material.dart';
+﻿import 'package:flutter/material.dart';
 import '../config/colors.dart';
 import '../widgets/bottom_sheet_handle.dart';
 
@@ -14,7 +14,7 @@ class XPBreakdownSheet extends StatelessWidget {
     ('Reach daily step goal', '+75 XP'),
     ('Win a multi-player battle', '+300 XP'),
     ('Complete all daily missions (bonus)', '+150 XP'),
-    ('Win a team battle (per member × team size)', '+300 XP each'),
+    ('Win a team battle (per member Ã— team size)', '+300 XP each'),
     ('Every 1,000 steps', '+10 XP'),
     ('Complete weekly challenge', '+300–500 XP'),
   ];
@@ -24,7 +24,7 @@ class XPBreakdownSheet extends StatelessWidget {
     final theme = Theme.of(context);
 
     return Container(
-      decoration: const BoxDecoration(
+      decoration: BoxDecoration(
         color: AppColors.surfaceContainer,
         borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
       ),
@@ -52,7 +52,7 @@ class XPBreakdownSheet extends StatelessWidget {
               color: AppColors.surfaceContainerLow,
               borderRadius: BorderRadius.circular(16),
               border:
-                  Border.all(color: Colors.white.withValues(alpha: 0.05)),
+                  Border.all(color: AppColors.onSurface.withValues(alpha: 0.05)),
             ),
             child: Column(
               children: _rewards.asMap().entries.map((entry) {
@@ -65,7 +65,7 @@ class XPBreakdownSheet extends StatelessWidget {
                     border: i < _rewards.length - 1
                         ? Border(
                             bottom: BorderSide(
-                                color: Colors.white.withValues(alpha: 0.03)))
+                                color: AppColors.onSurface.withValues(alpha: 0.03)))
                         : null,
                   ),
                   child: Row(

@@ -1,4 +1,4 @@
-import 'dart:io';
+﻿import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../config/colors.dart';
@@ -264,7 +264,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
               // Loading
               if (_loading) ...[
                 const SizedBox(height: 24),
-                const CircularProgressIndicator(color: AppColors.primary),
+                CircularProgressIndicator(color: AppColors.primary),
               ],
 
               const SizedBox(height: 48),
@@ -317,7 +317,7 @@ class _SocialButton extends StatelessWidget {
                 ?.copyWith(color: fgColor)),
         style: OutlinedButton.styleFrom(
           backgroundColor: backgroundColor,
-          side: BorderSide(color: Colors.white.withValues(alpha: 0.05)),
+          side: BorderSide(color: AppColors.onSurface.withValues(alpha: 0.05)),
           shape:
               RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
         ),

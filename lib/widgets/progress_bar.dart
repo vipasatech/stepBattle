@@ -69,7 +69,7 @@ class StepProgressBar extends StatelessWidget {
                         shape: BoxShape.circle,
                         boxShadow: [
                           BoxShadow(
-                            color: Colors.white.withValues(alpha: 0.8),
+                            color: AppColors.onSurface.withValues(alpha: 0.8),
                             blurRadius: 8,
                             spreadRadius: 2,
                           ),

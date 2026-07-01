@@ -46,7 +46,7 @@ class CountdownRing extends StatelessWidget {
               color: Colors.black.withValues(alpha: 0.55),
               shape: BoxShape.circle,
               border: Border.all(
-                color: Colors.white.withValues(alpha: 0.1),
+                color: AppColors.onSurface.withValues(alpha: 0.1),
               ),
             ),
           ),
@@ -74,7 +74,7 @@ class CountdownRing extends StatelessWidget {
               Text(
                 _secondary(remaining),
                 style: theme.textTheme.labelSmall?.copyWith(
-                  color: Colors.white.withValues(alpha: 0.7),
+                  color: AppColors.onSurface.withValues(alpha: 0.7),
                   letterSpacing: 1.5,
                   fontSize: 9,
                 ),
@@ -115,7 +115,7 @@ class _RingPainter extends CustomPainter {
     final radius = math.min(size.width, size.height) / 2;
 
     final track = Paint()
-      ..color = Colors.white.withValues(alpha: 0.08)
+      ..color = AppColors.onSurface.withValues(alpha: 0.08)
       ..strokeWidth = 4
       ..style = PaintingStyle.stroke;
     canvas.drawCircle(center, radius, track);

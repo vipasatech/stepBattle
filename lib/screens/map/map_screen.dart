@@ -487,7 +487,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
                         color: Colors.black.withValues(alpha: 0.55),
                         borderRadius: BorderRadius.circular(20),
                         border: Border.all(
-                          color: Colors.white.withValues(alpha: 0.08),
+                          color: AppColors.onSurface.withValues(alpha: 0.08),
                         ),
                       ),
                       child: Row(
@@ -619,7 +619,7 @@ class _GlassIconBtn extends StatelessWidget {
           decoration: BoxDecoration(
             color: Colors.black.withValues(alpha: 0.55),
             shape: BoxShape.circle,
-            border: Border.all(color: Colors.white.withValues(alpha: 0.12)),
+            border: Border.all(color: AppColors.onSurface.withValues(alpha: 0.12)),
           ),
           child: Icon(icon, color: Colors.white, size: 20),
         ),
@@ -640,7 +640,7 @@ class _TierBadge extends StatelessWidget {
       decoration: BoxDecoration(
         color: Colors.black.withValues(alpha: 0.55),
         borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: Colors.white.withValues(alpha: 0.12)),
+        border: Border.all(color: AppColors.onSurface.withValues(alpha: 0.12)),
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
@@ -691,7 +691,7 @@ class _ZoomStepButton extends StatelessWidget {
           decoration: BoxDecoration(
             color: enabled
                 ? AppColors.primary.withValues(alpha: 0.15)
-                : Colors.white.withValues(alpha: 0.04),
+                : AppColors.onSurface.withValues(alpha: 0.04),
             shape: BoxShape.circle,
           ),
           child: Icon(

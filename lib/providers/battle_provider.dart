@@ -1,4 +1,5 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 import '../models/battle_model.dart';
 import '../services/battle_service.dart';
 import '../utils/realtime_retry.dart';
@@ -97,3 +98,43 @@ final incomingBattleInvitesProvider =
 final incomingBattleInviteCountProvider = Provider<int>((ref) {
   return ref.watch(incomingBattleInvitesProvider).valueOrNull?.length ?? 0;
 });
+
+/// A user's battle wins vs total completed battles. Used to compute the
+/// B/W Ratio shown on Profile + the Battles tab header.
+///
+/// Counts every `battle_participants` row where:
+///   • user_id matches the queried user
+///   • invite_status = 'accepted'  (rejected invites don't count)
+///   • parent battle is in status 'completed' (we only score finished
+///     battles — pending / scheduled / active are in-flight and
+///     shouldn't move the ratio)
+///
+/// Returns `(wins: N, total: M)`. Cached per user so multiple widgets
+/// reading the same user's stats share one query.
+typedef BattleWinStats = ({int wins, int total});
+
+final battleWinStatsProvider =
+    FutureProvider.family<BattleWinStats, String>((ref, userId) async {
+  try {
+    final client = Supabase.instance.client;
+    final rows = await client
+        .from('battle_participants')
+        .select('is_winner, battles!inner(status)')
+        .eq('user_id', userId)
+        .eq('invite_status', 'accepted')
+        .eq('battles.status', 'completed');
+    final list = rows as List;
+    final total = list.length;
+    final wins =
+        list.where((r) => (r as Map)['is_winner'] == true).length;
+    return (wins: wins, total: total);
+  } catch (_) {
+    return (wins: 0, total: 0);
+  }
+});
+
+/// Convenience: B/W Ratio as a 0..1 fraction, or null when the user
+/// has 0 completed battles (avoids "0%" looking like a sad stat for
+/// new users).
+double? battleWinRatioOf(BattleWinStats s) =>
+    s.total == 0 ? null : s.wins / s.total;

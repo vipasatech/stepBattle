@@ -1,15 +1,15 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-    Native Android launch screen. Shown by the OS between process start and
-    Flutter's first frame. Matches the Flutter splash (violet background +
-    white running character) so the handoff is seamless instead of a
-    black-flash → purple-pop.
+    Native Android launch screen (Android < 12).
+    Black background + centred logoTransparent. The Android 12+ Splash
+    Screen API overrides this with the values in styles.xml; this file
+    is the fallback for older OS versions.
 -->
 <layer-list xmlns:android="http://schemas.android.com/apk/res/android">
-    <item android:drawable="@color/ic_launcher_background" />
+    <item android:drawable="@color/splash_background" />
     <item>
         <bitmap
             android:gravity="center"
-            android:src="@drawable/ic_launcher_foreground" />
+            android:src="@drawable/splash_logo" />
     </item>
 </layer-list>

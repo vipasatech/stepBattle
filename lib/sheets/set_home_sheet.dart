@@ -1,4 +1,4 @@
-import 'package:flutter/material.dart';
+﻿import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../config/colors.dart';
@@ -152,7 +152,7 @@ class _SetHomeSheetState extends ConsumerState<SetHomeSheet> {
     return PopScope(
       canPop: !widget.requireChoice,
       child: Container(
-        decoration: const BoxDecoration(
+        decoration: BoxDecoration(
           color: AppColors.surfaceContainer,
           borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
         ),
@@ -322,7 +322,7 @@ class _OptionTile extends StatelessWidget {
                   ],
                 ),
               ),
-              const Icon(Icons.chevron_right,
+              Icon(Icons.chevron_right,
                   color: AppColors.onSurfaceVariant),
             ],
           ),
@@ -426,7 +426,7 @@ class _LoadingStep extends StatelessWidget {
       padding: const EdgeInsets.symmetric(vertical: 32),
       child: Column(
         children: [
-          const CircularProgressIndicator(color: AppColors.primary),
+          CircularProgressIndicator(color: AppColors.primary),
           const SizedBox(height: 18),
           Text(title,
               style: theme.textTheme.titleSmall

@@ -9,9 +9,10 @@ import '../screens/battles/battles_screen.dart';
 import '../screens/battles/discover_battles_screen.dart';
 import '../screens/battles/pending_battles_screen.dart';
 import '../screens/battle_ground/battle_ground_screen.dart';
-import '../screens/missions/missions_screen.dart';
+import '../screens/battle_ground/battle_status_screen.dart';
 import '../screens/clan/clan_screen.dart';
 import '../screens/clan/clan_details_screen.dart';
+import '../screens/day_summary/day_summary_screen.dart';
 import '../screens/leaderboard/leaderboard_screen.dart';
 import '../screens/auth/login_screen.dart';
 import '../screens/auth/onboarding_screen.dart';
@@ -22,6 +23,8 @@ import '../screens/onboarding/health_setup_screen.dart';
 import '../screens/profile/profile_screen.dart';
 import '../screens/splash_screen.dart';
 import '../screens/profile/step_sources_screen.dart';
+import '../screens/track/edit_session_screen.dart';
+import '../screens/track/save_activity_screen.dart';
 import '../screens/track/track_hub_screen.dart';
 import '../screens/track/track_live_screen.dart';
 import '../screens/track/track_session_detail_screen.dart';
@@ -57,16 +60,35 @@ class _NavLoggingObserver extends NavigatorObserver {
   }
 }
 
-/// GoRouter provider — rebuilds when auth state changes for redirect logic.
+/// GoRouter provider.
+///
+/// **CRITICAL:** Do not `ref.watch` providers inside this builder. Watching
+/// makes Riverpod rebuild the entire `Provider` (and thus the `GoRouter`)
+/// every time the watched provider ticks. A fresh `GoRouter` resets to its
+/// `initialLocation` ('/splash'), which produces the
+/// splash → home → splash → home flicker loop on auth/onboarding emits.
+///
+/// Instead we build the router **once** and drive redirect re-evaluation via
+/// a `refreshListenable` that ticks whenever auth or onboarding state
+/// changes. The redirect callback reads providers via `ref.read` at call
+/// time, so it always sees the latest values.
 final routerProvider = Provider<GoRouter>((ref) {
-  final authState = ref.watch(authStateProvider);
-  final hasOnboarded = ref.watch(hasCompletedOnboardingProvider);
+  // Bumps every time we want GoRouter to re-run its redirect. Subscribed
+  // listeners (the router) react; this provider itself does NOT rebuild.
+  final refreshNotifier = ValueNotifier<int>(0);
+  ref.listen(authStateProvider, (_, __) => refreshNotifier.value++);
+  ref.listen(hasCompletedOnboardingProvider, (_, __) => refreshNotifier.value++);
+  ref.onDispose(refreshNotifier.dispose);
 
   return GoRouter(
     navigatorKey: _rootNavigatorKey,
     initialLocation: '/splash',
     observers: [_NavLoggingObserver()],
+    refreshListenable: refreshNotifier,
     redirect: (context, state) {
+      final authState = ref.read(authStateProvider);
+      final hasOnboarded = ref.read(hasCompletedOnboardingProvider);
+
       final location = state.matchedLocation;
       final isOnSplash = location == '/splash';
 
@@ -180,6 +202,30 @@ final routerProvider = Provider<GoRouter>((ref) {
         ),
       ),
 
+      // Battle Status — post-battle, drag-to-arrange cards + winner
+      // particle effect + customisable background. Opens from the
+      // Completed section of the Battles tab.
+      GoRoute(
+        parentNavigatorKey: _rootNavigatorKey,
+        path: '/battle-status/:id',
+        name: 'battleStatus',
+        builder: (context, state) => BattleStatusScreen(
+          battleId: state.pathParameters['id']!,
+        ),
+      ),
+
+      // Day Summary — per-date view of steps, XP, battles, and track
+      // sessions. Reached from the home-screen streak strip when the
+      // user taps a past day.
+      GoRoute(
+        parentNavigatorKey: _rootNavigatorKey,
+        path: '/day-summary/:date',
+        name: 'daySummary',
+        builder: (context, state) => DaySummaryScreen(
+          dateIso: state.pathParameters['date']!,
+        ),
+      ),
+
       // Map — full-screen cinematic map. Auto-redirects to Set Home
       // sheet when the user hasn't set a home district.
       GoRoute(
@@ -189,13 +235,10 @@ final routerProvider = Provider<GoRouter>((ref) {
         builder: (context, state) => const MapScreen(),
       ),
 
-      // Track hub — list of past sessions + Start CTA.
-      GoRoute(
-        parentNavigatorKey: _rootNavigatorKey,
-        path: '/track',
-        name: 'trackHub',
-        builder: (context, state) => const TrackHubScreen(),
-      ),
+      // (The old full-screen `/track` route was removed when Track became a
+      // dedicated bottom-nav tab — see the StatefulShellBranch below at
+      // `/track`. Existing `context.go('/track')` callers now switch to the
+      // Track tab instead of pushing a full-screen page.)
 
       // Live Track recording. Reached from the FAB when a session is active,
       // or right after Start. The session keeps running in the foreground
@@ -207,13 +250,35 @@ final routerProvider = Provider<GoRouter>((ref) {
         builder: (context, state) => const TrackLiveScreen(),
       ),
 
+      // Save Activity — pushed when the user taps "End run" on the live
+      // screen. Lets them caption the session and attach up to 5 photos
+      // before the row is persisted. "Resume" pops back to the live
+      // screen with the session still running.
+      GoRoute(
+        parentNavigatorKey: _rootNavigatorKey,
+        path: '/track/save',
+        name: 'trackSave',
+        builder: (context, state) => const SaveActivityScreen(),
+      ),
+
       // Saved-session detail. Reached by tapping a row in the Track hub's
-      // "Recent sessions" list. Read-only stats + GPS route + rename/delete.
+      // "Recent sessions" list. Read-only stats + GPS route + share.
       GoRoute(
         parentNavigatorKey: _rootNavigatorKey,
         path: '/track/session/:id',
         name: 'trackSessionDetail',
         builder: (context, state) => TrackSessionDetailScreen(
+          sessionId: state.pathParameters['id']!,
+        ),
+      ),
+
+      // Edit an already-saved session — reached from the pencil icon on
+      // the session detail screen. Update name / description / media.
+      GoRoute(
+        parentNavigatorKey: _rootNavigatorKey,
+        path: '/track/session/:id/edit',
+        name: 'trackSessionEdit',
+        builder: (context, state) => EditSessionScreen(
           sessionId: state.pathParameters['id']!,
         ),
       ),
@@ -258,13 +323,16 @@ final routerProvider = Provider<GoRouter>((ref) {
               ),
             ],
           ),
-          // Tab 2: Missions
+          // Tab 2: Track (replaces the old Missions tab in the bottom nav).
+          // The hub lists past Track sessions + a Start CTA; tapping into a
+          // live or past session pushes /track/live or /track/session/:id
+          // over the shell as full-screen routes.
           StatefulShellBranch(
             routes: [
               GoRoute(
-                path: '/missions',
-                name: 'missions',
-                builder: (context, state) => const MissionsScreen(),
+                path: '/track',
+                name: 'trackTab',
+                builder: (context, state) => const TrackHubScreen(),
               ),
             ],
           ),

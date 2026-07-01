@@ -1,4 +1,4 @@
-import 'package:flutter/material.dart';
+﻿import 'package:flutter/material.dart';
 import '../config/colors.dart';
 
 /// User avatar circle with optional border ring and badge overlay.
@@ -6,7 +6,10 @@ class AvatarCircle extends StatelessWidget {
   final String? imageUrl;
   final String? initials;
   final double radius;
-  final Color borderColor;
+  /// Border-ring colour. Null defaults to the theme's primary at build
+  /// time — kept nullable so the default flips automatically with the
+  /// active theme rather than being baked at construction.
+  final Color? borderColor;
   final double borderWidth;
   final Widget? badge;
 
@@ -15,13 +18,14 @@ class AvatarCircle extends StatelessWidget {
     this.imageUrl,
     this.initials,
     this.radius = 20,
-    this.borderColor = AppColors.primary,
+    this.borderColor,
     this.borderWidth = 2,
     this.badge,
   });
 
   @override
   Widget build(BuildContext context) {
+    final ring = borderColor ?? AppColors.primary;
     return Stack(
       clipBehavior: Clip.none,
       children: [
@@ -30,7 +34,7 @@ class AvatarCircle extends StatelessWidget {
           height: radius * 2,
           decoration: BoxDecoration(
             shape: BoxShape.circle,
-            border: Border.all(color: borderColor, width: borderWidth),
+            border: Border.all(color: ring, width: borderWidth),
           ),
           child: CircleAvatar(
             radius: radius - borderWidth,

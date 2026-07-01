@@ -1,6 +1,52 @@
 import 'dart:math';
 import 'package:cloud_firestore/cloud_firestore.dart';
 
+/// Gender — captured during the mandatory onboarding survey. Used as one
+/// of three inputs into the personalized step-goal formula (see
+/// `lib/services/goal_formula.dart`) and to filter gender-scoped
+/// leaderboards in the future. UI labels live in the onboarding screen;
+/// the wire format here matches the `profiles.gender` check constraint.
+enum Gender {
+  man,
+  woman,
+  nonBinary,
+  preferNotToSay;
+
+  String get wire => switch (this) {
+        Gender.man => 'man',
+        Gender.woman => 'woman',
+        Gender.nonBinary => 'non_binary',
+        Gender.preferNotToSay => 'prefer_not_to_say',
+      };
+
+  static Gender? fromWire(String? s) => switch (s) {
+        'man' => Gender.man,
+        'woman' => Gender.woman,
+        'non_binary' => Gender.nonBinary,
+        'prefer_not_to_say' => Gender.preferNotToSay,
+        _ => null,
+      };
+}
+
+/// Self-reported fitness level — second input to the step-goal formula.
+/// Multipliers are documented in [`goal_formula.dart`].
+enum FitnessLevel {
+  beginner,
+  intermediate,
+  advanced,
+  pro;
+
+  String get wire => name;
+
+  static FitnessLevel? fromWire(String? s) => switch (s) {
+        'beginner' => FitnessLevel.beginner,
+        'intermediate' => FitnessLevel.intermediate,
+        'advanced' => FitnessLevel.advanced,
+        'pro' => FitnessLevel.pro,
+        _ => null,
+      };
+}
+
 class UserModel {
   final String userId;
   final String userCode; // e.g. "#U4X92" — permanent public ID
@@ -65,6 +111,40 @@ class UserModel {
   /// cooldown on changes once we add competitive seasonal leaderboards.
   final DateTime? homeSetAt;
 
+  // ── Mandatory onboarding survey (migration 0016) ──────────────────────────
+  /// Date of birth (used to derive age for the step-goal formula). Null on
+  /// any profile created before the survey shipped — those users are
+  /// caught by the "Complete your profile" sheet on first launch.
+  final DateTime? dateOfBirth;
+
+  /// Self-reported gender. See [Gender] for wire values.
+  final Gender? gender;
+
+  /// Self-reported fitness level. See [FitnessLevel] for wire values.
+  final FitnessLevel? fitnessLevel;
+
+  /// User's selected battle-ground runner avatar — one of the 12 bird's-
+  /// eye-view PNGs in `assets/images/avatars/`. Distinct from
+  /// [avatarURL], which is the profile photo. See migration 0019 and
+  /// [Avatar.byId]. Defaults to 'avatar_01' for legacy rows.
+  final String battleAvatarId;
+
+  // ── Streak recovery state (migration 0016) ────────────────────────────────
+  /// Date of the missed day that triggered recovery mode. Null when not in
+  /// recovery. When set, the user has the next two days to BOTH meet
+  /// their daily target or the streak ends.
+  final DateTime? streakRecoveryStartedAt;
+
+  /// Locks the recovery mechanic to one use per streak run. Resets to
+  /// false when a fresh streak begins (current_streak goes 0 → 1).
+  final bool streakUsedRecoveryInCurrentRun;
+
+  /// Highest streak length (in days) we've already awarded a +100 milestone
+  /// XP for. Milestones land at day 25, 50, 75, 100, …; the streak service
+  /// only awards when `current_streak % 25 == 0` AND `current_streak >
+  /// last_streak_milestone_awarded`.
+  final int lastStreakMilestoneAwarded;
+
   const UserModel({
     required this.userId,
     required this.userCode,
@@ -95,11 +175,45 @@ class UserModel {
     this.homeLat,
     this.homeLng,
     this.homeSetAt,
+    this.dateOfBirth,
+    this.gender,
+    this.fitnessLevel,
+    this.battleAvatarId = 'avatar_01',
+    this.streakRecoveryStartedAt,
+    this.streakUsedRecoveryInCurrentRun = false,
+    this.lastStreakMilestoneAwarded = 0,
   });
 
   /// Whether the user has set a home district yet.
   bool get hasHome =>
       countryCode != null && countryCode!.isNotEmpty;
+
+  /// Whether the mandatory onboarding survey has been completed. A user with
+  /// `displayName` but missing DOB/gender/fitness is a pre-survey user and
+  /// should be funneled through the "Complete your profile" sheet on first
+  /// launch after the update.
+  bool get hasCompletedSurvey =>
+      displayName.isNotEmpty &&
+      dateOfBirth != null &&
+      gender != null &&
+      fitnessLevel != null;
+
+  /// Computed age from [dateOfBirth]. Returns null when DOB isn't set.
+  int? get age {
+    final dob = dateOfBirth;
+    if (dob == null) return null;
+    final now = DateTime.now();
+    var years = now.year - dob.year;
+    if (now.month < dob.month ||
+        (now.month == dob.month && now.day < dob.day)) {
+      years--;
+    }
+    return years;
+  }
+
+  /// True when [streakRecoveryStartedAt] is set — the streak is paused
+  /// awaiting two consecutive made-up days before it resumes.
+  bool get isInStreakRecovery => streakRecoveryStartedAt != null;
 
   /// Generate a unique 5-char user code (no ambiguous chars: no 0/O, 1/I).
   static String generateUserCode() {
@@ -155,6 +269,16 @@ class UserModel {
       homeLat: (data['home_lat'] as num?)?.toDouble(),
       homeLng: (data['home_lng'] as num?)?.toDouble(),
       homeSetAt: parseTs(data['home_set_at']),
+      dateOfBirth: parseTs(data['date_of_birth']),
+      gender: Gender.fromWire(data['gender'] as String?),
+      fitnessLevel: FitnessLevel.fromWire(data['fitness_level'] as String?),
+      battleAvatarId:
+          (data['battle_avatar_id'] as String?) ?? 'avatar_01',
+      streakRecoveryStartedAt: parseTs(data['streak_recovery_started_at']),
+      streakUsedRecoveryInCurrentRun:
+          data['streak_used_recovery_in_current_run'] as bool? ?? false,
+      lastStreakMilestoneAwarded:
+          (data['last_streak_milestone_awarded'] as num?)?.toInt() ?? 0,
     );
   }
 
@@ -191,6 +315,17 @@ class UserModel {
       'home_lat': homeLat,
       'home_lng': homeLng,
       'home_set_at': iso(homeSetAt),
+      // Date-only column on Supabase — `.toIso8601String().split('T')[0]`
+      // would also work but `date` columns accept full ISO strings too and
+      // Postgres truncates to the date portion.
+      'date_of_birth': iso(dateOfBirth)?.split('T').first,
+      'gender': gender?.wire,
+      'fitness_level': fitnessLevel?.wire,
+      'battle_avatar_id': battleAvatarId,
+      'streak_recovery_started_at':
+          iso(streakRecoveryStartedAt)?.split('T').first,
+      'streak_used_recovery_in_current_run': streakUsedRecoveryInCurrentRun,
+      'last_streak_milestone_awarded': lastStreakMilestoneAwarded,
     };
   }
 
@@ -290,6 +425,14 @@ class UserModel {
     double? homeLat,
     double? homeLng,
     DateTime? homeSetAt,
+    DateTime? dateOfBirth,
+    Gender? gender,
+    FitnessLevel? fitnessLevel,
+    String? battleAvatarId,
+    DateTime? streakRecoveryStartedAt,
+    bool? streakUsedRecoveryInCurrentRun,
+    int? lastStreakMilestoneAwarded,
+    bool clearStreakRecovery = false,
   }) {
     return UserModel(
       userId: userId,
@@ -322,6 +465,19 @@ class UserModel {
       homeLat: homeLat ?? this.homeLat,
       homeLng: homeLng ?? this.homeLng,
       homeSetAt: homeSetAt ?? this.homeSetAt,
+      dateOfBirth: dateOfBirth ?? this.dateOfBirth,
+      gender: gender ?? this.gender,
+      fitnessLevel: fitnessLevel ?? this.fitnessLevel,
+      battleAvatarId: battleAvatarId ?? this.battleAvatarId,
+      // clearStreakRecovery wins over an explicit pass — used by the
+      // streak service when recovery is completed or expired.
+      streakRecoveryStartedAt: clearStreakRecovery
+          ? null
+          : (streakRecoveryStartedAt ?? this.streakRecoveryStartedAt),
+      streakUsedRecoveryInCurrentRun:
+          streakUsedRecoveryInCurrentRun ?? this.streakUsedRecoveryInCurrentRun,
+      lastStreakMilestoneAwarded:
+          lastStreakMilestoneAwarded ?? this.lastStreakMilestoneAwarded,
     );
   }
 }

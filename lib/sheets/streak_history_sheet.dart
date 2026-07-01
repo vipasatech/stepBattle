@@ -1,4 +1,4 @@
-import 'package:flutter/material.dart';
+﻿import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../config/colors.dart';
 import '../providers/user_provider.dart';
@@ -16,15 +16,22 @@ class StreakHistorySheet extends ConsumerWidget {
     final best = profile?.bestStreak ?? 0;
 
     return Container(
-      decoration: const BoxDecoration(
+      decoration: BoxDecoration(
         color: AppColors.surfaceContainer,
         borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
       ),
-      padding: const EdgeInsets.fromLTRB(24, 0, 24, 40),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          const BottomSheetHandle(),
+      // Wrap in SafeArea + SingleChildScrollView so the content can
+      // scroll when the sheet is too tall to fit the viewport (small
+      // phones, large text scales, on-screen keyboard, etc.). Previously
+      // the bottom CTA / next-bonus chip got clipped.
+      child: SafeArea(
+        top: false,
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.fromLTRB(24, 0, 24, 40),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const BottomSheetHandle(),
 
           // Fire icon
           Container(
@@ -129,6 +136,8 @@ class StreakHistorySheet extends ConsumerWidget {
           ],
         ],
       ),
+    ),
+   ),
     );
   }
 }
@@ -154,7 +163,7 @@ class _StreakRow extends StatelessWidget {
       decoration: BoxDecoration(
         color: AppColors.surfaceContainerLow,
         borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: Colors.white.withValues(alpha: 0.05)),
+        border: Border.all(color: AppColors.onSurface.withValues(alpha: 0.05)),
       ),
       child: Row(
         children: [

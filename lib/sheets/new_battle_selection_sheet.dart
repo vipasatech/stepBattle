@@ -1,4 +1,4 @@
-import 'package:flutter/material.dart';
+﻿import 'package:flutter/material.dart';
 import '../config/colors.dart';
 import '../widgets/bottom_sheet_handle.dart';
 import 'battle_1v1_setup_sheet.dart';
@@ -22,7 +22,7 @@ class _NewBattleSelectionSheetState extends State<NewBattleSelectionSheet> {
     final theme = Theme.of(context);
 
     return Container(
-      decoration: const BoxDecoration(
+      decoration: BoxDecoration(
         color: AppColors.surfaceContainer,
         borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
       ),
@@ -223,7 +223,7 @@ class _FormatCard extends StatelessWidget {
               Container(
                 width: 18,
                 height: 18,
-                decoration: const BoxDecoration(
+                decoration: BoxDecoration(
                   color: AppColors.primaryBrand,
                   shape: BoxShape.circle,
                 ),

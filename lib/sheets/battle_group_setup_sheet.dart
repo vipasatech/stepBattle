@@ -1,4 +1,4 @@
-import 'package:flutter/material.dart';
+﻿import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../config/colors.dart';
@@ -66,7 +66,7 @@ class _BattleGroupSetupSheetState
               _isPublic
                   ? 'Listed in Discover. Anyone can also paste this code:'
                   : 'Share this code to let anyone you invited join directly:',
-              style: const TextStyle(color: AppColors.onSurfaceVariant),
+              style: TextStyle(color: AppColors.onSurfaceVariant),
             ),
             const SizedBox(height: 16),
             GestureDetector(
@@ -86,7 +86,7 @@ class _BattleGroupSetupSheetState
                   children: [
                     Text(
                       code,
-                      style: const TextStyle(
+                      style: TextStyle(
                         fontSize: 28,
                         fontWeight: FontWeight.w900,
                         letterSpacing: 6,
@@ -94,7 +94,7 @@ class _BattleGroupSetupSheetState
                       ),
                     ),
                     const SizedBox(width: 10),
-                    const Icon(Icons.content_copy,
+                    Icon(Icons.content_copy,
                         size: 18, color: AppColors.primary),
                   ],
                 ),
@@ -209,7 +209,7 @@ class _BattleGroupSetupSheetState
       maxChildSize: 0.95,
       expand: false,
       builder: (context, scrollController) => Container(
-        decoration: const BoxDecoration(
+        decoration: BoxDecoration(
           color: AppColors.surfaceContainer,
           borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
         ),

@@ -1,4 +1,4 @@
-import 'package:flutter/material.dart';
+﻿import 'package:flutter/material.dart';
 import '../../../config/colors.dart';
 import '../../../models/mission_model.dart';
 import '../../../models/user_mission_progress_model.dart';
@@ -41,7 +41,7 @@ class DailyMissionCard extends StatelessWidget {
                 : isLocked
                     ? Border.all(
                         color: AppColors.outlineVariant.withValues(alpha: 0.1))
-                    : const Border(
+                    : Border(
                         left: BorderSide(color: AppColors.primary, width: 4)),
             boxShadow: isLocked
                 ? null

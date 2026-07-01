@@ -1,4 +1,4 @@
-import 'package:flutter/material.dart';
+﻿import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../config/colors.dart';
@@ -39,6 +39,11 @@ class _Battle1v1SetupSheetState extends ConsumerState<Battle1v1SetupSheet> {
   /// the join code (or the Discover tap) can join. Off by default — invite-only.
   bool _isPublic = false;
 
+  /// Per-participant XP stake. Min 100 (set by migration 0016 economy
+  /// rules); 0 means "free play, no stake". Pot = stake Ã— 2 in 1v1; the
+  /// winner gets the whole pot.
+  int _stakeXp = 100;
+
   final _battleCode = BattleService.generateBattleCode();
 
   Future<void> _showJoinCodeDialog(String code,
@@ -60,7 +65,7 @@ class _Battle1v1SetupSheetState extends ConsumerState<Battle1v1SetupSheet> {
               _isPublic
                   ? 'Listed in Discover. Anyone can also paste this code:'
                   : 'Share this code to let anyone you invited join directly:',
-              style: const TextStyle(color: AppColors.onSurfaceVariant),
+              style: TextStyle(color: AppColors.onSurfaceVariant),
             ),
             const SizedBox(height: 16),
             GestureDetector(
@@ -80,7 +85,7 @@ class _Battle1v1SetupSheetState extends ConsumerState<Battle1v1SetupSheet> {
                   children: [
                     Text(
                       code,
-                      style: const TextStyle(
+                      style: TextStyle(
                         fontSize: 28,
                         fontWeight: FontWeight.w900,
                         letterSpacing: 6,
@@ -88,7 +93,7 @@ class _Battle1v1SetupSheetState extends ConsumerState<Battle1v1SetupSheet> {
                       ),
                     ),
                     const SizedBox(width: 10),
-                    const Icon(Icons.content_copy,
+                    Icon(Icons.content_copy,
                         size: 18, color: AppColors.primary),
                   ],
                 ),
@@ -126,7 +131,10 @@ class _Battle1v1SetupSheetState extends ConsumerState<Battle1v1SetupSheet> {
   }
 
   Future<void> _createBattle() async {
-    if (_selectedOpponent == null) return;
+    // For PUBLIC battles, no specific opponent is required — anyone with
+    // the join code or via Discover can drop in. For PRIVATE battles
+    // we still need a chosen opponent at create time.
+    if (!_isPublic && _selectedOpponent == null) return;
     final window = _window;
     if (window == null || !window.isValid) return;
     setState(() => _creating = true);
@@ -134,17 +142,18 @@ class _Battle1v1SetupSheetState extends ConsumerState<Battle1v1SetupSheet> {
     try {
       final me = ref.read(currentUserProvider).valueOrNull;
       if (me == null) throw StateError('Not signed in');
-      final participants = [
+      final participants = <BattleParticipant>[
         BattleParticipant(
           userId: me.userId,
           displayName: me.displayName.isEmpty ? 'You' : me.displayName,
           avatarURL: me.avatarURL,
         ),
-        BattleParticipant(
-          userId: _selectedOpponent!.userId,
-          displayName: _selectedOpponent!.displayName,
-          avatarURL: _selectedOpponent!.avatarURL,
-        ),
+        if (_selectedOpponent != null)
+          BattleParticipant(
+            userId: _selectedOpponent!.userId,
+            displayName: _selectedOpponent!.displayName,
+            avatarURL: _selectedOpponent!.avatarURL,
+          ),
       ];
       // Daily preset → recurring series (one accept covers every future day).
       // Anything else → one-off battle, original flow.
@@ -167,6 +176,7 @@ class _Battle1v1SetupSheetState extends ConsumerState<Battle1v1SetupSheet> {
               endTime: window.end,
               createdBy: me.userId,
               visibility: visibility,
+              stakeXp: _stakeXp,
             );
       if (mounted) {
         Navigator.pop(context);
@@ -193,7 +203,7 @@ class _Battle1v1SetupSheetState extends ConsumerState<Battle1v1SetupSheet> {
       maxChildSize: 0.95,
       expand: false,
       builder: (context, scrollController) => Container(
-        decoration: const BoxDecoration(
+        decoration: BoxDecoration(
           color: AppColors.surfaceContainer,
           borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
         ),
@@ -293,6 +303,16 @@ class _Battle1v1SetupSheetState extends ConsumerState<Battle1v1SetupSheet> {
                   ),
 
                   const SizedBox(height: 20),
+
+                  // Stake picker — both sides commit this many XP; winner
+                  // takes the whole pot. Min 100, no max (XP economy
+                  // rules from migration 0016).
+                  _StakePicker(
+                    value: _stakeXp,
+                    onChanged: (v) => setState(() => _stakeXp = v),
+                  ),
+
+                  const SizedBox(height: 20),
                 ],
               ),
             ),
@@ -316,7 +336,12 @@ class _Battle1v1SetupSheetState extends ConsumerState<Battle1v1SetupSheet> {
                     width: double.infinity,
                     height: 56,
                     child: FilledButton(
-                      onPressed: _selectedOpponent != null && !_creating
+                      // Enabled when:
+                      //   • Not already submitting
+                      //   • EITHER an opponent has been picked (private)
+                      //     OR the public-battle toggle is on (no opp needed)
+                      onPressed: !_creating &&
+                              (_selectedOpponent != null || _isPublic)
                           ? _createBattle
                           : null,
                       child: _creating
@@ -396,7 +421,7 @@ class _PlayerCard extends StatelessWidget {
                   strokeAlign: BorderSide.strokeAlignInside,
                 ),
               ),
-              child: const Icon(Icons.person_add,
+              child: Icon(Icons.person_add,
                   color: AppColors.onSurfaceVariant, size: 26),
             )
           else
@@ -439,5 +464,116 @@ class _PlayerCard extends StatelessWidget {
         ],
       ),
     );
+  }
+}
+
+/// Stake picker — presets + Â±50 stepper. Floor 100 (post-0016 minimum),
+/// no upper bound. The chosen amount is deducted from BOTH the creator
+/// (at create time) and each invitee (at accept time); the winner takes
+/// the full pot.
+class _StakePicker extends StatelessWidget {
+  final int value;
+  final ValueChanged<int> onChanged;
+  const _StakePicker({required this.value, required this.onChanged});
+
+  static const _presets = [100, 250, 500, 1000];
+  static const _floor = 100;
+  static const _step = 50;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final pot = value * 2;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Text('STAKE',
+                style: theme.textTheme.labelSmall?.copyWith(
+                  color: AppColors.onSurfaceVariant,
+                  letterSpacing: 2,
+                  fontWeight: FontWeight.w800,
+                )),
+            const Spacer(),
+            Text('Pot ${_fmt(pot)} XP',
+                style: theme.textTheme.labelSmall?.copyWith(
+                  color: AppColors.primary,
+                  fontWeight: FontWeight.w800,
+                )),
+          ],
+        ),
+        const SizedBox(height: 8),
+        Row(
+          children: [
+            for (final p in _presets) ...[
+              Expanded(
+                child: GestureDetector(
+                  onTap: () => onChanged(p),
+                  child: AnimatedContainer(
+                    duration: const Duration(milliseconds: 150),
+                    padding: const EdgeInsets.symmetric(vertical: 12),
+                    decoration: BoxDecoration(
+                      color: p == value
+                          ? AppColors.primary.withValues(alpha: 0.18)
+                          : AppColors.surfaceContainerLow,
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(
+                        color: p == value
+                            ? AppColors.primary
+                            : AppColors.outlineVariant,
+                      ),
+                    ),
+                    child: Center(
+                      child: Text(_fmt(p),
+                          style: theme.textTheme.labelMedium?.copyWith(
+                            fontWeight: FontWeight.w800,
+                            color: p == value
+                                ? AppColors.primary
+                                : AppColors.onSurface,
+                          )),
+                    ),
+                  ),
+                ),
+              ),
+              if (p != _presets.last) const SizedBox(width: 6),
+            ],
+          ],
+        ),
+        const SizedBox(height: 10),
+        Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            IconButton.outlined(
+              onPressed: value > _floor
+                  ? () => onChanged((value - _step).clamp(_floor, 1 << 30))
+                  : null,
+              icon: const Icon(Icons.remove),
+            ),
+            const SizedBox(width: 16),
+            Text(
+              '${_fmt(value)} XP',
+              style: theme.textTheme.titleMedium
+                  ?.copyWith(fontWeight: FontWeight.w800),
+            ),
+            const SizedBox(width: 16),
+            IconButton.outlined(
+              onPressed: () => onChanged(value + _step),
+              icon: const Icon(Icons.add),
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+
+  static String _fmt(int n) {
+    final s = n.toString();
+    final buf = StringBuffer();
+    for (var i = 0; i < s.length; i++) {
+      if (i > 0 && (s.length - i) % 3 == 0) buf.write(',');
+      buf.write(s[i]);
+    }
+    return buf.toString();
   }
 }

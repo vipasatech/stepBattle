@@ -1,4 +1,4 @@
-import 'package:flutter/material.dart';
+﻿import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
@@ -8,6 +8,8 @@ import '../../providers/auth_provider.dart';
 import '../../providers/run_session_provider.dart';
 import '../../services/permission_service.dart';
 import '../../services/run_tracking_service.dart';
+import '../../sheets/logs_viewer_sheet.dart';
+import '../../utils/app_logger.dart';
 import '../../widgets/empty_state.dart';
 
 /// Landing screen for the Track feature. Big "Start Run" button + recent
@@ -23,6 +25,34 @@ class TrackHubScreen extends ConsumerStatefulWidget {
 class _TrackHubScreenState extends ConsumerState<TrackHubScreen> {
   bool _starting = false;
   final TextEditingController _nameController = TextEditingController();
+
+  @override
+  void initState() {
+    super.initState();
+    // Retry any pending session uploads from prior runs that failed to
+    // reach Supabase (auth token expired mid-run, no connectivity at
+    // end-of-session, etc.). Fire-and-forget — we just want the
+    // history list to refresh when something new lands.
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      if (!mounted) return;
+      final synced =
+          await ref.read(runTrackingServiceProvider).syncPending();
+      if (synced > 0 && mounted) {
+        ref.invalidate(runSessionHistoryProvider);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              synced == 1
+                  ? '1 saved session synced.'
+                  : '$synced saved sessions synced.',
+            ),
+            duration: const Duration(seconds: 3),
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+      }
+    });
+  }
 
   @override
   void dispose() {
@@ -95,6 +125,14 @@ class _TrackHubScreenState extends ConsumerState<TrackHubScreen> {
           // there's nothing to pop. Send the user back to Home explicitly.
           onPressed: () => context.go('/home'),
         ),
+        actions: [
+          IconButton(
+            tooltip: 'Diagnostics',
+            icon: const Icon(Icons.bug_report_outlined),
+            onPressed: () =>
+                showLogsViewerSheet(context, focus: LogCategory.track),
+          ),
+        ],
       ),
       body: ListView(
         padding: const EdgeInsets.fromLTRB(20, 16, 20, 120),
@@ -120,7 +158,7 @@ class _TrackHubScreenState extends ConsumerState<TrackHubScreen> {
               children: [
                 Row(
                   children: [
-                    const Icon(Icons.directions_run,
+                    Icon(Icons.directions_run,
                         color: AppColors.primary, size: 28),
                     const SizedBox(width: 10),
                     Text('Run / walk session',
@@ -212,12 +250,12 @@ class _TrackHubScreenState extends ConsumerState<TrackHubScreen> {
   }
 }
 
-class _SessionTile extends StatelessWidget {
+class _SessionTile extends ConsumerWidget {
   final RunSession session;
   const _SessionTile({required this.session});
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final theme = Theme.of(context);
     final km = (session.distanceMeters / 1000);
     final dur = _formatDuration(session.durationSeconds);
@@ -226,8 +264,12 @@ class _SessionTile extends StatelessWidget {
       borderRadius: BorderRadius.circular(16),
       child: InkWell(
         borderRadius: BorderRadius.circular(16),
-        onTap: () =>
-            GoRouter.of(context).go('/track/session/${session.id}'),
+        // Pending sessions only live in Hive — the detail screen reads
+        // from Supabase, so navigating there would 404. Instead, trigger
+        // an immediate retry sync.
+        onTap: session.isPending
+            ? () => _retrySync(context, ref)
+            : () => GoRouter.of(context).go('/track/session/${session.id}'),
         child: Padding(
           padding: const EdgeInsets.all(14),
           child: Row(
@@ -239,7 +281,7 @@ class _SessionTile extends StatelessWidget {
                   color: AppColors.primaryBrand.withValues(alpha: 0.15),
                   borderRadius: BorderRadius.circular(12),
                 ),
-                child: const Icon(Icons.directions_run,
+                child: Icon(Icons.directions_run,
                     color: AppColors.primary, size: 20),
               ),
               const SizedBox(width: 12),
@@ -268,7 +310,31 @@ class _SessionTile extends StatelessWidget {
                   ],
                 ),
               ),
-              if (session.source != 'pedometer')
+              // Pending-sync pill takes priority over the source pill —
+              // a pending session hasn't been confirmed by the server
+              // yet, which is more important for the user to know than
+              // whether the distance came from GPS or pedometer.
+              if (session.isPending)
+                Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  decoration: BoxDecoration(
+                    color: AppColors.amber.withValues(alpha: 0.18),
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(
+                        color: AppColors.amber.withValues(alpha: 0.45)),
+                  ),
+                  child: Text(
+                    'PENDING SYNC',
+                    style: theme.textTheme.labelSmall?.copyWith(
+                      color: AppColors.amber,
+                      fontWeight: FontWeight.w800,
+                      letterSpacing: 1,
+                      fontSize: 9.5,
+                    ),
+                  ),
+                )
+              else if (session.source != 'pedometer')
                 Container(
                   padding:
                       const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
@@ -286,11 +352,43 @@ class _SessionTile extends StatelessWidget {
                   ),
                 ),
               const SizedBox(width: 6),
-              const Icon(Icons.chevron_right,
+              Icon(Icons.chevron_right,
                   size: 18, color: AppColors.onSurfaceVariant),
             ],
           ),
         ),
+      ),
+    );
+  }
+
+  Future<void> _retrySync(BuildContext context, WidgetRef ref) async {
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('Retrying sync…'),
+        duration: Duration(seconds: 1),
+        behavior: SnackBarBehavior.floating,
+      ),
+    );
+    final synced =
+        await ref.read(runTrackingServiceProvider).syncPending();
+    if (!context.mounted) return;
+    ref.invalidate(runSessionHistoryProvider);
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          synced > 0
+              ? 'Synced $synced session${synced == 1 ? '' : 's'}.'
+              : 'Still pending — open Diagnostics (top-right) for the error.',
+        ),
+        duration: Duration(seconds: synced > 0 ? 3 : 4),
+        behavior: SnackBarBehavior.floating,
+        action: synced == 0
+            ? SnackBarAction(
+                label: 'Logs',
+                onPressed: () =>
+                    showLogsViewerSheet(context, focus: LogCategory.track),
+              )
+            : null,
       ),
     );
   }

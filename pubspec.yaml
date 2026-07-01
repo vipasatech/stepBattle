@@ -80,6 +80,32 @@ dependencies:
   supabase_flutter: ^2.8.0
   flutter_dotenv: ^5.2.1
 
+  # In-app XP purchases (migration 0016). ~2% MDR vs Play's 15–30% and
+  # native UPI support; see lib/services/razorpay_service.dart for the
+  # end-to-end flow + Edge Function spec.
+  razorpay_flutter: ^1.3.7
+
+  # Battle Status page (C.16): users can swap in their own photo as the
+  # background. image_picker handles the gallery/camera selection.
+  image_picker: ^1.1.2
+
+  # Community Material Design Icons — bundles the ~6000-glyph MDI set so
+  # we can use icons Flutter's built-in Material Icons doesn't ship, e.g.
+  # `MdiIcons.swordCross` (the crossed-swords glyph used for the
+  # Battles bottom-nav tab).
+  material_design_icons_flutter: ^7.0.7296
+
+  # Share cards (Track session, Battle, Streak): render a custom card
+  # widget off-screen to a PNG and hand it to the native share sheet.
+  # `share_plus` is the share sheet itself; `path_provider` gives us the
+  # cache dir to write the PNG to before sharing; `url_launcher` is the
+  # fallback path to the Instagram Stories deeplink; `gal` writes the
+  # PNG straight to the device Photos/Gallery for the "Save" action.
+  share_plus: ^10.1.4
+  path_provider: ^2.1.5
+  url_launcher: ^6.3.1
+  gal: ^2.3.1
+
 dev_dependencies:
   flutter_test:
     sdk: flutter
@@ -114,4 +140,13 @@ flutter:
     - assets/logos/logo.png
     - assets/logos/logo_square.png
     - assets/animations/splash_runner.mp4
+    # Battleground arena art — two packs, 4 time-of-day variants each.
+    #   • battleground/   — forest (portrait, 1:2) — multi-tile vertical world
+    #   • horizontalBg/   — city   (landscape, 2:1) — single tile + InteractiveViewer
+    # Pack picked by user (arenaPackPrefProvider), time-of-day by clock.
+    - assets/images/battleground/
+    - assets/images/horizontalBg/
+    # 12 runner avatars (bird's-eye view to match the battleground camera).
+    # Picked by the user in the avatar picker; stored as battle_avatar_id.
+    - assets/images/avatars/
     - .env

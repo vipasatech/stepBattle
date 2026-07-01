@@ -64,6 +64,7 @@ class BattleService {
     required DateTime endTime,
     required String createdBy,
     BattleVisibility visibility = BattleVisibility.private,
+    int stakeXp = 0,
   }) async {
     final now = DateTime.now();
     if (!endTime.isAfter(startTime)) {
@@ -73,13 +74,21 @@ class BattleService {
       // Tolerate small clock skew; reject anything meaningfully in the past.
       throw ArgumentError('startTime cannot be in the past');
     }
-    final xp = type == BattleType.oneVsOne
-        ? AppConstants.xpWin1v1
-        : AppConstants.xpWinGroup;
+    if (stakeXp < 0) {
+      throw ArgumentError('stakeXp must be ≥ 0');
+    }
+    // Stake-based battles must clear the 100-XP minimum (XP economy rule
+    // in migration 0016). Non-stake battles (free play) still allowed.
+    if (stakeXp > 0 && stakeXp < 100) {
+      throw ArgumentError('Minimum stake is 100 XP.');
+    }
     final joinCode = _generateJoinCode();
 
     try {
       // 1. Insert the battle row with the user-chosen window.
+      //    xp_reward is the LEGACY per-side prize; we keep writing it for
+      //    backwards compatibility with the old payout path but the new
+      //    `stake_xp` column drives migration 0017's settle_stake_battle.
       final battleRow = await _supabase
           .from('battles')
           .insert({
@@ -87,7 +96,12 @@ class BattleService {
             'status': 'pending',
             'start_time': startTime.toUtc().toIso8601String(),
             'end_time': endTime.toUtc().toIso8601String(),
-            'xp_reward': xp,
+            'xp_reward': stakeXp > 0
+                ? 0
+                : (type == BattleType.oneVsOne
+                    ? AppConstants.xpWin1v1
+                    : AppConstants.xpWinGroup),
+            'stake_xp': stakeXp,
             'created_by': createdBy,
             'visibility': visibility == BattleVisibility.public
                 ? 'public'
@@ -98,7 +112,29 @@ class BattleService {
           .single();
       final battleId = battleRow['id'] as String;
 
-      // 2. Insert participants — creator auto-accepted, others pending.
+      // 2. Snapshot each participant's currently-selected battle avatar
+      //    (migration 0019) so a later picker change doesn't retroactively
+      //    swap the runner on this battle. One round-trip pulls every
+      //    user's avatar id; missing rows fall back to 'avatar_01'.
+      final avatarById = <String, String>{};
+      try {
+        final rows = await _supabase
+            .from('profiles')
+            .select('id, battle_avatar_id')
+            .inFilter('id', participants.map((p) => p.userId).toList());
+        for (final r in rows as List) {
+          final m = r as Map<String, dynamic>;
+          avatarById[m['id'] as String] =
+              (m['battle_avatar_id'] as String?) ?? 'avatar_01';
+        }
+      } catch (e) {
+        // Non-fatal — battle still creates with default avatars. Log and
+        // continue so a transient profiles read doesn't block the user.
+        AppLogger.battle.w('createBattle:avatar_snapshot_failed',
+            fields: {'err': e.toString()});
+      }
+
+      // 3. Insert participants — creator auto-accepted, others pending.
       final participantRows = participants.map((p) {
         final isCreator = p.userId == createdBy;
         return {
@@ -109,9 +145,21 @@ class BattleService {
           'current_steps': 0,
           'is_winner': false,
           'invite_status': isCreator ? 'accepted' : 'pending',
+          'battle_avatar_id': avatarById[p.userId] ?? 'avatar_01',
         };
       }).toList();
       await _supabase.from('battle_participants').insert(participantRows);
+
+      // 3. Charge the creator's stake immediately. They're auto-accepted
+      //    so they're committed the moment the battle exists — and we
+      //    want the pot to grow predictably as each invitee accepts.
+      if (stakeXp > 0) {
+        await _chargeStake(
+          battleId: battleId,
+          userId: createdBy,
+          stake: stakeXp,
+        );
+      }
 
       AppLogger.battle.i('createBattle', fields: {
         'battleId': battleId,
@@ -120,7 +168,7 @@ class BattleService {
         'participantCount': participants.length,
         'startTime': startTime.toIso8601String(),
         'endTime': endTime.toIso8601String(),
-        'xpReward': xp,
+        'stakeXp': stakeXp,
         'visibility': visibility.name,
         'joinCode': joinCode,
       });
@@ -330,6 +378,20 @@ class BattleService {
     AppLogger.battle.i('acceptInvite',
         fields: {'battleId': battleId, 'userId': userId});
     try {
+      // Stake deduction (migration 0016): if the battle has a non-zero
+      // stake_xp and this participant hasn't yet paid, charge it via
+      // credit_user_xp. Done BEFORE marking accepted so a failure here
+      // (insufficient XP) keeps the participant in pending status.
+      final preBattle = await _fetchBattleStakeOnly(battleId);
+      final stake = preBattle?.stakeXp ?? 0;
+      if (stake > 0) {
+        await _chargeStake(
+          battleId: battleId,
+          userId: userId,
+          stake: stake,
+        );
+      }
+
       // Mark this participant accepted.
       await _supabase
           .from('battle_participants')
@@ -350,6 +412,45 @@ class BattleService {
       final allAccepted = battle.participants.every(
           (p) => p.inviteStatus == ParticipantInviteStatus.accepted);
       if (!allAccepted) return;
+
+      // PRIVATE battles: the creator-chosen start_time is overridden by
+      // the moment of full acceptance. End time stays absolute (per
+      // user spec) — so accepting late just shortens the battle window,
+      // it doesn't extend it.
+      //
+      // PUBLIC battles: keep the creator's chosen start_time exactly so
+      // anyone discovering the battle in /battles/discover sees the
+      // same scheduled window regardless of who joins when.
+      if (battle.visibility == BattleVisibility.private) {
+        final now = DateTime.now();
+        if (battle.endTime.isAfter(now)) {
+          // Snap start_time to NOW and activate immediately.
+          await _supabase.from('battles').update({
+            'start_time': now.toUtc().toIso8601String(),
+          }).eq('id', battleId);
+          // Re-fetch so _activateBattle sees the new start_time.
+          final refreshed = await _fetchBattle(battleId);
+          if (refreshed != null) {
+            await _activateBattle(refreshed);
+          }
+          AppLogger.battle.i('acceptInvite:privateAcceptStart', fields: {
+            'battleId': battleId,
+            'snappedStart': now.toIso8601String(),
+            'endTime': battle.endTime.toIso8601String(),
+          });
+          return;
+        }
+        // End_time has already passed by the time invite was accepted —
+        // cancel the battle and refund stakes so the user isn't left
+        // with a phantom battle they "joined" too late.
+        AppLogger.battle.w('acceptInvite:privateEndExpired',
+            fields: {'battleId': battleId});
+        await refundAllStakes(battleId);
+        await _supabase
+            .from('battles')
+            .update({'status': 'cancelled'}).eq('id', battleId);
+        return;
+      }
 
       if (battle.startTime.isAfter(DateTime.now())) {
         await _scheduleBattle(battle);
@@ -377,7 +478,10 @@ class BattleService {
       if (battle.status != BattleStatus.pending) return;
 
       if (battle.type == BattleType.oneVsOne) {
-        // 1v1 — reject cancels the whole battle.
+        // 1v1 — reject cancels the whole battle. Refund any paid stakes
+        // (in a 1v1 typically only the creator has paid by this point;
+        // the invitee hasn't accepted so no stake from them).
+        await refundAllStakes(battleId);
         await _supabase
             .from('battles')
             .update({'status': 'cancelled'}).eq('id', battleId);
@@ -533,7 +637,9 @@ class BattleService {
   }
 
   /// Creator cancels their own pending battle before anyone accepts.
+  /// Any participants who already paid their stake get refunded.
   Future<void> cancelBattle(String battleId) async {
+    await refundAllStakes(battleId);
     await _supabase
         .from('battles')
         .update({'status': 'cancelled'})
@@ -541,8 +647,8 @@ class BattleService {
         .eq('status', 'pending');
   }
 
-  /// Delete a pending battle. Marks cancelled, clears battle_invite
-  /// notifications.
+  /// Delete a pending battle. Marks cancelled, refunds any paid stakes,
+  /// and clears battle_invite notifications.
   Future<void> deletePendingBattle({
     required String battleId,
     required String actorId,
@@ -556,6 +662,7 @@ class BattleService {
       throw StateError('Only pending battles can be deleted.');
     }
 
+    await refundAllStakes(battleId);
     await _supabase
         .from('battles')
         .update({'status': 'cancelled'}).eq('id', battleId);
@@ -1359,4 +1466,109 @@ class BattleService {
               .toList();
         });
   }
+
+  // ---------------------------------------------------------------------------
+  // Stake helpers (migration 0016 / 0017)
+  // ---------------------------------------------------------------------------
+
+  /// Light fetch that only pulls `stake_xp` — used inside [acceptInvite] so
+  /// we don't drag the full participant tree just to read the stake.
+  Future<_StakeInfo?> _fetchBattleStakeOnly(String battleId) async {
+    final row = await _supabase
+        .from('battles')
+        .select('stake_xp')
+        .eq('id', battleId)
+        .maybeSingle();
+    if (row == null) return null;
+    return _StakeInfo(stakeXp: (row['stake_xp'] as num?)?.toInt() ?? 0);
+  }
+
+  /// Deducts the per-participant stake via the `credit_user_xp` SECURITY
+  /// DEFINER function and flags `stake_paid = true` so a re-accept doesn't
+  /// double-charge. Throws if the user has insufficient XP balance.
+  Future<void> _chargeStake({
+    required String battleId,
+    required String userId,
+    required int stake,
+  }) async {
+    // Read the user's current balance to fail fast with a clean error
+    // message; the SECURITY DEFINER function would clamp at zero
+    // otherwise, leaving the user thinking they joined while the pot
+    // didn't actually grow.
+    final profile = await _supabase
+        .from('profiles')
+        .select('total_xp')
+        .eq('id', userId)
+        .maybeSingle();
+    final balance = (profile?['total_xp'] as num?)?.toInt() ?? 0;
+    if (balance < stake) {
+      throw const InsufficientXpException();
+    }
+
+    // Skip if already paid (re-accept after a retry / accidental tap).
+    final part = await _supabase
+        .from('battle_participants')
+        .select('stake_paid')
+        .eq('battle_id', battleId)
+        .eq('user_id', userId)
+        .maybeSingle();
+    if (part?['stake_paid'] == true) return;
+
+    await _supabase.rpc('credit_user_xp', params: {
+      'p_user_id': userId,
+      'p_delta': -stake,
+      'p_reason': 'battle_stake',
+      'p_context': {'battle_id': battleId},
+    });
+    await _supabase
+        .from('battle_participants')
+        .update({'stake_paid': true})
+        .eq('battle_id', battleId)
+        .eq('user_id', userId);
+  }
+
+  /// Refund every paid-up participant. Called when a pending battle is
+  /// cancelled by the creator OR rejected in a way that ends the battle
+  /// (1v1 reject, last invitee dropping). Idempotent via stake_paid flag.
+  Future<void> refundAllStakes(String battleId) async {
+    final rows = await _supabase
+        .from('battle_participants')
+        .select('user_id, stake_paid')
+        .eq('battle_id', battleId)
+        .eq('stake_paid', true);
+
+    final battle = await _fetchBattleStakeOnly(battleId);
+    final stake = battle?.stakeXp ?? 0;
+    if (stake <= 0) return;
+
+    for (final r in rows as List) {
+      final uid = (r as Map)['user_id'] as String;
+      await _supabase.rpc('credit_user_xp', params: {
+        'p_user_id': uid,
+        'p_delta': stake,
+        'p_reason': 'battle_refund',
+        'p_context': {'battle_id': battleId},
+      });
+      await _supabase
+          .from('battle_participants')
+          .update({'stake_paid': false})
+          .eq('battle_id', battleId)
+          .eq('user_id', uid);
+    }
+  }
+}
+
+class _StakeInfo {
+  final int stakeXp;
+  const _StakeInfo({required this.stakeXp});
+}
+
+/// Thrown by [BattleService.acceptInvite] (and similar stake-entry paths)
+/// when the user's `profiles.total_xp` balance is below the battle's
+/// `stake_xp`. UI catches this and surfaces a "Not enough XP — buy more"
+/// prompt instead of a generic error.
+class InsufficientXpException implements Exception {
+  const InsufficientXpException();
+  @override
+  String toString() => 'Not enough XP. Buy XP to join.';
 }

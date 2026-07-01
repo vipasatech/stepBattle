@@ -116,7 +116,9 @@ class NotificationService {
       'battle_result' => '/battles',
       'level_up' => '/home',
       'clan_battle_result' => '/clan',
-      'mission_reset' => '/missions',
+      // Missions tab retired (migration 0016) — surface mission resets
+      // on Home where the new daily target card lives.
+      'mission_reset' => '/home',
       'friend_request' => '/leaderboard',
       _ => null,
     };

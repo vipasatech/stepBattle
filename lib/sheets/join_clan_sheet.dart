@@ -1,4 +1,4 @@
-import 'package:flutter/material.dart';
+﻿import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../config/colors.dart';
@@ -64,7 +64,7 @@ class _JoinClanSheetState extends ConsumerState<JoinClanSheet> {
     return Container(
       constraints: BoxConstraints(
           maxHeight: MediaQuery.of(context).size.height * 0.85),
-      decoration: const BoxDecoration(
+      decoration: BoxDecoration(
         color: AppColors.surfaceContainer,
         borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
       ),
@@ -96,7 +96,7 @@ class _JoinClanSheetState extends ConsumerState<JoinClanSheet> {
                         onSubmitted: (_) => _search(),
                         decoration: InputDecoration(
                           hintText: 'Enter Clan ID (e.g. #CL7X9) or clan name',
-                          prefixIcon: const Icon(Icons.search,
+                          prefixIcon: Icon(Icons.search,
                               color: AppColors.outline, size: 20),
                           contentPadding:
                               const EdgeInsets.symmetric(vertical: 14),
@@ -127,7 +127,7 @@ class _JoinClanSheetState extends ConsumerState<JoinClanSheet> {
           // Results
           Flexible(
             child: _searching
-                ? const Center(
+                ? Center(
                     child:
                         CircularProgressIndicator(color: AppColors.primary))
                 : _results.isEmpty
@@ -188,7 +188,7 @@ class _ClanResultRow extends StatelessWidget {
 
   const _ClanResultRow({required this.clan, this.onJoin});
 
-  static const _colors = [
+  static final _colors = <Color>[
     AppColors.error,
     AppColors.success,
     AppColors.tertiary,

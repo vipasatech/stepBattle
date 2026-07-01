@@ -1,9 +1,17 @@
 import 'dart:ui';
 import 'package:flutter/material.dart';
+
 import '../../../config/colors.dart';
 import '../../../models/leaderboard_entry_model.dart';
+import '../../../widgets/avatar_circle.dart';
 
-/// Floating card pinned above the bottom nav showing the user's own rank.
+/// Sticky "You" card pinned above the bottom nav.
+///
+/// The leaderboard screen only renders this when the signed-in user
+/// ranks OUTSIDE the top 5 — if they're already visible in the main
+/// list, this card would just duplicate the row. Visual matches the
+/// in-list [RankRow] with a violet tint and a "You" label so it
+/// reads as continuous with the board above.
 class FloatingRankCard extends StatelessWidget {
   final LeaderboardEntry entry;
 
@@ -12,110 +20,95 @@ class FloatingRankCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
 
     return ClipRRect(
-      borderRadius: BorderRadius.circular(24),
+      borderRadius: BorderRadius.circular(20),
       child: BackdropFilter(
         filter: ImageFilter.blur(sigmaX: 20, sigmaY: 20),
         child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+          padding:
+              const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
           decoration: BoxDecoration(
-            color: AppColors.glassBackground,
-            borderRadius: BorderRadius.circular(24),
+            color: AppColors.primary.withValues(alpha: 0.14),
+            borderRadius: BorderRadius.circular(20),
             border: Border.all(
-                color: AppColors.primary.withValues(alpha: 0.2)),
+              color: AppColors.primary.withValues(alpha: 0.3),
+            ),
             boxShadow: [
               BoxShadow(
-                color: Colors.black.withValues(alpha: 0.5),
-                blurRadius: 30,
-                offset: const Offset(0, 10),
+                color: Colors.black.withValues(alpha: 0.3),
+                blurRadius: 20,
+                offset: const Offset(0, 8),
               ),
             ],
           ),
           child: Row(
             children: [
-              // Rank number box
-              Container(
-                width: 52,
-                height: 52,
-                decoration: BoxDecoration(
-                  color: AppColors.primary.withValues(alpha: 0.2),
-                  borderRadius: BorderRadius.circular(16),
-                  border: Border.all(
-                      color: AppColors.primary.withValues(alpha: 0.3)),
-                ),
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    Text('Rank',
-                        style: TextStyle(
-                          fontFamily: 'Space Grotesk',
-                          fontSize: 9,
-                          fontWeight: FontWeight.w900,
-                          color: AppColors.primaryFixedDim,
-                        )),
-                    Text('#${entry.rank}',
-                        style: theme.textTheme.titleMedium?.copyWith(
-                          color: AppColors.primary,
-                          fontWeight: FontWeight.w700,
-                          height: 1.0,
-                        )),
-                  ],
-                ),
-              ),
-              const SizedBox(width: 14),
-
-              // Name + XP
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      'You (${entry.displayName})',
-                      style: theme.textTheme.titleMedium?.copyWith(
-                        fontWeight: FontWeight.w700,
-                      ),
+              // Rank cell — same 36 dp width as RankRow so the sticky
+              // card visually threads into the list above.
+              SizedBox(
+                width: 36,
+                child: Center(
+                  child: Text(
+                    '${entry.rank}',
+                    textAlign: TextAlign.center,
+                    style: theme.textTheme.titleSmall?.copyWith(
+                      color: AppColors.primary,
+                      fontWeight: FontWeight.w900,
                     ),
-                    Text(
-                      '${_fmt(entry.totalXP)} XP',
-                      style: theme.textTheme.titleSmall?.copyWith(
-                        color: AppColors.primary,
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-
-              // Trend
-              Column(
-                crossAxisAlignment: CrossAxisAlignment.end,
-                children: [
-                  Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Icon(Icons.trending_up,
-                          size: 14, color: AppColors.success),
-                      const SizedBox(width: 3),
-                      Text('12 spots',
-                          style: theme.textTheme.labelSmall?.copyWith(
-                            color: AppColors.success,
-                            fontWeight: FontWeight.w900,
-                          )),
-                    ],
                   ),
-                  Text('this week',
-                      style: theme.textTheme.labelSmall?.copyWith(
-                        color: AppColors.onSurfaceVariant,
-                        fontSize: 9,
-                      )),
-                ],
+                ),
+              ),
+              const SizedBox(width: 10),
+
+              AvatarCircle(
+                radius: 20,
+                imageUrl: entry.avatarURL,
+                initials: _initials(entry.displayName),
+                borderColor: AppColors.primary.withValues(alpha: 0.5),
+                borderWidth: 2,
+              ),
+              const SizedBox(width: 12),
+
+              Expanded(
+                child: Text(
+                  'You',
+                  style: theme.textTheme.titleSmall?.copyWith(
+                    fontWeight: FontWeight.w900,
+                    color: AppColors.primary,
+                  ),
+                ),
+              ),
+
+              Text(
+                _fmt(entry.totalXP),
+                style: theme.textTheme.titleSmall?.copyWith(
+                  fontWeight: FontWeight.w800,
+                  fontFamily: 'Manrope',
+                  color: scheme.onSurface,
+                ),
+              ),
+              const SizedBox(width: 8),
+              Icon(
+                Icons.chevron_right,
+                size: 18,
+                color: AppColors.primary.withValues(alpha: 0.7),
               ),
             ],
           ),
         ),
       ),
     );
+  }
+
+  static String _initials(String name) {
+    if (name.isEmpty) return '?';
+    final parts = name.trim().split(RegExp(r'\s+'));
+    if (parts.length >= 2) {
+      return '${parts[0][0]}${parts[1][0]}'.toUpperCase();
+    }
+    return name[0].toUpperCase();
   }
 
   static String _fmt(int n) {

@@ -51,6 +51,28 @@ class RunSession {
   /// indoors / GPS denied. Stored as a GeoJSON LineString in `path` jsonb.
   final List<RunPoint> path;
 
+  /// True when this session has NOT been confirmed by the server — it
+  /// lives only in the local Hive pending queue and the next
+  /// `syncPending()` sweep will try to upload it. Set by
+  /// [fromPendingPayload]; always false for [fromSupabaseRow] rows.
+  /// UI uses this to render a "Pending sync" pill so the user sees the
+  /// run isn't lost.
+  final bool isPending;
+
+  /// Hive key the pending session is stored under (when [isPending]).
+  /// Null for server-confirmed rows. The detail screen uses this to
+  /// retry the upload on demand.
+  final String? pendingKey;
+
+  /// Optional user-written note captured at save time ("How'd it go?").
+  /// Stored in `track_sessions.description` (migration 0022).
+  final String? description;
+
+  /// Public URLs of any photos the user attached at save time, in the
+  /// order they chose. Stored in `track_sessions.media_urls`. Empty
+  /// when no media were attached.
+  final List<String> mediaUrls;
+
   const RunSession({
     required this.id,
     required this.userId,
@@ -68,7 +90,64 @@ class RunSession {
     this.unverifiedSteps = 0,
     this.trackState = '',
     this.path = const [],
+    this.isPending = false,
+    this.pendingKey,
+    this.description,
+    this.mediaUrls = const [],
   });
+
+  /// Construct a [RunSession] from the same payload that gets stored in
+  /// Hive while a session waits to sync. The payload is the row we
+  /// intended to insert into Supabase, so field names match
+  /// [fromSupabaseRow] — except the server-generated `id` is absent
+  /// (we synthesise one from the Hive key so the UI list has a stable
+  /// identity).
+  factory RunSession.fromPendingPayload(
+    Map<String, dynamic> d,
+    String pendingKey,
+  ) {
+    final pathRaw = d['path'];
+    final pathPoints = <RunPoint>[];
+    if (pathRaw is Map &&
+        pathRaw['type'] == 'LineString' &&
+        pathRaw['coordinates'] is List) {
+      for (final c in pathRaw['coordinates'] as List) {
+        if (c is List && c.length >= 2) {
+          final lng = (c[0] as num).toDouble();
+          final lat = (c[1] as num).toDouble();
+          pathPoints.add(RunPoint(
+            lat: lat,
+            lng: lng,
+            ts: DateTime.fromMillisecondsSinceEpoch(0),
+            accuracyMeters: 0,
+          ));
+        }
+      }
+    }
+    return RunSession(
+      id: 'pending:$pendingKey',
+      userId: d['user_id'] as String,
+      name: d['name'] as String?,
+      startedAt: DateTime.parse(d['started_at'] as String),
+      endedAt: d['ended_at'] == null
+          ? null
+          : DateTime.parse(d['ended_at'] as String),
+      durationSeconds: (d['duration_seconds'] as num?)?.toInt() ?? 0,
+      steps: (d['steps'] as num?)?.toInt() ?? 0,
+      distanceMeters: (d['distance_meters'] as num?)?.toDouble() ?? 0,
+      calories: (d['calories'] as num?)?.toInt() ?? 0,
+      avgPaceSecPerKm: (d['avg_pace_sec_per_km'] as num?)?.toDouble(),
+      source: d['source'] as String? ?? 'pedometer',
+      distanceMetersVerified:
+          (d['distance_meters_verified'] as num?)?.toDouble() ?? 0,
+      distanceMetersEstimated:
+          (d['distance_meters_estimated'] as num?)?.toDouble() ?? 0,
+      unverifiedSteps: (d['unverified_steps'] as num?)?.toInt() ?? 0,
+      path: pathPoints,
+      isPending: true,
+      pendingKey: pendingKey,
+    );
+  }
 
   /// What the UI should render as the title. Falls back to a date-based label
   /// if [name] is null or blank (covers legacy rows + safety).
@@ -110,6 +189,11 @@ class RunSession {
         }
       }
     }
+    final mediaRaw = d['media_urls'];
+    final mediaUrls = mediaRaw is List
+        ? mediaRaw.map((e) => e.toString()).toList(growable: false)
+        : const <String>[];
+
     return RunSession(
       id: d['id'] as String,
       userId: d['user_id'] as String,
@@ -130,6 +214,8 @@ class RunSession {
           (d['distance_meters_estimated'] as num?)?.toDouble() ?? 0,
       unverifiedSteps: (d['unverified_steps'] as num?)?.toInt() ?? 0,
       path: pathPoints,
+      description: d['description'] as String?,
+      mediaUrls: mediaUrls,
     );
   }
 

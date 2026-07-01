@@ -1,4 +1,4 @@
-import 'package:flutter/material.dart';
+﻿import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../config/colors.dart';
 import '../providers/friend_provider.dart';
@@ -18,6 +18,11 @@ class FriendsAppBarButton extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final pendingCount = ref.watch(incomingRequestCountProvider);
+    // Pull surface + on-surface colours from Theme so this widget is
+    // subscribed to the InheritedWidget — without that dependency, the
+    // button background was stuck on the previous theme until the next
+    // touch event. Same fix as `_BellButton` in home_screen.dart.
+    final scheme = Theme.of(context).colorScheme;
 
     return GestureDetector(
       onTap: () => showModalBottomSheet(
@@ -35,14 +40,13 @@ class FriendsAppBarButton extends ConsumerWidget {
       child: Container(
         padding: const EdgeInsets.all(8),
         decoration: BoxDecoration(
-          color: AppColors.surfaceContainerHigh,
+          color: scheme.surfaceContainerHigh,
           borderRadius: BorderRadius.circular(12),
         ),
         child: Stack(
           clipBehavior: Clip.none,
           children: [
-            const Icon(Icons.group_outlined,
-                color: AppColors.onSurface, size: 20),
+            Icon(Icons.group_outlined, color: scheme.onSurface, size: 20),
             if (pendingCount > 0)
               Positioned(
                 top: -4,
@@ -53,10 +57,9 @@ class FriendsAppBarButton extends ConsumerWidget {
                   constraints:
                       const BoxConstraints(minWidth: 16, minHeight: 16),
                   decoration: BoxDecoration(
-                    color: AppColors.primary,
+                    color: scheme.primary,
                     borderRadius: BorderRadius.circular(10),
-                    border: Border.all(
-                        color: AppColors.background, width: 1.5),
+                    border: Border.all(color: scheme.surface, width: 1.5),
                   ),
                   child: Text(
                     pendingCount > 9 ? '9+' : '$pendingCount',

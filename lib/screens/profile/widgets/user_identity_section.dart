@@ -1,17 +1,29 @@
-import 'package:flutter/material.dart';
+﻿import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../config/colors.dart';
 import '../../../models/user_model.dart';
+import '../../../providers/battle_provider.dart';
+import '../../../providers/leaderboard_provider.dart';
 import '../../../widgets/avatar_circle.dart';
 
 /// Profile header: large avatar, display name with edit icon, 4 stat pills.
-class UserIdentitySection extends StatelessWidget {
+class UserIdentitySection extends ConsumerWidget {
   final UserModel user;
 
   const UserIdentitySection({super.key, required this.user});
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final theme = Theme.of(context);
+    // Pull rank from myRankProvider — UserModel.rank is always 0 since
+    // there's no `rank` column on profiles; rank is a computed
+    // leaderboard position.
+    final liveRank = ref.watch(myRankProvider).valueOrNull?.rank ?? 0;
+    // B/W Ratio — fetched from battle_participants. Returns null when
+    // the user hasn't completed any battles yet; we render a "no data"
+    // chip in that case rather than a misleading 0%.
+    final stats = ref.watch(battleWinStatsProvider(user.userId)).valueOrNull;
+    final ratio = stats == null ? null : battleWinRatioOf(stats);
 
     return Column(
       children: [
@@ -23,7 +35,7 @@ class UserIdentitySection extends StatelessWidget {
               padding: const EdgeInsets.all(3),
               decoration: BoxDecoration(
                 shape: BoxShape.circle,
-                gradient: const LinearGradient(
+                gradient: LinearGradient(
                   colors: [AppColors.primary, AppColors.tertiary],
                   begin: Alignment.topLeft,
                   end: Alignment.bottomRight,
@@ -45,7 +57,7 @@ class UserIdentitySection extends StatelessWidget {
               child: Container(
                 width: 36,
                 height: 36,
-                decoration: const BoxDecoration(
+                decoration: BoxDecoration(
                   color: AppColors.primary,
                   shape: BoxShape.circle,
                 ),
@@ -84,7 +96,14 @@ class UserIdentitySection extends StatelessWidget {
                 label: '${user.currentStreak} Day Streak',
                 color: AppColors.primary),
             _StatChip(
-                label: 'Rank #${user.rank}', color: AppColors.secondary),
+                label: liveRank > 0 ? 'Rank #$liveRank' : 'Rank --',
+                color: AppColors.secondary),
+            _StatChip(
+              label: ratio == null
+                  ? 'B/W Ratio --'
+                  : 'B/W ${(ratio * 100).toStringAsFixed(0)}%',
+              color: AppColors.amber,
+            ),
           ],
         ),
       ],

@@ -75,6 +75,14 @@ class ClanModel {
   final List<String> pendingInviteIds;
 
   final int totalClanXP;
+
+  /// Spendable Clan XP treasury (migration 0016). Funded by:
+  ///   • +100 per clan member, per clan battle played
+  ///   • Pot transfer when this clan wins a clan battle
+  ///   • Captain-initiated Razorpay top-up
+  /// Spent by the captain when creating a clan battle (the stake).
+  final int clanXp;
+
   final String? activeBattleId;
   final DateTime createdAt;
   final int maxMembers;
@@ -88,6 +96,7 @@ class ClanModel {
     required this.memberIds,
     this.pendingInviteIds = const [],
     this.totalClanXP = 0,
+    this.clanXp = 0,
     this.activeBattleId,
     required this.createdAt,
     this.maxMembers = 10,
@@ -157,6 +166,7 @@ class ClanModel {
       memberIds: memberIds,
       pendingInviteIds: pendingInviteIds,
       totalClanXP: (d['total_clan_xp'] as num?)?.toInt() ?? 0,
+      clanXp: (d['clan_xp'] as num?)?.toInt() ?? 0,
       activeBattleId: d['active_battle_id'] as String?,
       createdAt: parseTs(d['created_at']),
       maxMembers: (d['max_members'] as num?)?.toInt() ?? 10,

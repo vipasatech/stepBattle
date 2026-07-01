@@ -111,7 +111,7 @@ class MapPreviewCard extends ConsumerWidget {
                               .withValues(alpha: 0.92),
                           borderRadius: BorderRadius.circular(12),
                           border: Border.all(
-                            color: Colors.white.withValues(alpha: 0.06),
+                            color: AppColors.onSurface.withValues(alpha: 0.06),
                           ),
                         ),
                         child: Row(

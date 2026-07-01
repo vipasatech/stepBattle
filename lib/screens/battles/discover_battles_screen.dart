@@ -1,4 +1,4 @@
-import 'package:flutter/material.dart';
+﻿import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
@@ -13,7 +13,7 @@ import '../../widgets/status_pill.dart';
 /// Public lobby list for battle discovery (Q10/Q12).
 ///
 /// • Pending public battles: joinable instantly.
-/// • Active public battles ≤24h old: shown but flagged "Full" so people
+/// • Active public battles â‰¤24h old: shown but flagged "Full" so people
 ///   see what just kicked off.
 /// • After 24h, active public battles drop off the feed.
 class DiscoverBattlesScreen extends ConsumerStatefulWidget {
@@ -86,7 +86,7 @@ class _DiscoverBattlesScreenState extends ConsumerState<DiscoverBattlesScreen> {
           future: _future,
           builder: (context, snap) {
             if (snap.connectionState != ConnectionState.done) {
-              return const Center(
+              return Center(
                   child: CircularProgressIndicator(color: AppColors.primary));
             }
             if (snap.hasError) {
@@ -193,7 +193,7 @@ class _PublicLobbyCard extends StatelessWidget {
                     color: AppColors.onSurfaceVariant.withValues(alpha: 0.2),
                     borderRadius: BorderRadius.circular(8),
                   ),
-                  child: const Text(
+                  child: Text(
                     'FULL',
                     style: TextStyle(
                       color: AppColors.onSurfaceVariant,

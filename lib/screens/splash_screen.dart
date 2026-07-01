@@ -4,8 +4,10 @@ import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import 'package:google_fonts/google_fonts.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../config/colors.dart';
 import '../providers/auth_provider.dart';
 
 /// Cold-launch splash. Static brand logo centered, with three concentric
@@ -142,11 +144,17 @@ class _SplashScreenState extends ConsumerState<SplashScreen>
             color: const Color(0xFF7C3AED).withValues(alpha: 0.55),
           ),
 
-          // Spiral / pulse rings + centered static logo.
+          // Spiral / pulse rings + centered static logo. Container size
+          // and scale formula chosen so the outermost ring at its peak
+          // (~231 dp) sits about 1.45× the logo's 160 dp — matching the
+          // tight ring spread visible in the native Android splash. Earlier
+          // values (280 dp + scale up to 1.5) had rings ballooning to
+          // ~2.6× the logo, which created a visible mismatch when handing
+          // off from the native splash to this widget.
           Center(
             child: SizedBox(
-              width: 280,
-              height: 280,
+              width: 220,
+              height: 220,
               child: Stack(
                 alignment: Alignment.center,
                 children: [
@@ -155,7 +163,8 @@ class _SplashScreenState extends ConsumerState<SplashScreen>
                       animation: _ringCtrl,
                       builder: (_, __) {
                         final phase = (_ringCtrl.value + i / 3) % 1.0;
-                        final scale = 0.55 + phase * 0.95;
+                        // Tightened: 0.75 → 1.05 (vs old 0.55 → 1.5).
+                        final scale = 0.75 + phase * 0.30;
                         final opacity =
                             (1.0 - phase).clamp(0.0, 1.0) * 0.55;
                         return Opacity(
@@ -205,6 +214,11 @@ class _SplashScreenState extends ConsumerState<SplashScreen>
           ),
 
           // Wordmark + tagline.
+          // Wordmark + tagline. Manrope w900 for the wordmark, w500 for
+          // the tagline — matches the native splash's branding-image
+          // typography exactly. Letter-spacing kept narrow (~1) so it
+          // reads tighter than the previous 2 px which made the letters
+          // feel disjointed.
           Positioned(
             left: 0,
             right: 0,
@@ -213,11 +227,11 @@ class _SplashScreenState extends ConsumerState<SplashScreen>
               children: [
                 Text(
                   'StepBattle',
-                  style: TextStyle(
+                  style: GoogleFonts.manrope(
                     color: Colors.white,
-                    fontSize: 28,
+                    fontSize: 24,
                     fontWeight: FontWeight.w900,
-                    letterSpacing: 2,
+                    letterSpacing: 1.5,
                     shadows: [
                       Shadow(
                         color: Colors.black.withValues(alpha: 0.4),
@@ -226,13 +240,13 @@ class _SplashScreenState extends ConsumerState<SplashScreen>
                     ],
                   ),
                 ),
-                const SizedBox(height: 6),
+                const SizedBox(height: 4),
                 Text(
                   'Every step counts.',
-                  style: TextStyle(
-                    color: Colors.white.withValues(alpha: 0.75),
-                    fontSize: 13,
-                    letterSpacing: 1.2,
+                  style: GoogleFonts.manrope(
+                    color: AppColors.onSurface.withValues(alpha: 0.75),
+                    fontSize: 11,
+                    letterSpacing: 1,
                     fontWeight: FontWeight.w500,
                   ),
                 ),
@@ -252,9 +266,9 @@ class _SplashScreenState extends ConsumerState<SplashScreen>
                 child: ClipRRect(
                   borderRadius: BorderRadius.circular(2),
                   child: LinearProgressIndicator(
-                    backgroundColor: Colors.white.withValues(alpha: 0.15),
+                    backgroundColor: AppColors.onSurface.withValues(alpha: 0.15),
                     valueColor: AlwaysStoppedAnimation(
-                      Colors.white.withValues(alpha: 0.8),
+                      AppColors.onSurface.withValues(alpha: 0.8),
                     ),
                   ),
                 ),

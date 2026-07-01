@@ -1,4 +1,4 @@
-import 'package:flutter/material.dart';
+﻿import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -37,7 +37,7 @@ class ClanDetailsScreen extends ConsumerWidget {
         ),
       ),
       body: clan == null
-          ? const Center(
+          ? Center(
               child: CircularProgressIndicator(color: AppColors.primary))
           : ListView(
               padding: const EdgeInsets.fromLTRB(20, 8, 20, 40),
@@ -127,7 +127,7 @@ class _ClanHeader extends StatelessWidget {
                 color: AppColors.surfaceContainerLow,
                 borderRadius: BorderRadius.circular(10),
                 border: Border.all(
-                    color: Colors.white.withValues(alpha: 0.05)),
+                    color: AppColors.onSurface.withValues(alpha: 0.05)),
               ),
               child: Row(
                 mainAxisAlignment: MainAxisAlignment.center,
@@ -237,7 +237,7 @@ class _MemberDetailRow extends ConsumerWidget {
                 ? AppColors.primary
                 : (member.isAdmin
                     ? AppColors.tertiary
-                    : Colors.white.withValues(alpha: 0.05)),
+                    : AppColors.onSurface.withValues(alpha: 0.05)),
             borderWidth: member.isCaptain || member.isAdmin ? 2 : 1,
           ),
           const SizedBox(width: 14),
@@ -371,7 +371,7 @@ class _MemberActionsMenuState extends ConsumerState<_MemberActionsMenu> {
   @override
   Widget build(BuildContext context) {
     if (_busy) {
-      return const SizedBox(
+      return SizedBox(
         width: 28,
         height: 28,
         child: Center(
@@ -391,7 +391,7 @@ class _MemberActionsMenuState extends ConsumerState<_MemberActionsMenu> {
     final actorId = widget.currentUserId;
 
     return PopupMenuButton<String>(
-      icon: const Icon(Icons.more_vert, color: AppColors.onSurfaceVariant),
+      icon: Icon(Icons.more_vert, color: AppColors.onSurfaceVariant),
       color: AppColors.surfaceContainerLow,
       onSelected: (value) async {
         switch (value) {
@@ -659,9 +659,9 @@ class _DangerZoneState extends ConsumerState<_DangerZone> {
         ],
         if (_busy) ...[
           const SizedBox(height: 12),
-          const Center(
+          Center(
             child: CircularProgressIndicator(
-                strokeWidth: 2, color: AppColors.primary),
+                strokeWidth: 2, color: AppColors.primary,),
           ),
         ],
       ],
@@ -698,7 +698,7 @@ Future<ClanMember?> _showCaptainPicker(
                     width: 40,
                     height: 4,
                     decoration: BoxDecoration(
-                      color: Colors.white.withValues(alpha: 0.2),
+                      color: AppColors.onSurface.withValues(alpha: 0.2),
                       borderRadius: BorderRadius.circular(2),
                     ),
                   ),
@@ -743,7 +743,7 @@ Future<ClanMember?> _showCaptainPicker(
                             border: Border.all(
                               color: isPicked
                                   ? AppColors.primary
-                                  : Colors.white.withValues(alpha: 0.05),
+                                  : AppColors.onSurface.withValues(alpha: 0.05),
                             ),
                           ),
                           child: Row(
@@ -779,7 +779,7 @@ Future<ClanMember?> _showCaptainPicker(
                                 ),
                               ),
                               if (isPicked)
-                                const Icon(Icons.check_circle,
+                                Icon(Icons.check_circle,
                                     color: AppColors.primary),
                             ],
                           ),

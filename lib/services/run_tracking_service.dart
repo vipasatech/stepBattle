@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:math' as math;
+import 'dart:typed_data';
 
 import 'package:geolocator/geolocator.dart';
 import 'package:hive_flutter/hive_flutter.dart';
@@ -43,6 +44,16 @@ class RunTrackingService {
   // Hive keys (live in the existing `step_tracker` box so we don't have to
   // open a new one). Read by background_sync.dart's notification renderer.
   static const _kActiveStartedAt = 'active_track_started_at';
+
+  /// Prefix for pending-upload session payloads. Each ended session is
+  /// stamped into Hive under `pendingTrackPrefix + <uuid>` BEFORE we
+  /// attempt the Supabase insert; the entry is deleted only after the
+  /// insert succeeds. [syncPending] walks every key with this prefix on
+  /// every hub-open + app-launch and retries the upload. This is what
+  /// prevents data loss when the network is flaky (screen off for 20+
+  /// min → auth token stale → first end() insert fails — without local
+  /// persistence the run is gone).
+  static const String pendingTrackPrefix = 'pending_track_session__';
 
   /// Hard cap on session names (matches the text-field maxLength).
   static const int nameMaxLength = 50;
@@ -147,8 +158,30 @@ class RunTrackingService {
     return true;
   }
 
-  /// Finalize the session, write it to Supabase, return the saved row.
-  Future<RunSession?> end() async {
+  /// Finalize the session and persist it.
+  ///
+  /// Save flow (local-first):
+  ///   1. Build the row payload.
+  ///   2. **Stamp the payload into Hive** under
+  ///      [pendingTrackPrefix] + uuid. This is the durability point —
+  ///      if the app crashes after this, the run is recoverable.
+  ///   3. Attempt the Supabase insert. On success: delete the Hive
+  ///      entry. On failure: leave it; [syncPending] will retry on
+  ///      every subsequent hub-open / app-launch / background tick.
+  ///
+  /// The returned [EndResult] tells the caller whether the run was
+  /// persisted server-side ([EndResult.synced]) or only locally
+  /// ([EndResult.pending]) so the UI can show an honest message instead
+  /// of the old silent-fail "Saved" lie.
+  ///
+  /// Optional [description] + [mediaUrls] come from the Save Activity
+  /// page (note text and any uploaded photo URLs). Both are persisted
+  /// into the row payload so the local Hive copy carries them too —
+  /// `syncPending()` doesn't strip them on retry.
+  Future<EndResult?> end({
+    String? description,
+    List<String> mediaUrls = const [],
+  }) async {
     if (_startedAt == null) return null;
     _gpsSub?.cancel();
     _gpsSub = null;
@@ -168,7 +201,6 @@ class RunTrackingService {
         : null;
     final source = _computeSource();
 
-    // PostGIS column accepts GeoJSON via PostgREST. Skip if < 2 points.
     final pathGeoJson = _path.length >= 2
         ? {
             'type': 'LineString',
@@ -184,35 +216,67 @@ class RunTrackingService {
             })
         .toList(growable: false);
 
-    // If the user never set a name (or cleared it), persist the canonical
-    // auto-default so the row is always renderable without UI-side fallback
-    // gymnastics. Matches RunSession.autoDefaultNameFor.
     final persistedName = (_name == null || _name!.isEmpty)
         ? RunSession.autoDefaultNameFor(startedAt)
         : _name!;
 
-    String? newId;
+    final payload = <String, dynamic>{
+      'user_id': userId,
+      'name': persistedName,
+      'started_at': startedAt.toUtc().toIso8601String(),
+      'ended_at': endedAt.toUtc().toIso8601String(),
+      'duration_seconds': duration,
+      'steps': _currentSteps,
+      'distance_meters': totalDistance,
+      'distance_meters_verified': _verifiedMeters,
+      'distance_meters_estimated': _estimatedMeters,
+      'unverified_steps': _unverifiedSteps,
+      'calories': (_currentSteps * _kcalPerStep).round(),
+      'avg_pace_sec_per_km': pace,
+      'path': pathGeoJson,
+      'point_meta': pointMeta.isEmpty ? null : pointMeta,
+      'source': source,
+      if (description != null && description.trim().isNotEmpty)
+        'description': description.trim(),
+      if (mediaUrls.isNotEmpty) 'media_urls': mediaUrls,
+    };
+
+    // Local-first: stamp into Hive BEFORE the network attempt so a
+    // crash / kill after this point is recoverable. Key is a millis-
+    // suffixed string (unique per device); the entry survives until
+    // [syncPending] confirms a server insert.
+    final pendingKey =
+        '$pendingTrackPrefix${endedAt.microsecondsSinceEpoch}_${startedAt.microsecondsSinceEpoch}';
     try {
-      final row = await _client.from('track_sessions').insert({
-        'user_id': userId,
-        'name': persistedName,
-        'started_at': startedAt.toUtc().toIso8601String(),
-        'ended_at': endedAt.toUtc().toIso8601String(),
-        'duration_seconds': duration,
-        'steps': _currentSteps,
-        'distance_meters': totalDistance,
-        'distance_meters_verified': _verifiedMeters,
-        'distance_meters_estimated': _estimatedMeters,
-        'unverified_steps': _unverifiedSteps,
-        'calories': (_currentSteps * _kcalPerStep).round(),
-        'avg_pace_sec_per_km': pace,
-        'path': pathGeoJson,
-        'point_meta': pointMeta.isEmpty ? null : pointMeta,
-        'source': source,
-      }).select('id').single();
-      newId = row['id'] as String?;
+      await Hive.box(NativeStepService.boxName).put(pendingKey, payload);
     } catch (e, s) {
-      AppLogger.track.e('runTracking:insertFailed', error: e, stack: s);
+      AppLogger.track.e('runTracking:hivePersistFailed',
+          error: e, stack: s);
+      // Continue anyway — Hive failure is exotic; the live network
+      // insert below is still attempted. If that fails too, the caller
+      // sees `pending` status but we've genuinely lost data. Log loud.
+    }
+
+    String? newId;
+    bool synced = false;
+    try {
+      final row = await _client
+          .from('track_sessions')
+          .insert(payload)
+          .select('id')
+          .single();
+      newId = row['id'] as String?;
+      synced = newId != null;
+      if (synced) {
+        // Server confirmed → drop the local copy.
+        try {
+          await Hive.box(NativeStepService.boxName).delete(pendingKey);
+        } catch (_) {}
+      }
+    } catch (e, s) {
+      AppLogger.track.e('runTracking:insertFailed',
+          fields: {'pendingKey': pendingKey}, error: e, stack: s);
+      // pendingKey row stays in Hive — `syncPending` will retry.
     }
 
     try {
@@ -241,8 +305,6 @@ class RunTrackingService {
     _name = null;
     _startedAt = null;
     _latest = null;
-    // Signal subscribers (TrackHub, TrackLiveScreen, FAB) that the session
-    // is over so they stop rendering the "active" UI immediately.
     if (!_stateController.isClosed) _stateController.add(null);
     BackgroundSync.nudge();
     AppLogger.track.i('runTracking:ended', fields: {
@@ -253,11 +315,144 @@ class RunTrackingService {
       'steps': _currentSteps,
       'unverifiedSteps': _unverifiedSteps,
       'source': source,
+      'synced': synced,
     });
-    return saved;
+    return EndResult(
+      session: saved,
+      synced: synced,
+      pendingKey: synced ? null : pendingKey,
+    );
+  }
+
+  /// Sweep Hive for any [pendingTrackPrefix] entries and try to upload
+  /// them. Safe to call repeatedly; only deletes on a confirmed insert.
+  /// Returns the count of newly-synced sessions so the caller can decide
+  /// whether to refresh its UI.
+  ///
+  /// CALL SITES: TrackHub initState, app launch (post-auth), and the
+  /// BackgroundSync periodic tick. Idempotent under concurrent callers
+  /// because each row carries a unique payload and the server's
+  /// PRIMARY KEY (id) is generated on insert — a re-upload after a
+  /// partial failure that DID land on the server would create a
+  /// duplicate row. We accept that risk for now (rare; payload includes
+  /// started_at so duplicates are easy to spot in the UI). A future
+  /// hardening would add a client_dedupe_key column with a unique
+  /// constraint.
+  /// Upload [photoBytes] to the public `track-media` Storage bucket
+  /// under the signed-in user's folder. Returns the resulting public
+  /// URLs in the same order as the input — empty when nothing
+  /// uploaded. Throws on transport failure so the caller can keep the
+  /// user on the Save Activity page instead of half-saving the run.
+  Future<List<String>> uploadTrackMedia({
+    required String userId,
+    required List<List<int>> photoBytes,
+  }) async {
+    if (photoBytes.isEmpty) return const [];
+    final urls = <String>[];
+    final stamp = DateTime.now().millisecondsSinceEpoch;
+    for (var i = 0; i < photoBytes.length; i++) {
+      // Path shape: `<uid>/<millis>_<i>.jpg`. RLS in migration 0022
+      // forces the first folder to equal `auth.uid()`.
+      final path = '$userId/${stamp}_$i.jpg';
+      try {
+        await _client.storage.from('track-media').uploadBinary(
+              path,
+              Uint8List.fromList(photoBytes[i]),
+              fileOptions: const FileOptions(
+                contentType: 'image/jpeg',
+                upsert: false,
+              ),
+            );
+        urls.add(_client.storage.from('track-media').getPublicUrl(path));
+      } catch (e, s) {
+        AppLogger.track.e('runTracking:mediaUploadFailed',
+            fields: {'index': i, 'path': path}, error: e, stack: s);
+        rethrow;
+      }
+    }
+    return urls;
+  }
+
+  Future<int> syncPending() async {
+    final box = Hive.box(NativeStepService.boxName);
+    final keys = box.keys
+        .whereType<String>()
+        .where((k) => k.startsWith(pendingTrackPrefix))
+        .toList(growable: false);
+    if (keys.isEmpty) return 0;
+
+    int synced = 0;
+    for (final key in keys) {
+      final raw = box.get(key);
+      if (raw is! Map) {
+        // Corrupted entry → drop it so we don't loop on it.
+        await box.delete(key);
+        continue;
+      }
+      final payload = Map<String, dynamic>.from(raw);
+      try {
+        await _client.from('track_sessions').insert(payload);
+        await box.delete(key);
+        synced++;
+        AppLogger.track
+            .i('runTracking:pendingSynced', fields: {'key': key});
+      } catch (e) {
+        AppLogger.track.w('runTracking:pendingRetryFailed',
+            fields: {'key': key, 'err': e.toString()});
+        // Leave it in Hive for the next sweep.
+      }
+    }
+    return synced;
+  }
+
+  /// Number of un-synced sessions waiting in Hive. The hub can surface
+  /// this as a small badge ("3 sessions waiting to sync") so the user
+  /// knows their runs aren't lost.
+  int pendingCount() {
+    final box = Hive.box(NativeStepService.boxName);
+    return box.keys
+        .whereType<String>()
+        .where((k) => k.startsWith(pendingTrackPrefix))
+        .length;
+  }
+
+
+  /// Read pending-but-not-yet-synced sessions from Hive. These are the
+  /// rows that `end()` stamped locally but whose Supabase insert failed
+  /// or hasn't run yet. Surfaced in the history list with a "Pending
+  /// sync" pill so the user sees their run isn't lost.
+  List<RunSession> getPendingSessions({required String userId}) {
+    final box = Hive.box(NativeStepService.boxName);
+    final out = <RunSession>[];
+    for (final key in box.keys.whereType<String>()) {
+      if (!key.startsWith(pendingTrackPrefix)) continue;
+      final raw = box.get(key);
+      if (raw is! Map) continue;
+      try {
+        final payload = Map<String, dynamic>.from(raw);
+        // Filter to the signed-in user so a logout/login on the same
+        // device doesn't surface someone else's pending row.
+        if (payload['user_id'] != userId) continue;
+        out.add(RunSession.fromPendingPayload(payload, key));
+      } catch (e, s) {
+        AppLogger.track.w(
+          'runTracking:pendingParseFailed',
+          fields: {'key': key, 'error': e.toString()},
+        );
+        AppLogger.track.e('runTracking:pendingParseStack',
+            error: e, stack: s);
+      }
+    }
+    return out;
   }
 
   Future<List<RunSession>> getHistory({required String userId, int limit = 20}) async {
+    // Pending (local-only) sessions first — most recent end times bubble
+    // to the top of the merged list so a just-finished run that hasn't
+    // synced yet shows up immediately instead of vanishing.
+    final pending = getPendingSessions(userId: userId);
+
+    List<RunSession> synced = const [];
     try {
       final rows = await _client
           .from('track_sessions')
@@ -266,13 +461,19 @@ class RunTrackingService {
           .not('ended_at', 'is', null)
           .order('started_at', ascending: false)
           .limit(limit);
-      return (rows as List)
+      synced = (rows as List)
           .map((r) => RunSession.fromSupabaseRow(r as Map<String, dynamic>))
           .toList();
     } catch (e, s) {
       AppLogger.track.e('runTracking:historyFailed', error: e, stack: s);
-      return const [];
+      // Fall through so we still return whatever's in the local pending
+      // queue — the user still sees their unsynced runs even when the
+      // server fetch fails.
     }
+
+    final merged = [...pending, ...synced];
+    merged.sort((a, b) => b.startedAt.compareTo(a.startedAt));
+    return merged;
   }
 
   void dispose() {
@@ -500,6 +701,50 @@ class RunTrackingService {
     }
   }
 
+  /// Patch an existing SAVED session — used by the Edit page to update
+  /// the user-set name, the description, and/or the media_urls array.
+  ///
+  /// Any field left null is skipped, so the caller can update a subset
+  /// without clobbering the rest. Pass an empty string for
+  /// [description] to clear it back to NULL. Pass an empty list for
+  /// [mediaUrls] to strip every attached photo.
+  Future<bool> updateSession({
+    required String sessionId,
+    String? name,
+    String? description,
+    List<String>? mediaUrls,
+  }) async {
+    try {
+      final updates = <String, dynamic>{};
+      if (name != null) {
+        final clean = _cleanName(name);
+        if (clean != null) updates['name'] = clean;
+      }
+      if (description != null) {
+        final trimmed = description.trim();
+        updates['description'] = trimmed.isEmpty ? null : trimmed;
+      }
+      if (mediaUrls != null) {
+        updates['media_urls'] = mediaUrls;
+      }
+      if (updates.isEmpty) return true;
+
+      await _client
+          .from('track_sessions')
+          .update(updates)
+          .eq('id', sessionId);
+      AppLogger.track.i(
+        'runTracking:updated',
+        fields: {'id': sessionId, 'fields': updates.keys.toList()},
+      );
+      return true;
+    } catch (e, s) {
+      AppLogger.track
+          .e('runTracking:updateFailed', error: e, stack: s);
+      return false;
+    }
+  }
+
   /// Permanently delete a saved session. Returns true on success.
   Future<bool> deleteSession(String sessionId) async {
     try {
@@ -528,6 +773,31 @@ class RunTrackingService {
       return null;
     }
   }
+}
+
+/// Outcome of [RunTrackingService.end]. The UI inspects [synced] to
+/// pick between "Saved" and "Will sync when online" messaging — the
+/// previous version returned a [RunSession] directly which silently
+/// masked failed inserts.
+class EndResult {
+  /// The session as it was finalised in-memory. `id` will be 'local'
+  /// when the server insert failed; the canonical row id is only
+  /// available after a successful insert.
+  final RunSession session;
+
+  /// True iff the server confirmed the insert. False means the row is
+  /// still pending in Hive and will be retried by [syncPending].
+  final bool synced;
+
+  /// Hive key under which the pending payload lives, when [synced] is
+  /// false. Null on success. Useful for explicit retry UI.
+  final String? pendingKey;
+
+  const EndResult({
+    required this.session,
+    required this.synced,
+    required this.pendingKey,
+  });
 }
 
 /// Whether a Track session is currently active, derived from the Hive flag

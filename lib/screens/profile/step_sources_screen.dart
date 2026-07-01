@@ -1,4 +1,4 @@
-import 'dart:async';
+﻿import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -74,7 +74,7 @@ class _StepSourcesScreenState extends ConsumerState<StepSourcesScreen> {
         ],
       ),
       body: reading == null
-          ? const Center(
+          ? Center(
               child:
                   CircularProgressIndicator(color: AppColors.primary))
           : ListView(
@@ -158,7 +158,7 @@ class _AggregateCard extends StatelessWidget {
           const SizedBox(height: 14),
           Row(
             children: [
-              const Icon(Icons.info_outline,
+              Icon(Icons.info_outline,
                   size: 14, color: AppColors.primary),
               const SizedBox(width: 6),
               Expanded(
@@ -223,7 +223,7 @@ class _SourceCard extends StatelessWidget {
         border: Border.all(
           color: isWinner
               ? AppColors.primary.withValues(alpha: 0.4)
-              : Colors.white.withValues(alpha: 0.06),
+              : AppColors.onSurface.withValues(alpha: 0.06),
           width: isWinner ? 1.5 : 1,
         ),
       ),
@@ -373,7 +373,7 @@ class _GoogleFitCardState extends ConsumerState<_GoogleFitCard> {
         border: Border.all(
           color: isWinner
               ? AppColors.primary.withValues(alpha: 0.4)
-              : Colors.white.withValues(alpha: 0.06),
+              : AppColors.onSurface.withValues(alpha: 0.06),
         ),
       ),
       child: Column(
@@ -387,7 +387,7 @@ class _GoogleFitCardState extends ConsumerState<_GoogleFitCard> {
                         ?.copyWith(fontWeight: FontWeight.w700)),
               ),
               if (_busy)
-                const SizedBox(
+                SizedBox(
                     width: 18,
                     height: 18,
                     child: CircularProgressIndicator(
@@ -492,7 +492,7 @@ class _NativeInternals extends StatelessWidget {
       decoration: BoxDecoration(
         color: AppColors.surfaceContainerLow,
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: Colors.white.withValues(alpha: 0.04)),
+        border: Border.all(color: AppColors.onSurface.withValues(alpha: 0.04)),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
