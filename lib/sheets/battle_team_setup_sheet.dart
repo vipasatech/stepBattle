@@ -108,6 +108,7 @@ class _BattleTeamSetupSheetState extends ConsumerState<BattleTeamSetupSheet> {
       final result = await _battleService.createTeamLobby(
         createdBy: me.userId,
         creatorDisplayName: me.displayName.isEmpty ? 'You' : me.displayName,
+        creatorPreferredName: me.preferredName,
         creatorAvatarUrl: me.avatarURL,
       );
       if (!mounted) return;
@@ -153,6 +154,7 @@ class _BattleTeamSetupSheetState extends ConsumerState<BattleTeamSetupSheet> {
                   .map((u) => (
                         userId: u.userId,
                         displayName: u.displayName,
+                        preferredName: u.preferredName,
                         avatarUrl: u.avatarURL,
                         teamLabel: targetLabel,
                       ))
@@ -1043,15 +1045,15 @@ class _MemberChip extends StatelessWidget {
               AvatarCircle(
                 radius: 12,
                 imageUrl: user.avatarURL,
-                initials: user.displayName.isNotEmpty
-                    ? user.displayName[0].toUpperCase()
+                initials: user.friendlyName.isNotEmpty
+                    ? user.friendlyName[0].toUpperCase()
                     : '?',
                 borderColor: accent,
               ),
               const SizedBox(width: 6),
               Flexible(
                 child: Text(
-                  user.displayName,
+                  user.friendlyName,
                   style: theme.textTheme.labelSmall
                       ?.copyWith(fontWeight: FontWeight.w700),
                   maxLines: 1,

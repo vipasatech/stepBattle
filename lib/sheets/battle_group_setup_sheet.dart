@@ -153,11 +153,13 @@ class _BattleGroupSetupSheetState
         BattleParticipant(
           userId: me.userId,
           displayName: me.displayName.isEmpty ? 'You' : me.displayName,
+          preferredName: me.preferredName,
           avatarURL: me.avatarURL,
         ),
         ..._invited.map((u) => BattleParticipant(
               userId: u.userId,
               displayName: u.displayName,
+              preferredName: u.preferredName,
               avatarURL: u.avatarURL,
             )),
       ];
@@ -409,13 +411,13 @@ class _InvitedChip extends StatelessWidget {
           AvatarCircle(
             radius: 12,
             imageUrl: user.avatarURL,
-            initials: user.displayName.isNotEmpty
-                ? user.displayName[0].toUpperCase()
+            initials: user.friendlyName.isNotEmpty
+                ? user.friendlyName[0].toUpperCase()
                 : '?',
             borderColor: AppColors.primary,
           ),
           const SizedBox(width: 6),
-          Text(user.displayName,
+          Text(user.friendlyName,
               style: theme.textTheme.labelSmall
                   ?.copyWith(fontWeight: FontWeight.w700)),
           const SizedBox(width: 4),

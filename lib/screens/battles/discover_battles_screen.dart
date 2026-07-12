@@ -52,6 +52,7 @@ class _DiscoverBattlesScreenState extends ConsumerState<DiscoverBattlesScreen> {
             code: b.joinCode ?? '',
             userId: me.userId,
             displayName: me.displayName,
+            preferredName: me.preferredName,
             avatarUrl: me.avatarURL,
           );
       if (!mounted) return;
@@ -166,7 +167,7 @@ class _PublicLobbyCard extends StatelessWidget {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      '$_typeLabel battle by ${creator.displayName}',
+                      '$_typeLabel battle by ${creator.friendlyName}',
                       style: theme.textTheme.titleSmall
                           ?.copyWith(fontWeight: FontWeight.w800),
                       maxLines: 1,

@@ -1,10 +1,15 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_map/flutter_map.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import 'package:latlong2/latlong.dart';
+
 import '../../../config/colors.dart';
+import '../../../models/user_model.dart';
 import '../../../providers/user_provider.dart';
 import '../../../sheets/set_home_sheet.dart';
 import '../../../widgets/glass_card.dart';
+import '../../../widgets/map_tile_layer.dart';
 
 /// Map preview on Home — "Who's Leading Near You".
 ///
@@ -55,48 +60,81 @@ class MapPreviewCard extends ConsumerWidget {
                 child: Stack(
                   fit: StackFit.expand,
                   children: [
-                    // Background — radial gradient + grid dots
-                    Container(
-                      decoration: BoxDecoration(
-                        borderRadius: BorderRadius.circular(20),
-                        gradient: RadialGradient(
-                          center: Alignment.center,
-                          radius: 1.2,
-                          colors: hasHome
-                              ? [
-                                  AppColors.primary.withValues(alpha: 0.18),
-                                  AppColors.surfaceContainerLowest,
-                                ]
-                              : [
-                                  AppColors.amber.withValues(alpha: 0.12),
-                                  AppColors.surfaceContainerLowest,
-                                ],
-                        ),
-                      ),
-                    ),
-                    CustomPaint(painter: _MapDotsPainter()),
-
-                    // Center pin
-                    Center(
-                      child: Container(
-                        width: 14,
-                        height: 14,
-                        decoration: BoxDecoration(
-                          color: hasHome ? AppColors.primary : AppColors.amber,
-                          shape: BoxShape.circle,
-                          boxShadow: [
-                            BoxShadow(
-                              color: (hasHome
-                                      ? AppColors.primary
-                                      : AppColors.amber)
-                                  .withValues(alpha: 0.55),
-                              blurRadius: 16,
-                              spreadRadius: 6,
+                    // Real OSM map when the user has a home location
+                    // pinned — same tile source as the Track screen.
+                    // Falls back to the stylised gradient + dots when
+                    // no home is set (map at world zoom would just be
+                    // a featureless tile).
+                    if (hasHome && user?.homeLat != null && user?.homeLng != null)
+                      // IgnorePointer keeps taps flowing to the outer
+                      // InkWell instead of getting eaten by FlutterMap's
+                      // internal gesture detectors.
+                      IgnorePointer(
+                        child: ClipRRect(
+                          borderRadius: BorderRadius.circular(20),
+                          child: FlutterMap(
+                            options: MapOptions(
+                              initialCenter: LatLng(
+                                user!.homeLat!,
+                                user.homeLng!,
+                              ),
+                              initialZoom: 12,
+                              interactionOptions: const InteractionOptions(
+                                flags: InteractiveFlag.none,
+                              ),
                             ),
-                          ],
+                            children: [
+                              osmTileLayer(context),
+                              MarkerLayer(
+                                markers: [
+                                  Marker(
+                                    point: LatLng(
+                                      user.homeLat!,
+                                      user.homeLng!,
+                                    ),
+                                    width: 22,
+                                    height: 22,
+                                    child: const _HomePin(),
+                                  ),
+                                ],
+                              ),
+                            ],
+                          ),
+                        ),
+                      )
+                    else ...[
+                      Container(
+                        decoration: BoxDecoration(
+                          borderRadius: BorderRadius.circular(20),
+                          gradient: RadialGradient(
+                            center: Alignment.center,
+                            radius: 1.2,
+                            colors: [
+                              AppColors.amber.withValues(alpha: 0.12),
+                              AppColors.surfaceContainerLowest,
+                            ],
+                          ),
                         ),
                       ),
-                    ),
+                      CustomPaint(painter: _MapDotsPainter()),
+                      Center(
+                        child: Container(
+                          width: 14,
+                          height: 14,
+                          decoration: BoxDecoration(
+                            color: AppColors.amber,
+                            shape: BoxShape.circle,
+                            boxShadow: [
+                              BoxShadow(
+                                color: AppColors.amber.withValues(alpha: 0.55),
+                                blurRadius: 16,
+                                spreadRadius: 6,
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ],
 
                     // Bottom info bar
                     Positioned(
@@ -160,15 +198,15 @@ class MapPreviewCard extends ConsumerWidget {
 }
 
 class _HomeRow extends StatelessWidget {
-  final dynamic user;
+  final UserModel user;
   const _HomeRow({required this.user});
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final district = user.districtName as String? ?? '';
-    final state = user.stateName as String? ?? '';
-    final country = user.countryName as String? ?? '';
+    final district = user.districtName ?? '';
+    final state = user.stateName ?? '';
+    final country = user.countryName ?? '';
     final headline = district.isNotEmpty
         ? district
         : (state.isNotEmpty ? state : country);
@@ -204,6 +242,31 @@ class _UnsetRow extends StatelessWidget {
             style: theme.textTheme.labelSmall
                 ?.copyWith(color: AppColors.onSurfaceVariant)),
       ],
+    );
+  }
+}
+
+/// Filled violet circle with a white outer ring — matches the start /
+/// end pins on the Track session-detail map so users see the same
+/// "you are here" identity across the app.
+class _HomePin extends StatelessWidget {
+  const _HomePin();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      decoration: BoxDecoration(
+        color: AppColors.primary,
+        shape: BoxShape.circle,
+        border: Border.all(color: Colors.white, width: 3),
+        boxShadow: const [
+          BoxShadow(
+            color: Color(0x33000000),
+            blurRadius: 6,
+            offset: Offset(0, 2),
+          ),
+        ],
+      ),
     );
   }
 }

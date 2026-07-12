@@ -53,8 +53,13 @@ class StepGoalRecommendation {
 ///   gender_factor  = man: 1.05 · all others: 1.00
 ///   fitness_factor = beginner: 0.65 · intermediate: 1.00
 ///                    advanced: 1.25 · pro: 1.50
+///   bmi_factor     = underweight (<18.5): 1.05
+///                    normal (18.5–24.9):  1.00
+///                    overweight (25–29.9):0.95
+///                    obese (≥30):         0.90
+///                    height OR weight null → 1.00 (no adjustment)
 ///
-///   target = round(base × age × gender × fitness, nearest 500)
+///   target = round(base × age × gender × fitness × bmi, nearest 500)
 ///   min    = max(target × 0.50, 2,500), rounded to nearest 500
 ///   max    = round(target × 1.30, nearest 500)
 ///
@@ -79,12 +84,23 @@ class GoalFormula {
   /// if any of the three required fields is missing — the caller should
   /// either funnel the user through the "Complete your profile" sheet or
   /// fall back to a sensible default (8,000 with a generous range).
+  ///
+  /// Height + weight are OPTIONAL — when either is null the BMI factor
+  /// resolves to 1.00 and the formula reduces to the age/gender/fitness
+  /// version. That keeps pre-migration users working while new users
+  /// benefit from the extra signal.
   static StepGoalRecommendation? forUser(UserModel u) {
     final age = u.age;
     final gender = u.gender;
     final fitness = u.fitnessLevel;
     if (age == null || gender == null || fitness == null) return null;
-    return compute(age: age, gender: gender, fitnessLevel: fitness);
+    return compute(
+      age: age,
+      gender: gender,
+      fitnessLevel: fitness,
+      heightCm: u.heightCm,
+      weightKg: u.weightKg,
+    );
   }
 
   /// Pure computation — no UserModel dependency, so it's testable in
@@ -94,12 +110,16 @@ class GoalFormula {
     required int age,
     required Gender gender,
     required FitnessLevel fitnessLevel,
+    int? heightCm,
+    double? weightKg,
   }) {
     final ageFactor = _ageFactor(age);
     final genderFactor = _genderFactor(gender);
     final fitnessFactor = _fitnessFactor(fitnessLevel);
+    final bmiFactor = _bmiFactor(heightCm: heightCm, weightKg: weightKg);
 
-    final rawTarget = _base * ageFactor * genderFactor * fitnessFactor;
+    final rawTarget =
+        _base * ageFactor * genderFactor * fitnessFactor * bmiFactor;
     final target = _round500(rawTarget);
 
     final rawMin = target * 0.50;
@@ -159,6 +179,28 @@ class GoalFormula {
         FitnessLevel.advanced => 1.25,
         FitnessLevel.pro => 1.50,
       };
+
+  /// BMI-based multiplier on the step target. When [heightCm] OR
+  /// [weightKg] is null (user hasn't answered those survey questions)
+  /// we return 1.00 so pre-migration users keep their existing formula.
+  /// Zero / non-positive height guards against a divide-by-zero if a
+  /// bad row ever slipped past the CHECK constraint.
+  ///
+  /// BMI buckets follow the WHO adult categories:
+  ///   • underweight (<18.5)  → 1.05
+  ///   • normal (18.5–24.9)   → 1.00
+  ///   • overweight (25–29.9) → 0.95
+  ///   • obese (≥30)          → 0.90
+  static double _bmiFactor({int? heightCm, double? weightKg}) {
+    if (heightCm == null || weightKg == null) return 1.00;
+    if (heightCm <= 0) return 1.00;
+    final heightM = heightCm / 100.0;
+    final bmi = weightKg / (heightM * heightM);
+    if (bmi < 18.5) return 1.05;
+    if (bmi < 25.0) return 1.00;
+    if (bmi < 30.0) return 0.95;
+    return 0.90;
+  }
 
   /// Round to nearest multiple of 500 (and never below 500 — guards
   /// against a malformed input pushing the target into 0/negatives).

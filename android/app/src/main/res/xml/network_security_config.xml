@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Network Security Config — narrow whitelist for cleartext HTTP.
+
+    Android 9+ (API 28) blocks cleartext HTTP by default. `flutter_3d_controller`
+    ships a tiny local HTTP server on 127.0.0.1:<random port> to serve the
+    bundled `.glb` file into the underlying `<model-viewer>` WebView. Without
+    an exception, the WebView shows `net::ERR_CLEARTEXT_NOT_PERMITTED` and the
+    3D character never appears.
+
+    Scope is intentionally minimal: only 127.0.0.1 + localhost are allowed
+    over cleartext. Everything else (Supabase, Firebase, Rodin, Mixamo, etc.)
+    still requires HTTPS.
+-->
+<network-security-config>
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="true">127.0.0.1</domain>
+        <domain includeSubdomains="true">localhost</domain>
+    </domain-config>
+</network-security-config>

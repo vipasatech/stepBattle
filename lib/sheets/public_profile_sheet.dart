@@ -43,7 +43,7 @@ class _PublicProfileSheetState extends ConsumerState<PublicProfileSheet> {
             fromUserId: me.userId,
             toUserId: widget.entry.userId,
             fromDisplayName:
-                me.displayName.isEmpty ? 'Someone' : me.displayName,
+                me.friendlyName.isEmpty ? 'Someone' : me.friendlyName,
           );
       setState(() => _isFriend = true);
     } catch (_) {}
@@ -71,12 +71,12 @@ class _PublicProfileSheetState extends ConsumerState<PublicProfileSheet> {
             radius: 40,
             imageUrl: e.avatarURL,
             initials:
-                e.displayName.isNotEmpty ? e.displayName[0] : '?',
+                e.friendlyName.isNotEmpty ? e.friendlyName[0] : '?',
             borderColor: AppColors.primary,
             borderWidth: 3,
           ),
           const SizedBox(height: 14),
-          Text(e.displayName,
+          Text(e.friendlyName,
               style: theme.textTheme.headlineSmall
                   ?.copyWith(fontWeight: FontWeight.w700)),
           const SizedBox(height: 6),

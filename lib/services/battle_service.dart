@@ -141,6 +141,7 @@ class BattleService {
           'battle_id': battleId,
           'user_id': p.userId,
           'display_name': p.displayName,
+          'preferred_name': p.preferredName,
           'avatar_url': p.avatarURL,
           'current_steps': 0,
           'is_winner': false,
@@ -286,6 +287,7 @@ class BattleService {
           'battle_id': battleId,
           'user_id': p.userId,
           'display_name': p.displayName,
+          'preferred_name': p.preferredName,
           'avatar_url': p.avatarURL,
           'current_steps': 0,
           'is_winner': false,
@@ -975,6 +977,7 @@ class BattleService {
   Future<({String battleId, String joinCode})> createTeamLobby({
     required String createdBy,
     required String creatorDisplayName,
+    String? creatorPreferredName,
     String? creatorAvatarUrl,
   }) async {
     final xp = AppConstants.xpWinClanBattle;
@@ -1006,6 +1009,7 @@ class BattleService {
         'battle_id': battleId,
         'user_id': createdBy,
         'display_name': creatorDisplayName,
+        'preferred_name': creatorPreferredName,
         'avatar_url': creatorAvatarUrl,
         'current_steps': 0,
         'is_winner': false,
@@ -1118,7 +1122,7 @@ class BattleService {
 
   Future<void> addTeamLobbyParticipants({
     required String battleId,
-    required List<({String userId, String displayName, String? avatarUrl, String teamLabel})>
+    required List<({String userId, String displayName, String? preferredName, String? avatarUrl, String teamLabel})>
         entries,
   }) async {
     if (entries.isEmpty) return;
@@ -1127,6 +1131,7 @@ class BattleService {
               'battle_id': battleId,
               'user_id': e.userId,
               'display_name': e.displayName,
+              'preferred_name': e.preferredName,
               'avatar_url': e.avatarUrl,
               'current_steps': 0,
               'is_winner': false,
@@ -1317,6 +1322,7 @@ class BattleService {
     required String code,
     required String userId,
     required String displayName,
+    String? preferredName,
     String? avatarUrl,
   }) async {
     final normalized = code.trim().toUpperCase();
@@ -1375,6 +1381,7 @@ class BattleService {
       'battle_id': battle.battleId,
       'user_id': userId,
       'display_name': displayName,
+      'preferred_name': preferredName,
       'avatar_url': avatarUrl,
       'current_steps': 0,
       'is_winner': false,

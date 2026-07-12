@@ -10,6 +10,7 @@ import '../../config/colors.dart';
 import '../../models/run_session_model.dart';
 import '../../providers/run_session_provider.dart';
 import '../../services/run_tracking_service.dart';
+import '../../widgets/map_tile_layer.dart';
 
 /// Live-recording screen for a Track session.
 /// Three progress rings (distance / time / calories vs arbitrary v1 targets),
@@ -282,10 +283,7 @@ class _TrackLiveScreenState extends ConsumerState<TrackLiveScreen> {
         ),
       ),
       children: [
-        TileLayer(
-          urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-          userAgentPackageName: 'com.stepbattle.stepbattle',
-        ),
+        osmTileLayer(context),
         if (hasPolyline)
           PolylineLayer(
             polylines: [

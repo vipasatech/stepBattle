@@ -367,7 +367,7 @@ class _ActiveCard extends StatelessWidget {
                       Text(
                         isTeam
                             ? '🏳️ ${battle.teamCount ?? battle.teamLabels.length}-team battle'
-                            : '⚔️ You vs ${_shortName(opponent?.displayName)}',
+                            : '⚔️ You vs ${_shortName(opponent?.friendlyName)}',
                         style: theme.textTheme.titleMedium
                             ?.copyWith(fontWeight: FontWeight.w700),
                         maxLines: 1,
@@ -423,7 +423,7 @@ class _ActiveCard extends StatelessWidget {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.end,
                       children: [
-                        Text(_shortName(opponent?.displayName),
+                        Text(_shortName(opponent?.friendlyName),
                             style: theme.textTheme.labelSmall?.copyWith(
                                 color: AppColors.onSurfaceVariant),
                             maxLines: 1,
@@ -550,7 +550,7 @@ class _ScheduledCard extends StatelessWidget {
                   Text(
                     isTeam
                         ? '🏳️ ${battle.teamCount ?? battle.teamLabels.length}-team battle'
-                        : '⚔️ You vs ${opponent == null ? "Waiting..." : _shortName(opponent.displayName)}',
+                        : '⚔️ You vs ${opponent == null ? "Waiting..." : _shortName(opponent.friendlyName)}',
                     style: theme.textTheme.titleMedium
                         ?.copyWith(fontWeight: FontWeight.w700),
                     maxLines: 1,
@@ -690,7 +690,7 @@ class _CompletedCard extends StatelessWidget {
                         Text(
                           isTeam
                               ? '🏳️ ${battle.teamCount ?? battle.teamLabels.length}-team battle'
-                              : '⚔️ You vs ${_shortName(opponent?.displayName)}',
+                              : '⚔️ You vs ${_shortName(opponent?.friendlyName)}',
                           style: theme.textTheme.titleMedium
                               ?.copyWith(fontWeight: FontWeight.w700),
                           maxLines: 1,
@@ -699,7 +699,7 @@ class _CompletedCard extends StatelessWidget {
                         const SizedBox(height: 4),
                         if (!isTeam)
                           Text(
-                            'You: ${_fmt(me?.currentSteps ?? 0)} · ${_shortName(opponent?.displayName, maxLen: 10)}: ${_fmt(opponent?.currentSteps ?? 0)}',
+                            'You: ${_fmt(me?.currentSteps ?? 0)} · ${_shortName(opponent?.friendlyName, maxLen: 10)}: ${_fmt(opponent?.currentSteps ?? 0)}',
                             style: theme.textTheme.bodySmall?.copyWith(
                               color: AppColors.primary,
                             ),

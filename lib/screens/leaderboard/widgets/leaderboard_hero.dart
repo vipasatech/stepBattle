@@ -72,36 +72,12 @@ class _LeaderboardHeroState extends ConsumerState<LeaderboardHero>
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
 
-    // Avatar centre Y from the top of the hero — anchors the rays so
-    // wedges emanate from the crown-topped face:
-    //   padTop (8) + scope-banner (30) + gap (12) + crown (26)
-    //     + gap (4) + avatar half-height (34) = 114
-    const double avatarCentreY = 114;
-
-    return Stack(
-      // topCenter so the (mainAxisSize.min) Column sits centred
-      // horizontally within the full-width rays layer.
-      alignment: Alignment.topCenter,
+    // Rays background layer was removed per user request; the hero
+    // now renders as a plain centred Column. If it ever comes back,
+    // the earlier `_RaysPainter` implementation is in git history.
+    return Column(
+      mainAxisSize: MainAxisSize.min,
       children: [
-        // ---- Full-bleed rays layer -------------------------------
-        // Fills the whole hero widget: top edge = the imaginary line
-        // between the tabs bar and the scope banner, bottom edge =
-        // the imaginary line above the column-header row. The scope
-        // banner + crown + avatar + XP + name all sit ON TOP of it.
-        Positioned.fill(
-          child: CustomPaint(
-            painter: _RaysPainter(
-              centreY: avatarCentreY,
-              light: Colors.white.withValues(alpha: 0.06),
-              dark: Colors.white.withValues(alpha: 0.015),
-            ),
-          ),
-        ),
-
-        // ---- Content column on top -------------------------------
-        Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
             // Scope banner brings its own 20-dp horizontal padding.
             const SizedBox(height: 8),
             widget.scopeBanner,
@@ -126,7 +102,7 @@ class _LeaderboardHeroState extends ConsumerState<LeaderboardHero>
                     child: AvatarCircle(
                       radius: 30,
                       imageUrl: widget.topEntry.avatarURL,
-                      initials: _initials(widget.topEntry.displayName),
+                      initials: _initials(widget.topEntry.friendlyName),
                       borderColor: Colors.transparent,
                       borderWidth: 0,
                     ),
@@ -169,28 +145,16 @@ class _LeaderboardHeroState extends ConsumerState<LeaderboardHero>
             ),
             const SizedBox(height: 6),
 
-            // ---- Trophy + name of #1 ----
-            Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Icon(
-                  Icons.emoji_events,
-                  color: AppColors.amber,
-                  size: 16,
-                ),
-                const SizedBox(width: 6),
-                Text(
-                  widget.topEntry.displayName,
-                  style: theme.textTheme.titleSmall?.copyWith(
-                    fontWeight: FontWeight.w800,
-                  ),
-                ),
-              ],
+            // Name of #1. The trophy icon that used to sit beside
+            // this line was removed per user request — the crown
+            // above the avatar already signals "top spot".
+            Text(
+              widget.topEntry.friendlyName,
+              style: theme.textTheme.titleSmall?.copyWith(
+                fontWeight: FontWeight.w800,
+              ),
             ),
             const SizedBox(height: 8),
-          ],
-        ),
       ],
     );
   }
@@ -214,71 +178,6 @@ class _LeaderboardHeroState extends ConsumerState<LeaderboardHero>
     }
     return buf.toString();
   }
-}
-
-// =============================================================================
-// Rays painter — alternating pie-slice wedges radiating from centre.
-// Reference image the user shared shows 16 wedges around a central
-// character, in two subtly-different shades against a dark base.
-// This paints [light] wedges on the even indices and [dark] wedges
-// on the odd indices — the container background under the CustomPaint
-// stays fully visible between them so the effect blends with any
-// Profile / Ranks surface tint.
-// =============================================================================
-class _RaysPainter extends CustomPainter {
-  /// Y-coordinate (from the top of the paint area) that the wedges
-  /// radiate from. Horizontally the centre is always mid-width. Set
-  /// to the avatar's centre-y so rays appear to emanate from behind
-  /// the character rather than from the geometric middle of the box.
-  final double centreY;
-  final Color light;
-  final Color dark;
-
-  const _RaysPainter({
-    required this.centreY,
-    required this.light,
-    required this.dark,
-  });
-
-  static const int _wedgeCount = 16;
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final centre = Offset(size.width / 2, centreY);
-    // Radius reaches the farthest corner of the paint area from
-    // [centre] so every pixel of the hero is covered by a wedge.
-    final maxDx = math.max(centre.dx, size.width - centre.dx);
-    final maxDy = math.max(centre.dy, size.height - centre.dy);
-    final radius = math.sqrt(maxDx * maxDx + maxDy * maxDy);
-    const sweep = 2 * math.pi / _wedgeCount;
-
-    for (int i = 0; i < _wedgeCount; i++) {
-      final startAngle = i * sweep - math.pi / 2;
-      final paint = Paint()
-        ..color = (i.isEven ? light : dark)
-        ..style = PaintingStyle.fill;
-      final path = Path()
-        ..moveTo(centre.dx, centre.dy)
-        ..lineTo(
-          centre.dx + radius * math.cos(startAngle),
-          centre.dy + radius * math.sin(startAngle),
-        )
-        ..arcTo(
-          Rect.fromCircle(center: centre, radius: radius),
-          startAngle,
-          sweep,
-          false,
-        )
-        ..close();
-      canvas.drawPath(path, paint);
-    }
-  }
-
-  @override
-  bool shouldRepaint(_RaysPainter old) =>
-      old.centreY != centreY ||
-      old.light != light ||
-      old.dark != dark;
 }
 
 // =============================================================================

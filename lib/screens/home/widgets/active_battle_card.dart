@@ -40,10 +40,10 @@ class ActiveBattleCard extends ConsumerWidget {
 
         if (activeBattle != null)
           // State A: Active battle
-          _ActiveState(
+          LiveBattleCard(
             battleId: activeBattle.battleId,
             opponentName:
-                activeBattle.opponentFor(uid)?.displayName ?? 'Opponent',
+                activeBattle.opponentFor(uid)?.friendlyName ?? 'Opponent',
             yourSteps:
                 activeBattle.participantFor(uid)?.currentSteps ?? 0,
             opponentSteps:
@@ -52,9 +52,9 @@ class ActiveBattleCard extends ConsumerWidget {
           )
         else if (lastCompleted != null)
           // State B: Last completed
-          _CompletedState(
+          CompletedBattleCard(
             opponentName:
-                lastCompleted.opponentFor(uid)?.displayName ?? 'Opponent',
+                lastCompleted.opponentFor(uid)?.friendlyName ?? 'Opponent',
             won: lastCompleted.winnerId == uid,
             xpEarned:
                 lastCompleted.winnerId == uid ? lastCompleted.xpReward : 0,
@@ -67,19 +67,34 @@ class ActiveBattleCard extends ConsumerWidget {
   }
 }
 
-class _ActiveState extends StatelessWidget {
+/// Live battle card — shows "You vs {opponent}", the current step
+/// delta, remaining time, and optionally an "Enter the Arena" button.
+///
+/// Home renders it with the button visible so the user can jump into
+/// the arena for a battle running RIGHT NOW. Day Summary reuses the
+/// same widget to render historical battles that were live on that
+/// past date — but passes `showEnterButton: false` because navigating
+/// into a mid-battle arena from a past-day summary doesn't make sense.
+class LiveBattleCard extends StatelessWidget {
   final String battleId;
   final String opponentName;
   final int yourSteps;
   final int opponentSteps;
   final String timeLeft;
 
-  const _ActiveState({
+  /// Show the "Enter the Arena" button. Defaults to true (Home usage);
+  /// callers surfacing this card in a read-only context (Day Summary)
+  /// pass false.
+  final bool showEnterButton;
+
+  const LiveBattleCard({
+    super.key,
     required this.battleId,
     required this.opponentName,
     required this.yourSteps,
     required this.opponentSteps,
     required this.timeLeft,
+    this.showEnterButton = true,
   });
 
   @override
@@ -122,27 +137,33 @@ class _ActiveState extends StatelessWidget {
               fontWeight: FontWeight.w600,
             ),
           ),
-          const SizedBox(height: 16),
-          SizedBox(
-            width: double.infinity,
-            child: FilledButton.icon(
-              onPressed: () => context.push('/battle-ground/$battleId'),
-              icon: const Icon(Icons.stadium, size: 18),
-              label: const Text('Enter the Arena'),
+          if (showEnterButton) ...[
+            const SizedBox(height: 16),
+            SizedBox(
+              width: double.infinity,
+              child: FilledButton.icon(
+                onPressed: () => context.push('/battle-ground/$battleId'),
+                icon: const Icon(Icons.stadium, size: 18),
+                label: const Text('Enter the Arena'),
+              ),
             ),
-          ),
+          ],
         ],
       ),
     );
   }
 }
 
-class _CompletedState extends StatelessWidget {
+/// Completed battle card — "Last Battle · vs {opponent}" + won/lost
+/// caption. Same visual for Home's "State B" and Day Summary's past
+/// completed battles.
+class CompletedBattleCard extends StatelessWidget {
   final String opponentName;
   final bool won;
   final int xpEarned;
 
-  const _CompletedState({
+  const CompletedBattleCard({
+    super.key,
     required this.opponentName,
     required this.won,
     required this.xpEarned,

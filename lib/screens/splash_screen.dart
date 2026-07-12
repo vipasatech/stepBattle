@@ -83,7 +83,7 @@ class _SplashScreenState extends ConsumerState<SplashScreen>
     if (!auth.isLoading) {
       final user = auth.valueOrNull;
       if (user == null) {
-        _go('/login');
+        _go('/welcome');
         return;
       }
       _decideLoggedInDest();
@@ -106,7 +106,7 @@ class _SplashScreenState extends ConsumerState<SplashScreen>
     if (_cachedUser != null) {
       _decideLoggedInDest();
     } else {
-      _go('/login');
+      _go('/welcome');
     }
   }
 

@@ -461,22 +461,80 @@ Future<_BattleNotifContent?> _renderBattle(String uid) async {
 /// session screen owns the rich UI. Returns null when no Track is active.
 ({String title, String body, String bigText})? _renderTrack() {
   try {
-    final startedMs = Hive.box(NativeStepService.boxName)
-        .get('active_track_started_at');
-    if (startedMs is int) {
-      final started = DateTime.fromMillisecondsSinceEpoch(startedMs);
-      final elapsed = DateTime.now().difference(started);
-      final elapsedStr = _fmtElapsed(elapsed);
-      return (
-        title: 'Tracking your run',
-        body: '$elapsedStr elapsed · tap to view',
-        bigText: 'Run in progress\n'
-            '⏱ $elapsedStr\n'
-            'Tap to open the live session.',
-      );
-    }
+    // Hive keys mirror `RunTrackingService.activeTrack*Key` — kept as
+    // literals here because importing across the background-service
+    // isolate boundary tends to break the plugin's entry-point
+    // registration.
+    final box = Hive.box(NativeStepService.boxName);
+    final startedMs = box.get('active_track_started_at');
+    if (startedMs is! int) return null;
+
+    final started = DateTime.fromMillisecondsSinceEpoch(startedMs);
+    final elapsed = DateTime.now().difference(started);
+    final elapsedStr = _fmtElapsed(elapsed);
+
+    // Read the mirror set. Missing values render as "—" so a race
+    // between `start()` and the first `_emit()` doesn't crash the
+    // notification with a NaN.
+    final steps = (box.get('active_track_steps') as num?)?.toInt() ?? 0;
+    final distanceM =
+        (box.get('active_track_distance_m') as num?)?.toDouble() ?? 0.0;
+    final paceSecKm =
+        (box.get('active_track_pace_sec_km') as num?)?.toDouble();
+
+    final distanceStr = _fmtDistance(distanceM);
+    final paceStr = _fmtPace(paceSecKm);
+    final stepsStr = _fmtSteps(steps);
+
+    // Compact single-line body for the collapsed notification.
+    final compactBody =
+        '$distanceStr · $elapsedStr · $paceStr · $stepsStr steps';
+
+    // Expanded lock-screen BigText — Strava-style layout the user
+    // asked for. Emoji labels give the four values an at-a-glance
+    // legend without needing a custom layout XML.
+    final bigText = 'Run in progress\n'
+        '⏱ Time  $elapsedStr\n'
+        '📏 Distance  $distanceStr\n'
+        '🏃 Pace  $paceStr\n'
+        '👟 Steps  $stepsStr';
+
+    return (
+      title: 'Tracking your run',
+      body: compactBody,
+      bigText: bigText,
+    );
   } catch (_) {}
   return null;
+}
+
+/// Format metres → "1.11 km" (or "812 m" under 1 km).
+String _fmtDistance(double meters) {
+  if (meters < 1000) return '${meters.round()} m';
+  final km = meters / 1000.0;
+  return '${km.toStringAsFixed(km < 10 ? 2 : 1)} km';
+}
+
+/// Format seconds/km → "7:34 /km" (or "--/km" when null).
+String _fmtPace(double? secPerKm) {
+  if (secPerKm == null || secPerKm.isNaN || !secPerKm.isFinite) {
+    return '--/km';
+  }
+  final m = secPerKm ~/ 60;
+  final s = (secPerKm % 60).round();
+  return '$m:${s.toString().padLeft(2, '0')} /km';
+}
+
+/// Thousand-separated integer for the steps line.
+String _fmtSteps(int n) {
+  if (n == 0) return '0';
+  final s = n.toString();
+  final buf = StringBuffer();
+  for (var i = 0; i < s.length; i++) {
+    if (i > 0 && (s.length - i) % 3 == 0) buf.write(',');
+    buf.write(s[i]);
+  }
+  return buf.toString();
 }
 
 @pragma('vm:entry-point')

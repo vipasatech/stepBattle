@@ -175,7 +175,7 @@ class _MembersSection extends ConsumerWidget {
       int rank(ClanMember m) => m.isCaptain ? 0 : (m.isAdmin ? 1 : 2);
       final r = rank(a).compareTo(rank(b));
       if (r != 0) return r;
-      return a.displayName.toLowerCase().compareTo(b.displayName.toLowerCase());
+      return a.friendlyName.toLowerCase().compareTo(b.friendlyName.toLowerCase());
     });
 
     return Column(
@@ -230,8 +230,8 @@ class _MemberDetailRow extends ConsumerWidget {
           AvatarCircle(
             radius: 22,
             imageUrl: member.avatarURL,
-            initials: member.displayName.isNotEmpty
-                ? member.displayName[0].toUpperCase()
+            initials: member.friendlyName.isNotEmpty
+                ? member.friendlyName[0].toUpperCase()
                 : '?',
             borderColor: member.isCaptain
                 ? AppColors.primary
@@ -249,7 +249,7 @@ class _MemberDetailRow extends ConsumerWidget {
                   children: [
                     Flexible(
                       child: Text(
-                        member.displayName +
+                        member.friendlyName +
                             (isSelf ? ' (you)' : ''),
                         style: theme.textTheme.titleSmall
                             ?.copyWith(fontWeight: FontWeight.w600),
@@ -414,7 +414,7 @@ class _MemberActionsMenuState extends ConsumerState<_MemberActionsMenu> {
               context,
               title: 'Transfer captaincy?',
               body:
-                  '${m.displayName} will become the new captain. You will be demoted to soldier.',
+                  '${m.friendlyName} will become the new captain. You will be demoted to soldier.',
               confirmLabel: 'Transfer',
               destructive: false,
             );
@@ -429,7 +429,7 @@ class _MemberActionsMenuState extends ConsumerState<_MemberActionsMenu> {
           case 'kick':
             final confirmed = await _confirm(
               context,
-              title: 'Kick ${m.displayName}?',
+              title: 'Kick ${m.friendlyName}?',
               body: 'They will be removed from the clan immediately.',
               confirmLabel: 'Kick',
               destructive: true,
@@ -546,7 +546,7 @@ class _DangerZoneState extends ConsumerState<_DangerZone> {
         );
         await _svc.leaveClan(clanId: clan.clanId, userId: uid);
         if (mounted) {
-          _snack('Captaincy transferred to ${picked.displayName}. You left the clan.');
+          _snack('Captaincy transferred to ${picked.friendlyName}. You left the clan.');
           context.pop();
         }
       } catch (e) {
@@ -751,8 +751,8 @@ Future<ClanMember?> _showCaptainPicker(
                               AvatarCircle(
                                 radius: 18,
                                 imageUrl: m.avatarURL,
-                                initials: m.displayName.isNotEmpty
-                                    ? m.displayName[0].toUpperCase()
+                                initials: m.friendlyName.isNotEmpty
+                                    ? m.friendlyName[0].toUpperCase()
                                     : '?',
                                 borderColor: Colors.white
                                     .withValues(alpha: 0.05),
@@ -764,7 +764,7 @@ Future<ClanMember?> _showCaptainPicker(
                                   crossAxisAlignment:
                                       CrossAxisAlignment.start,
                                   children: [
-                                    Text(m.displayName,
+                                    Text(m.friendlyName,
                                         style: Theme.of(ctx)
                                             .textTheme
                                             .titleSmall),

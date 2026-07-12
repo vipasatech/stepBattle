@@ -3,6 +3,13 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 class ClanMember {
   final String userId;
   final String displayName;
+
+  /// Live-joined from `profiles.preferred_name` at read time (see
+  /// `ClanService.watchMembers`). Null when unset; `friendlyName`
+  /// falls back to `displayName`. Same contract as
+  /// `UserModel.friendlyName` and `BattleParticipant.friendlyName`.
+  final String? preferredName;
+
   final String? avatarURL;
   final String role; // "captain" | "admin" | "soldier"
   final int stepsToday;
@@ -10,6 +17,7 @@ class ClanMember {
   const ClanMember({
     required this.userId,
     required this.displayName,
+    this.preferredName,
     this.avatarURL,
     this.role = 'soldier',
     this.stepsToday = 0,
@@ -18,6 +26,13 @@ class ClanMember {
   bool get isCaptain => role == 'captain';
   bool get isAdmin => role == 'admin';
   bool get isSoldier => role == 'soldier';
+
+  /// Nickname if set at join time, otherwise the full display name.
+  String get friendlyName {
+    final trimmed = preferredName?.trim();
+    if (trimmed != null && trimmed.isNotEmpty) return trimmed;
+    return displayName;
+  }
 
   /// Human-readable role label.
   String get roleLabel => switch (role) {
@@ -29,6 +44,7 @@ class ClanMember {
   factory ClanMember.fromMap(Map<String, dynamic> m) => ClanMember(
         userId: m['userId'] as String? ?? '',
         displayName: m['displayName'] as String? ?? '',
+        preferredName: m['preferredName'] as String?,
         avatarURL: m['avatarURL'] as String?,
         role: m['role'] as String? ?? 'soldier',
         stepsToday: m['stepsToday'] as int? ?? 0,
@@ -36,12 +52,13 @@ class ClanMember {
 
   /// Build from a `clan_members` row with a joined `profiles(...)` embed.
   /// PostgREST nested-select shape used by `ClanService.watchMembers`:
-  ///   `select('user_id, role, steps_today, profiles!inner(display_name, avatar_url)')`
+  ///   `select('user_id, role, steps_today, profiles!inner(display_name, preferred_name, avatar_url)')`
   factory ClanMember.fromSupabaseRow(Map<String, dynamic> d) {
     final profile = d['profiles'] as Map<String, dynamic>?;
     return ClanMember(
       userId: d['user_id'] as String? ?? '',
       displayName: profile?['display_name'] as String? ?? '',
+      preferredName: profile?['preferred_name'] as String?,
       avatarURL: profile?['avatar_url'] as String?,
       role: d['role'] as String? ?? 'soldier',
       stepsToday: (d['steps_today'] as num?)?.toInt() ?? 0,
@@ -51,6 +68,7 @@ class ClanMember {
   Map<String, dynamic> toMap() => {
         'userId': userId,
         'displayName': displayName,
+        'preferredName': preferredName,
         'avatarURL': avatarURL,
         'role': role,
         'stepsToday': stepsToday,

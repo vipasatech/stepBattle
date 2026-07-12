@@ -131,7 +131,7 @@ class _FriendRequestToastHostState
                 // Key by relationshipId so a new arrival rebuilds the toast
                 // (re-runs entry animation) rather than reusing state.
                 key: ValueKey(current.rel.relationshipId),
-                displayName: current.user.displayName,
+                displayName: current.user.friendlyName,
                 avatarUrl: current.user.avatarURL,
                 onAccept: _onAccept,
                 onDismiss: _onDismiss,

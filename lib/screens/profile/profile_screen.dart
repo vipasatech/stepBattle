@@ -11,8 +11,10 @@ import '../../providers/user_provider.dart';
 import '../../services/step_source_aggregator.dart';
 import '../../models/avatar.dart';
 import '../../models/user_model.dart';
+import '../../providers/character_3d_provider.dart';
 import '../../sheets/add_friends_sheet.dart';
 import '../../sheets/avatar_picker_sheet.dart';
+import '../../sheets/character_3d_picker_sheet.dart';
 import '../../sheets/edit_survey_sheet.dart';
 import '../../sheets/set_goal_sheet.dart';
 import '../../sheets/set_home_sheet.dart';
@@ -188,6 +190,14 @@ class ProfileScreen extends ConsumerWidget {
 
                 // Battle-ground runner picker — opens [AvatarPickerSheet].
                 _BattleAvatarTile(),
+
+                const SizedBox(height: 8),
+
+                // 3D character picker — device-local pref (Hive), opens
+                // [Character3DPickerSheet]. Defaults to the character
+                // matching the survey gender when the user hasn't picked
+                // explicitly yet.
+                _Character3DTile(),
 
                 const SizedBox(height: 8),
 
@@ -615,6 +625,66 @@ class _BattleAvatarTile extends ConsumerWidget {
               ),
               Icon(Icons.chevron_right,
                   color: AppColors.onSurfaceVariant),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+// =============================================================================
+// 3D character tile — sits alongside _BattleAvatarTile. Opens
+// [Character3DPickerSheet]. Purely cosmetic (device-local via Hive) — the
+// 2D battle avatar above remains the multiplayer-visible one on the
+// battleground tile.
+// =============================================================================
+class _Character3DTile extends ConsumerWidget {
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final theme = Theme.of(context);
+    final character = ref.watch(currentCharacter3DProvider);
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: () => showCharacter3DPickerSheet(context),
+        borderRadius: BorderRadius.circular(16),
+        child: Container(
+          padding: const EdgeInsets.all(14),
+          decoration: BoxDecoration(
+            color: AppColors.surfaceContainerLow,
+            borderRadius: BorderRadius.circular(16),
+            border:
+                Border.all(color: AppColors.onSurface.withValues(alpha: 0.05)),
+          ),
+          child: Row(
+            children: [
+              Container(
+                width: 44,
+                height: 44,
+                decoration: BoxDecoration(
+                  color: AppColors.primary.withValues(alpha: 0.12),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: Icon(Icons.directions_run,
+                    color: AppColors.primary, size: 22),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text('3D character',
+                        style: theme.textTheme.titleSmall
+                            ?.copyWith(fontWeight: FontWeight.w700)),
+                    Text('Tap to change · ${character.label}',
+                        style: theme.textTheme.labelSmall?.copyWith(
+                          color: AppColors.onSurfaceVariant,
+                        )),
+                  ],
+                ),
+              ),
+              Icon(Icons.chevron_right, color: AppColors.onSurfaceVariant),
             ],
           ),
         ),

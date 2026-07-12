@@ -167,7 +167,7 @@ class _MiniRow extends StatelessWidget {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(
-              isMe ? 'You' : _short(p.displayName),
+              isMe ? 'You' : _short(p.friendlyName),
               style: TextStyle(
                 fontFamily: 'Manrope',
                 color: isMe ? AppColors.primary : Colors.white,
@@ -280,8 +280,8 @@ class _FullRow extends StatelessWidget {
         AvatarCircle(
           radius: 14,
           imageUrl: p.avatarURL,
-          initials: p.displayName.isNotEmpty
-              ? p.displayName[0].toUpperCase()
+          initials: p.friendlyName.isNotEmpty
+              ? p.friendlyName[0].toUpperCase()
               : '?',
           borderColor: isMe ? AppColors.primary : AppColors.outlineVariant,
           borderWidth: 1.5,
@@ -289,7 +289,7 @@ class _FullRow extends StatelessWidget {
         const SizedBox(width: 10),
         Expanded(
           child: Text(
-            isMe ? 'You' : p.displayName,
+            isMe ? 'You' : p.friendlyName,
             style: theme.textTheme.labelMedium?.copyWith(
               color: isMe ? AppColors.primary : Colors.white,
               fontWeight: FontWeight.w700,

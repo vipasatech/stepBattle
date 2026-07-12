@@ -1,5 +1,6 @@
 ﻿import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../config/colors.dart';
 import '../models/user_model.dart';
@@ -103,11 +104,11 @@ class _AddFriendsSheetState extends ConsumerState<AddFriendsSheet> {
             fromUserId: me.userId,
             toUserId: target.userId,
             fromDisplayName:
-                me.displayName.isEmpty ? 'Someone' : me.displayName,
+                me.friendlyName.isEmpty ? 'Someone' : me.friendlyName,
           );
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Friend request sent to ${target.displayName}')),
+          SnackBar(content: Text('Friend request sent to ${target.friendlyName}')),
         );
       }
     } catch (e) {
@@ -127,7 +128,7 @@ class _AddFriendsSheetState extends ConsumerState<AddFriendsSheet> {
       context: context,
       builder: (ctx) => AlertDialog(
         backgroundColor: AppColors.surfaceContainerLow,
-        title: Text('Remove ${friend.displayName}?'),
+        title: Text('Remove ${friend.friendlyName}?'),
         content: const Text(
             'They will no longer appear in your friends list. You can re-add them later.'),
         actions: [
@@ -153,7 +154,7 @@ class _AddFriendsSheetState extends ConsumerState<AddFriendsSheet> {
       ref.invalidate(friendsListProvider);
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('${friend.displayName} removed from friends')),
+          SnackBar(content: Text('${friend.friendlyName} removed from friends')),
         );
       }
     } catch (e) {
@@ -431,7 +432,16 @@ class _FriendsListTab extends StatelessWidget {
           user: f,
           selected: selectedIds.contains(f.userId),
           showSelect: allowSelect,
-          onTap: allowSelect ? () => onToggle(f) : null,
+          // In selection mode → toggle. Otherwise → open the friend's
+          // public profile page (same destination as leaderboard row
+          // taps). Sheet dismisses first so the profile page lands on
+          // the shell navigator behind it.
+          onTap: allowSelect
+              ? () => onToggle(f)
+              : () {
+                  Navigator.of(context).pop();
+                  context.push('/users/${f.userId}');
+                },
           trailing: isManageMode
               ? _FriendKebab(onRemove: () => onRemove(f))
               : null,
@@ -911,8 +921,8 @@ class _OutgoingRequestRowState extends ConsumerState<_OutgoingRequestRow> {
           AvatarCircle(
             radius: 22,
             imageUrl: widget.user.avatarURL,
-            initials: widget.user.displayName.isNotEmpty
-                ? widget.user.displayName[0].toUpperCase()
+            initials: widget.user.friendlyName.isNotEmpty
+                ? widget.user.friendlyName[0].toUpperCase()
                 : '?',
             borderColor: AppColors.outlineVariant,
             borderWidth: 1,
@@ -922,7 +932,7 @@ class _OutgoingRequestRowState extends ConsumerState<_OutgoingRequestRow> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(widget.user.displayName,
+                Text(widget.user.friendlyName,
                     style: theme.textTheme.titleSmall
                         ?.copyWith(fontWeight: FontWeight.w700)),
                 Text('Waiting for response',
@@ -997,8 +1007,8 @@ class _IncomingRequestRowState extends ConsumerState<_IncomingRequestRow> {
           AvatarCircle(
             radius: 26,
             imageUrl: widget.user.avatarURL,
-            initials: widget.user.displayName.isNotEmpty
-                ? widget.user.displayName[0].toUpperCase()
+            initials: widget.user.friendlyName.isNotEmpty
+                ? widget.user.friendlyName[0].toUpperCase()
                 : '?',
             borderColor: AppColors.primary.withValues(alpha: 0.2),
             borderWidth: 2,
@@ -1008,7 +1018,7 @@ class _IncomingRequestRowState extends ConsumerState<_IncomingRequestRow> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(widget.user.displayName,
+                Text(widget.user.friendlyName,
                     style: theme.textTheme.titleSmall
                         ?.copyWith(fontWeight: FontWeight.w700)),
                 Text(widget.user.userCode,
@@ -1074,8 +1084,8 @@ class _UserRow extends StatelessWidget {
           AvatarCircle(
             radius: 26,
             imageUrl: user.avatarURL,
-            initials: user.displayName.isNotEmpty
-                ? user.displayName[0].toUpperCase()
+            initials: user.friendlyName.isNotEmpty
+                ? user.friendlyName[0].toUpperCase()
                 : '?',
             borderColor: AppColors.primary.withValues(alpha: 0.2),
             borderWidth: 2,
@@ -1085,7 +1095,7 @@ class _UserRow extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(user.displayName,
+                Text(user.friendlyName,
                     style: theme.textTheme.titleSmall
                         ?.copyWith(fontWeight: FontWeight.w700)),
                 Text(

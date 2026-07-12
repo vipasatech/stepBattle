@@ -98,17 +98,38 @@ final daySummaryProvider =
         .lt('created_at', dayEndIso),
 
     // 3. battles whose window overlaps this date AND user is a
-    //    participant. We use a relationship inner-join via the
-    //    embedded `battle_participants(*)` so PostgREST filters
-    //    server-side on participant.user_id and we still get the
-    //    full battle row + nested participants list (needed for
-    //    score rendering).
+    //    participant.
+    //
+    //    Two embeds of `battle_participants`:
+    //      • `_me:battle_participants!inner(user_id)` — inner-join
+    //        filtered to the current user's row, used ONLY to drop
+    //        battles where the user isn't a participant.
+    //      • `battle_participants(*)` — unfiltered second embed, gives
+    //        us EVERY participant on each surviving battle so the
+    //        rich Day Summary card can render "You vs {opponent}" and
+    //        the score bar.
+    //
+    //    Earlier version used a single `!inner` embed with the user
+    //    filter on the same relation — that returned each battle with
+    //    a participants list of exactly one (you), which made
+    //    `battle.opponentFor(uid)` return null and stripped the rich
+    //    card path.
     supabase
         .from('battles')
-        .select('*, battle_participants!inner(*), battle_teams(*)')
-        .eq('battle_participants.user_id', userId)
-        .lte('start_time', dayEndIso)
-        .gte('end_time', dayStartIso)
+        .select(
+            '*, _me:battle_participants!inner(user_id), battle_participants(*), battle_teams(*)')
+        .eq('_me.user_id', userId)
+        // Half-open window: `[dayStart, dayEnd)`. dayEndIso is the
+        // START of the NEXT day so we need `<`, not `<=` — otherwise
+        // a battle that begins exactly at midnight of the following
+        // day (i.e. today's daily battle when viewing yesterday's
+        // summary) counts as touching yesterday's window and shows.
+        //
+        // Same logic on the lower bound: `>` filters out a battle
+        // that ended exactly at midnight of the selected day (which
+        // is really the previous day's battle).
+        .lt('start_time', dayEndIso)
+        .gt('end_time', dayStartIso)
         .order('end_time', ascending: false),
 
     // 4. track_sessions whose started_at falls on this date.

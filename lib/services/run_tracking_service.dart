@@ -45,6 +45,23 @@ class RunTrackingService {
   // open a new one). Read by background_sync.dart's notification renderer.
   static const _kActiveStartedAt = 'active_track_started_at';
 
+  // Hive keys that mirror the live session's key metrics so the
+  // background-service isolate can render a rich lock-screen
+  // notification (Strava-style: time / pace / distance / steps)
+  // without needing to reach back into this service's memory.
+  static const _kActiveTrackSteps = 'active_track_steps';
+  static const _kActiveTrackDistanceM = 'active_track_distance_m';
+  static const _kActiveTrackPaceSecKm = 'active_track_pace_sec_km';
+  static const _kActiveTrackCalories = 'active_track_calories';
+
+  // Exposed so `background_sync._renderTrack` can key off the same
+  // strings without depending back on this whole file.
+  static const activeTrackStartedAtKey = _kActiveStartedAt;
+  static const activeTrackStepsKey = _kActiveTrackSteps;
+  static const activeTrackDistanceMKey = _kActiveTrackDistanceM;
+  static const activeTrackPaceSecKmKey = _kActiveTrackPaceSecKm;
+  static const activeTrackCaloriesKey = _kActiveTrackCalories;
+
   /// Prefix for pending-upload session payloads. Each ended session is
   /// stamped into Hive under `pendingTrackPrefix + <uuid>` BEFORE we
   /// attempt the Supabase insert; the entry is deleted only after the
@@ -280,7 +297,15 @@ class RunTrackingService {
     }
 
     try {
-      await Hive.box(NativeStepService.boxName).delete(_kActiveStartedAt);
+      final box = Hive.box(NativeStepService.boxName);
+      // Clearing every key that made the notification "live" — the
+      // background isolate's render helper treats any-missing as
+      // "session inactive" and cancels the notification.
+      await box.delete(_kActiveStartedAt);
+      await box.delete(_kActiveTrackSteps);
+      await box.delete(_kActiveTrackDistanceM);
+      await box.delete(_kActiveTrackPaceSecKm);
+      await box.delete(_kActiveTrackCalories);
     } catch (_) {}
 
     final saved = RunSession(
@@ -630,6 +655,24 @@ class RunTrackingService {
       path: List.unmodifiable(_path),
     );
     if (!_stateController.isClosed) _stateController.add(_latest!);
+
+    // Mirror the four notification metrics into Hive so the
+    // foreground-service isolate (see background_sync._renderTrack)
+    // can render a Strava-style lock-screen notification without
+    // cross-isolate messaging. Best-effort — a Hive write hiccup
+    // shouldn't affect the live UI.
+    try {
+      final box = Hive.box(NativeStepService.boxName);
+      box.put(_kActiveTrackSteps, _currentSteps);
+      box.put(_kActiveTrackDistanceM, totalDistance);
+      // Store null-as-null so the notification can distinguish
+      // "warming up, no pace yet" from "pace = 0".
+      box.put(_kActiveTrackPaceSecKm, pace);
+      box.put(
+        _kActiveTrackCalories,
+        _latest!.calories,
+      );
+    } catch (_) {/* ignore transient Hive errors */}
   }
 
   String _computeSource() {

@@ -9,6 +9,7 @@ import '../../config/colors.dart';
 import '../../models/run_session_model.dart';
 import '../../providers/run_session_provider.dart';
 import '../../sheets/track_share_sheet.dart';
+import '../../widgets/map_tile_layer.dart';
 
 /// Read-only detail view for a saved Track session.
 ///
@@ -374,41 +375,61 @@ class _TopStatsRow extends StatelessWidget {
     );
 
     if (compact) {
-      // 2×2 grid: Distance / Pace on top, Time / Steps below. Each
-      // stat gets ~half the container width — plenty of room for
-      // "20m 15s" and "2,671" without truncation. When calories is
-      // provided, a third row surfaces it in the left column beneath
-      // Time (right column intentionally empty so kcal sits directly
-      // under Distance + Time, per the user's ask).
+      // 2×2 grid + centred kcal row per the user's alignment brief:
+      //   Distance[left]        Pace[right]
+      //   Steps[left]           Time[right]
+      //          Calories[center]
+      // The left / right pull comes from `_TopStat.alignment` so the
+      // label + value stack pins to the column's outer edge instead
+      // of centring inside its Expanded slot.
+      final compactDistance = _TopStat(
+        label: 'Distance',
+        value: distanceKm.toStringAsFixed(2),
+        unit: 'km',
+        alignment: CrossAxisAlignment.start,
+      );
+      final compactPace = _TopStat(
+        label: 'Pace',
+        value: _fmtPace(paceSecPerKm),
+        unit: paceSecPerKm == null ? '' : '/km',
+        alignment: CrossAxisAlignment.end,
+      );
+      final compactSteps = _TopStat(
+        label: 'Steps',
+        value: '$steps',
+        unit: '',
+        alignment: CrossAxisAlignment.start,
+      );
+      final compactTime = _TopStat(
+        label: 'Time',
+        value: _fmtDuration(durationSeconds),
+        unit: '',
+        alignment: CrossAxisAlignment.end,
+      );
       return Column(
         mainAxisSize: MainAxisSize.min,
         children: [
           Row(
             children: [
-              Expanded(child: distance),
-              Expanded(child: pace),
+              Expanded(child: compactDistance),
+              Expanded(child: compactPace),
             ],
           ),
           const SizedBox(height: 18),
           Row(
             children: [
-              Expanded(child: time),
-              Expanded(child: stepsStat),
+              Expanded(child: compactSteps),
+              Expanded(child: compactTime),
             ],
           ),
           if (calories != null) ...[
             const SizedBox(height: 18),
-            Row(
-              children: [
-                Expanded(
-                  child: _TopStat(
-                    label: 'Calories',
-                    value: '$calories',
-                    unit: 'kcal',
-                  ),
-                ),
-                const Expanded(child: SizedBox.shrink()),
-              ],
+            _TopStat(
+              label: 'Calories',
+              value: '$calories',
+              unit: 'kcal',
+              // Centred: spans the full width of the parent Column.
+              alignment: CrossAxisAlignment.center,
             ),
           ],
         ],
@@ -448,26 +469,39 @@ class _TopStat extends StatelessWidget {
   final String label;
   final String value;
   final String unit;
+
+  /// Pins the label + value stack to the column's outer edge (start /
+  /// end) or centre. Detail screen uses [CrossAxisAlignment.center]
+  /// so all 4 across sit balanced; home peek uses start / end per
+  /// column so Distance + Steps pin left and Pace + Time pin right.
+  final CrossAxisAlignment alignment;
+
   const _TopStat({
     required this.label,
     required this.value,
     required this.unit,
+    this.alignment = CrossAxisAlignment.center,
   });
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    // Center-aligned column content — same treatment as the share
-    // cards' 4-column stats row. The parent Row + Expanded already
-    // gives equal widths; centering the label + value pair inside
-    // each column then makes the visual gap between adjacent
-    // columns look equal regardless of value string length.
+    final rowAlign = switch (alignment) {
+      CrossAxisAlignment.start => MainAxisAlignment.start,
+      CrossAxisAlignment.end => MainAxisAlignment.end,
+      _ => MainAxisAlignment.center,
+    };
+    final textAlign = switch (alignment) {
+      CrossAxisAlignment.start => TextAlign.left,
+      CrossAxisAlignment.end => TextAlign.right,
+      _ => TextAlign.center,
+    };
     return Column(
-      crossAxisAlignment: CrossAxisAlignment.center,
+      crossAxisAlignment: alignment,
       children: [
         Text(
           label,
-          textAlign: TextAlign.center,
+          textAlign: textAlign,
           style: theme.textTheme.labelSmall?.copyWith(
             color: AppColors.onSurfaceVariant,
             fontWeight: FontWeight.w700,
@@ -475,7 +509,8 @@ class _TopStat extends StatelessWidget {
         ),
         const SizedBox(height: 4),
         Row(
-          mainAxisAlignment: MainAxisAlignment.center,
+          mainAxisAlignment: rowAlign,
+          mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.baseline,
           textBaseline: TextBaseline.alphabetic,
           children: [
@@ -777,10 +812,7 @@ class _RouteMap extends StatelessWidget {
         ),
       ),
       children: [
-        TileLayer(
-          urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-          userAgentPackageName: 'com.stepbattle.stepbattle',
-        ),
+        osmTileLayer(context),
         PolylineLayer(
           polylines: [
             Polyline(

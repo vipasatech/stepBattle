@@ -3,6 +3,14 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 class BattleParticipant {
   final String userId;
   final String displayName;
+
+  /// Snapshot of the user's `profiles.preferred_name` at the moment
+  /// they joined this battle. Nullable — legacy rows created before
+  /// migration 0025 leave it null, and users who never set a preferred
+  /// name also leave it null; the [friendlyName] getter falls back to
+  /// [displayName] in both cases.
+  final String? preferredName;
+
   final String? avatarURL;
 
   /// Steps inside the battle window (derived from lifetime totals).
@@ -39,6 +47,7 @@ class BattleParticipant {
   const BattleParticipant({
     required this.userId,
     required this.displayName,
+    this.preferredName,
     this.avatarURL,
     this.currentSteps = 0,
     this.startStepsBaseline,
@@ -49,11 +58,21 @@ class BattleParticipant {
     this.battleAvatarId,
   });
 
+  /// Rendered name — prefers [preferredName] when the user set a
+  /// nickname at battle-creation time, otherwise falls back to
+  /// [displayName]. Same fallback contract as `UserModel.friendlyName`.
+  String get friendlyName {
+    final trimmed = preferredName?.trim();
+    if (trimmed != null && trimmed.isNotEmpty) return trimmed;
+    return displayName;
+  }
+
   /// Firestore-style nested map (still used by [BattleModel.toFirestore]).
   factory BattleParticipant.fromMap(Map<String, dynamic> map) {
     return BattleParticipant(
       userId: map['userId'] as String? ?? '',
       displayName: map['displayName'] as String? ?? '',
+      preferredName: map['preferredName'] as String?,
       avatarURL: map['avatarURL'] as String?,
       currentSteps: map['currentSteps'] as int? ?? 0,
       isWinner: map['isWinner'] as bool? ?? false,
@@ -63,6 +82,7 @@ class BattleParticipant {
   Map<String, dynamic> toMap() => {
         'userId': userId,
         'displayName': displayName,
+        'preferredName': preferredName,
         'avatarURL': avatarURL,
         'currentSteps': currentSteps,
         'isWinner': isWinner,
@@ -73,6 +93,7 @@ class BattleParticipant {
     return BattleParticipant(
       userId: d['user_id'] as String? ?? '',
       displayName: d['display_name'] as String? ?? '',
+      preferredName: d['preferred_name'] as String?,
       avatarURL: d['avatar_url'] as String?,
       currentSteps: (d['current_steps'] as num?)?.toInt() ?? 0,
       startStepsBaseline: (d['start_steps_baseline'] as num?)?.toInt(),

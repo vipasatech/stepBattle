@@ -33,6 +33,9 @@ class _EditSurveySheetState extends ConsumerState<EditSurveySheet> {
   DateTime? _dateOfBirth;
   Gender? _gender;
   FitnessLevel? _fitnessLevel;
+  late final TextEditingController _preferredName;
+  late final TextEditingController _heightCm;
+  late final TextEditingController _weightKg;
   bool _saving = false;
   String? _error;
 
@@ -45,21 +48,88 @@ class _EditSurveySheetState extends ConsumerState<EditSurveySheet> {
     _dateOfBirth = me?.dateOfBirth;
     _gender = me?.gender;
     _fitnessLevel = me?.fitnessLevel;
+    _preferredName = TextEditingController(text: me?.preferredName ?? '')
+      // Force a rebuild on each edit so `_canSave` reflects changes
+      // without waiting for another setState.
+      ..addListener(() => setState(() {}));
+    _heightCm = TextEditingController(
+      text: me?.heightCm?.toString() ?? '',
+    )..addListener(() => setState(() {}));
+    _weightKg = TextEditingController(
+      // Show one decimal for existing weights, or empty when null.
+      text: me?.weightKg == null ? '' : _fmtWeight(me!.weightKg!),
+    )..addListener(() => setState(() {}));
   }
+
+  static String _fmtWeight(double kg) {
+    // Trim trailing zero on integer-valued weights so "70.0" reads
+    // as "70". Anything else keeps one decimal.
+    if (kg == kg.roundToDouble()) return kg.toStringAsFixed(0);
+    return kg.toStringAsFixed(1);
+  }
+
+  @override
+  void dispose() {
+    _preferredName.dispose();
+    _heightCm.dispose();
+    _weightKg.dispose();
+    super.dispose();
+  }
+
+  /// Parsed height, or null when the field is empty / unparseable.
+  /// The CHECK constraint on `profiles.height_cm` (60..250) is
+  /// enforced client-side too so the save path can't be rejected by
+  /// the DB.
+  int? get _parsedHeight {
+    final raw = _heightCm.text.trim();
+    if (raw.isEmpty) return null;
+    final n = int.tryParse(raw);
+    if (n == null) return null;
+    if (n < 60 || n > 250) return null;
+    return n;
+  }
+
+  /// Parsed weight, or null when the field is empty / unparseable.
+  /// Mirrors the DB CHECK constraint (15..400).
+  double? get _parsedWeight {
+    final raw = _weightKg.text.trim();
+    if (raw.isEmpty) return null;
+    final n = double.tryParse(raw);
+    if (n == null) return null;
+    if (n < 15 || n > 400) return null;
+    return n;
+  }
+
+  /// True when the height field has text but doesn't parse into range.
+  bool get _heightInvalid =>
+      _heightCm.text.trim().isNotEmpty && _parsedHeight == null;
+
+  /// True when the weight field has text but doesn't parse into range.
+  bool get _weightInvalid =>
+      _weightKg.text.trim().isNotEmpty && _parsedWeight == null;
 
   bool get _canSave =>
       _dateOfBirth != null &&
       _gender != null &&
       _fitnessLevel != null &&
+      !_heightInvalid &&
+      !_weightInvalid &&
       !_saving &&
       _hasChanges;
 
   bool get _hasChanges {
     final me = ref.read(currentUserProvider).valueOrNull;
     if (me == null) return true;
+    // Treat blank preferred names as null when comparing so pressing
+    // Save on an already-empty field with no other edits is disabled.
+    final newName = _preferredName.text.trim();
+    final oldName = me.preferredName?.trim() ?? '';
     return _dateOfBirth != me.dateOfBirth ||
         _gender != me.gender ||
-        _fitnessLevel != me.fitnessLevel;
+        _fitnessLevel != me.fitnessLevel ||
+        newName != oldName ||
+        _parsedHeight != me.heightCm ||
+        _parsedWeight != me.weightKg;
   }
 
   Future<void> _save() async {
@@ -78,13 +148,19 @@ class _EditSurveySheetState extends ConsumerState<EditSurveySheet> {
             dateOfBirth: _dateOfBirth!,
             gender: _gender!.wire,
             fitnessLevel: _fitnessLevel!.wire,
+            preferredName: _preferredName.text,
+            heightCm: _parsedHeight,
+            weightKg: _parsedWeight,
           );
 
-      // 2. Recompute the personalised goal from the new values.
+      // 2. Recompute the personalised goal from the new values —
+      //    height / weight feed the BMI multiplier when present.
       final rec = GoalFormula.compute(
         age: _ageFromDob(_dateOfBirth!),
         gender: _gender!,
         fitnessLevel: _fitnessLevel!,
+        heightCm: _parsedHeight,
+        weightKg: _parsedWeight,
       );
 
       ref.invalidate(currentUserProvider);
@@ -191,6 +267,34 @@ class _EditSurveySheetState extends ConsumerState<EditSurveySheet> {
 
                     const SizedBox(height: 28),
 
+                    // Preferred name — optional. When set, drives the
+                    // `friendlyName` getter on UserModel; blank means
+                    // "use display_name".
+                    _SectionLabel(text: 'WHAT DO YOU WANT TO BE CALLED?'),
+                    const SizedBox(height: 10),
+                    TextField(
+                      controller: _preferredName,
+                      maxLength: 40,
+                      textCapitalization: TextCapitalization.words,
+                      style: theme.textTheme.titleMedium,
+                      decoration: InputDecoration(
+                        hintText: 'e.g. a nickname (optional)',
+                        counterText: '',
+                        filled: true,
+                        fillColor: AppColors.surfaceContainerLow,
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(14),
+                          borderSide: BorderSide.none,
+                        ),
+                        contentPadding: const EdgeInsets.symmetric(
+                          horizontal: 16,
+                          vertical: 16,
+                        ),
+                      ),
+                    ),
+
+                    const SizedBox(height: 24),
+
                     // Birthday
                     _SectionLabel(text: 'BIRTHDAY'),
                     const SizedBox(height: 10),
@@ -198,6 +302,53 @@ class _EditSurveySheetState extends ConsumerState<EditSurveySheet> {
                       value: _dateOfBirth,
                       minAge: _minAge,
                       onPicked: (d) => setState(() => _dateOfBirth = d),
+                    ),
+
+                    const SizedBox(height: 24),
+
+                    // Height + weight — optional. Feed the BMI
+                    // multiplier in `GoalFormula`. Leaving either
+                    // blank falls back to the age/gender/fitness
+                    // recommendation for that user.
+                    Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment:
+                                CrossAxisAlignment.stretch,
+                            children: [
+                              _SectionLabel(text: 'HEIGHT (CM)'),
+                              const SizedBox(height: 10),
+                              _NumericField(
+                                controller: _heightCm,
+                                hint: 'e.g. 175',
+                                invalid: _heightInvalid,
+                                helper: '60 – 250',
+                                allowDecimal: false,
+                              ),
+                            ],
+                          ),
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment:
+                                CrossAxisAlignment.stretch,
+                            children: [
+                              _SectionLabel(text: 'WEIGHT (KG)'),
+                              const SizedBox(height: 10),
+                              _NumericField(
+                                controller: _weightKg,
+                                hint: 'e.g. 70',
+                                invalid: _weightInvalid,
+                                helper: '15 – 400',
+                                allowDecimal: true,
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
                     ),
 
                     const SizedBox(height: 24),
@@ -498,6 +649,62 @@ class _DobField extends StatelessWidget {
         'Nov',
         'Dec'
       ][m - 1];
+}
+
+/// Numeric input field for the height / weight rows. Renders with a
+/// red border when [invalid] is true so out-of-range values are
+/// visible before the user tries to save.
+class _NumericField extends StatelessWidget {
+  final TextEditingController controller;
+  final String hint;
+  final String helper;
+  final bool invalid;
+  final bool allowDecimal;
+
+  const _NumericField({
+    required this.controller,
+    required this.hint,
+    required this.helper,
+    required this.invalid,
+    required this.allowDecimal,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final border = OutlineInputBorder(
+      borderRadius: BorderRadius.circular(14),
+      borderSide: BorderSide(
+        color: invalid ? AppColors.error : Colors.transparent,
+        width: invalid ? 1.5 : 0,
+      ),
+    );
+    return TextField(
+      controller: controller,
+      keyboardType: TextInputType.numberWithOptions(
+        decimal: allowDecimal,
+      ),
+      style: theme.textTheme.titleMedium,
+      decoration: InputDecoration(
+        hintText: hint,
+        helperText: invalid ? 'Out of range' : helper,
+        helperStyle: theme.textTheme.labelSmall?.copyWith(
+          color: invalid
+              ? AppColors.error
+              : AppColors.onSurfaceVariant,
+        ),
+        filled: true,
+        fillColor: AppColors.surfaceContainerLow,
+        border: border,
+        enabledBorder: border,
+        focusedBorder: border,
+        contentPadding: const EdgeInsets.symmetric(
+          horizontal: 16,
+          vertical: 16,
+        ),
+      ),
+    );
+  }
 }
 
 class _OptionCard extends StatelessWidget {

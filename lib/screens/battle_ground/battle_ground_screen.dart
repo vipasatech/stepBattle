@@ -1,39 +1,39 @@
-﻿import 'dart:async';
+import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
-import 'package:flutter/rendering.dart';
-import 'package:flutter/scheduler.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_3d_controller/flutter_3d_controller.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../config/colors.dart';
-import '../../models/avatar.dart';
 import '../../models/battle_model.dart';
-import '../../providers/arena_pack_provider.dart';
 import '../../providers/auth_provider.dart';
 import '../../providers/battle_provider.dart';
-import '../../services/battleground_path.dart';
+import '../../providers/character_3d_provider.dart';
 import '../../services/battleground_tile.dart';
-import '../profile/public_profile_screen.dart';
+import '../../utils/app_logger.dart';
+import '../../widgets/animated_character_viewer.dart';
 import 'widgets/countdown_ring.dart';
 import 'widgets/leaderboard_pill.dart';
 
-/// Battle-ground arena — supports two packs:
+/// Battle-ground arena — live 3D city scene.
 ///
-///   • [ArenaPack.forest] — vertical, multi-tile world; the user scrolls
-///     up/down through stacked copies of a portrait tile. Camera auto-
-///     follows the mid-point between leader and trailer.
+/// The screen mounts a single [Flutter3DViewer] loading
+/// `assets/images/battleground/cityView/city_arena_{tod}.glb`. The variant
+/// is picked from the device wall clock at build time (see
+/// [BattlegroundTimeOfDay.forNow]) — no server round-trip.
 ///
-///   • [ArenaPack.city] — single landscape tile, locked to landscape
-///     orientation. Wrapped in [InteractiveViewer] for pinch-zoom and
-///     two-finger pan; auto-follow drives the same controller toward the
-///     runners' mid-X each tick (so the camera tracks the action while
-///     leaving user zoom intact).
+/// M5 (dual camera modes): toggle between top-down and third-person
+/// eye-level views. Each mode configures its own camera orbit + target on
+/// the [Flutter3DController]. Zoom / pan clamps are model-viewer-native
+/// (initial position only for now — hard clamping via JS bridge lands as
+/// M5c once we validate the basic mode swap works on device).
 ///
-/// The user's pack choice is persisted via [arenaPackPrefProvider]. A
-/// small pack icon in the top-right chrome opens a chooser sheet.
+/// Locking philosophy: the user should never see outside the two building
+/// rows. Only "up" (sky) is a free direction — the camera stays boxed
+/// between the buildings in both modes.
 class BattleGroundScreen extends ConsumerStatefulWidget {
   final String battleId;
 
@@ -44,294 +44,566 @@ class BattleGroundScreen extends ConsumerStatefulWidget {
       _BattleGroundScreenState();
 }
 
-class _BattleGroundScreenState extends ConsumerState<BattleGroundScreen>
-    with SingleTickerProviderStateMixin {
-  late final Ticker _ticker;
-  double _time = 0;
-  Duration _lastElapsed = Duration.zero;
+/// Which camera framing the arena is currently using.
+enum ArenaCameraMode {
+  /// Bird's-eye top-down of the whole block. Users can zoom in on details
+  /// but the initial zoom-out shows the full arena between building rows.
+  topView,
 
-  /// Per-participant currently-rendered progress (eased toward target).
-  final Map<String, double> _displayedProgress = {};
-  final Map<String, double> _targetProgress = {};
+  /// Eye-level walking view down the road, framed by buildings on both
+  /// sides. Users can zoom in on cars / benches / trees; zoom-out reset
+  /// returns to this framing.
+  thirdPerson,
+}
 
-  // Lead-change UI state.
-  String? _lastLeaderId;
-  double _flashUntil = 0.0;
-  String? _toast;
-  Timer? _toastTimer;
+/// State of the arena-open cinematic sweep.
+enum _CinematicPhase {
+  /// Cinematic hasn't kicked off yet — waiting for onLoad.
+  idle,
+
+  /// Camera visiting the TOP user (rank #1). Their Taunt animation plays.
+  atTop,
+
+  /// Camera visiting the BOTTOM user (rank last).
+  atBottom,
+
+  /// Camera arriving at the main user (You).
+  atMain,
+
+  /// Cinematic finished (or skipped). Normal gestures active.
+  done,
+}
+
+/// Slot Y positions (Blender coords) — must match the arena GLB bake.
+/// Index 0 = backmost/south end; index 5 = frontmost/north end. Ranks
+/// assigned in DESCENDING step count: #1 → slot 5, last → slot 0.
+const List<double> _slotBlenderY = [-80.0, -50.0, -20.0, 20.0, 50.0, 80.0];
+
+class _BattleGroundScreenState extends ConsumerState<BattleGroundScreen> {
+  late final BattlegroundTimeOfDay _timeOfDay;
+  late final Flutter3DController _controller;
+
+  /// Currently-active camera framing. Toggling this re-runs
+  /// [_applyCameraForMode] which drives the model-viewer camera.
+  ArenaCameraMode _cameraMode = ArenaCameraMode.thirdPerson;
 
   /// Pings the completion RPC once per screen lifetime when end_time
   /// crosses while this screen is open.
   bool _completionRequested = false;
 
-  late final BattlegroundTimeOfDay _timeOfDay;
+  // ---------------------------------------------------------------------------
+  // Top-view camera state
+  // ---------------------------------------------------------------------------
+  //
+  // Top view uses custom Flutter gesture handling (model-viewer's own touch
+  // is disabled while Top is active). Zoom-out is hard-locked at the initial
+  // radius; zoom-in is unlimited. Pan is 1-finger, clamped to the arena
+  // block; zoom is 2-finger pinch only. See _onTopScaleUpdate for the math.
 
-  // ---- Forest scroll state -------------------------------------------------
-  final ScrollController _scrollController = ScrollController();
-  double _manualScrollUntil = 0.0;
-  static const double _manualLockoutSeconds = 3.0;
+  /// Initial radius when Top mode is entered — becomes the max radius the
+  /// user can zoom out to. Also serves as the yardstick for pixel→meter
+  /// pan conversion.
+  static const double _topInitialRadius = 45.0;
+  static const double _topMinRadius = 2.0;
 
-  // Geometry cached from forest LayoutBuilder.
-  double _viewportH = 0;
-  double _worldH = 0;
-  double _pTop = 0;
-  double _pBottom = 0;
+  /// Arena bounds in model-viewer coords for Top-view pan clamping. mv X =
+  /// Blender X (arena width). mv Z = -Blender Y (arena length, negated
+  /// because export_yup=True flips forward-axis sign). Tightened INSIDE
+  /// the last building rows — camera can never look past them into the
+  /// backdrop cluster.
+  static const double _topPanBoundX = 5.0;
+  static const double _topPanBoundZ = 75.0;
 
-  // ---- City InteractiveViewer state ---------------------------------------
-  final TransformationController _cityXform = TransformationController();
-  double _manualXformUntil = 0.0;
-  Size _cityTile = Size.zero;
-  Size _cityViewport = Size.zero;
+  /// Idle timeout after which either camera returns to its initial
+  /// framing. Reset on every gesture; fires once after this delay of no
+  /// touch input.
+  static const Duration _idleResetDelay = Duration(seconds: 5);
 
-  /// Tracks the orientation we asked the OS to lock. Allows us to skip the
-  /// SystemChrome call when nothing changed (it's not free — it crosses
-  /// the platform channel every time).
-  ArenaPack? _appliedOrientationFor;
+  /// Current camera target + radius while in Top mode. Reset every time
+  /// Top mode is (re-)entered.
+  double _topTargetX = 0;
+  double _topTargetZ = 0;
+  double _topRadius = _topInitialRadius;
+
+  /// Snapshots taken at gesture start for delta computation.
+  double _topScaleStartRadius = _topInitialRadius;
+  double _topScaleStartTargetX = 0;
+  double _topScaleStartTargetZ = 0;
+
+  /// Idle-timeout timer. Started when a gesture ends; cancelled when a
+  /// new gesture begins.
+  Timer? _topIdleResetTimer;
+
+  // ---------------------------------------------------------------------------
+  // Third-person view camera state
+  // ---------------------------------------------------------------------------
+  //
+  // 3P view mirrors the Top-view gesture model: 1-finger pan, 2-finger
+  // pinch zoom, zoom-out locked at initial radius, 5-second idle reset.
+  // The camera is horizontal (phi=90°) with the target 12 m ahead of the
+  // camera position. Swipe-up → walk forward; swipe-left/right → strafe
+  // across the road.
+
+  static const double _tpInitialRadius = 12.0;
+  static const double _tpMinRadius = 2.0;
+
+  /// 3P pan clamps. Target X mirrors Top — before the grass beds.
+  /// Target Z is chosen so the CAMERA (target.z + radius) stays inside
+  /// Blender Y = ±75. Camera-mv-Z ranges [-75, +75] → target-mv-Z =
+  /// camera-mv-Z − 12 → target-mv-Z ∈ [−87, +63].
+  static const double _tpPanBoundX = 5.0;
+  static const double _tpPanBoundZMin = -87.0;
+  static const double _tpPanBoundZMax = 63.0;
+
+  double _tpTargetX = 0;
+  double _tpTargetZ = 0;
+  double _tpRadius = _tpInitialRadius;
+
+  double _tpScaleStartRadius = _tpInitialRadius;
+  double _tpScaleStartTargetX = 0;
+  double _tpScaleStartTargetZ = 0;
+
+  Timer? _tpIdleResetTimer;
+
+  // ---------------------------------------------------------------------------
+  // Cinematic intro state
+  // ---------------------------------------------------------------------------
+
+  _CinematicPhase _cinematicPhase = _CinematicPhase.idle;
+
+  /// Slot index (0..5) that maps to each rank position; computed once per
+  /// battle open. slotForRank[0] = the top user's slot, .last = bottom user.
+  List<int> _slotForRank = const [];
+
+  /// Slot index of the current user. Cinematic ends here.
+  int _mySlotIndex = 3;
+
+  /// Whether the current user is #1 on the battle board. Drives which GLB
+  /// the character overlay picks — `Taunt.glb` if true, `character.glb`
+  /// otherwise. Set in [_startCinematic] once ranks are computed and
+  /// stays sticky until the next mount (rank changes mid-arena would
+  /// require a rebuild we don't do yet).
+  bool _isTopRanked = false;
+
+  /// Live timers driving the cinematic. Cancelled on skip / dispose / mode
+  /// toggle.
+  final List<Timer> _cinematicTimers = [];
 
   @override
   void initState() {
     super.initState();
-    _ticker = createTicker(_onTick)..start();
     _timeOfDay = BattlegroundTimeOfDay.forNow();
-    // Apply orientation after the first frame so MediaQuery is settled —
-    // calling SystemChrome.setPreferredOrientations directly here is
-    // technically fine but the post-frame guard avoids a single-frame
-    // mid-build size jolt on some devices.
+    _controller = Flutter3DController();
+    // Lock to portrait — the 3D arena is designed for that aspect.
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted) return;
-      _applyOrientationForPack(ref.read(arenaPackPrefProvider));
+      SystemChrome.setPreferredOrientations(const [
+        DeviceOrientation.portraitUp,
+      ]);
     });
   }
 
   @override
   void dispose() {
-    _ticker.dispose();
-    _toastTimer?.cancel();
-    _scrollController.dispose();
-    _cityXform.dispose();
-    // Restore the app's default orientation policy (portrait-only).
+    _topIdleResetTimer?.cancel();
+    _tpIdleResetTimer?.cancel();
+    _cancelCinematic();
     SystemChrome.setPreferredOrientations(const [
       DeviceOrientation.portraitUp,
     ]);
     super.dispose();
   }
 
-  void _applyOrientationForPack(ArenaPack pack) {
-    if (_appliedOrientationFor == pack) return;
-    _appliedOrientationFor = pack;
-    SystemChrome.setPreferredOrientations(
-      pack.isLandscape
-          ? const [
-              DeviceOrientation.landscapeLeft,
-              DeviceOrientation.landscapeRight,
-            ]
-          : const [DeviceOrientation.portraitUp],
-    );
-  }
-
-  void _onTick(Duration elapsed) {
-    final dtMs = (elapsed - _lastElapsed).inMicroseconds / 1e6;
-    _lastElapsed = elapsed;
-    _time = elapsed.inMicroseconds / 1e6;
-
-    // Tween each runner's displayed progress toward target.
-    bool changed = false;
-    for (final id in _targetProgress.keys) {
-      final target = _targetProgress[id]!;
-      final current = _displayedProgress[id] ?? target;
-      final next = current + (target - current) * math.min(1.0, dtMs * 2.5);
-      if ((next - current).abs() > 0.0005) changed = true;
-      _displayedProgress[id] = next;
-    }
-
-    // Camera follow — branches by which world is currently mounted.
-    final pack = _appliedOrientationFor ?? ArenaPack.forest;
-    if (pack.isLandscape) {
-      _autoFollowCity(dtMs);
-    } else if (_scrollController.hasClients &&
-        _time > _manualScrollUntil &&
-        _worldH > 0 &&
-        _viewportH > 0) {
-      final target = _autoScrollTargetForest();
-      if (target != null) {
-        final currentPx = _scrollController.position.pixels;
-        final next = currentPx +
-            (target - currentPx) * math.min(1.0, dtMs * 1.2);
-        if ((next - currentPx).abs() > 0.5) {
-          _scrollController.jumpTo(next);
-        }
-      }
-    }
-
-    if (changed && mounted) {
-      // ignore: invalid_use_of_protected_member
-      setState(() {});
-    }
-  }
-
   // ---------------------------------------------------------------------------
-  // Forest auto-follow — scrolls the SingleChildScrollView.
+  // Cinematic
   // ---------------------------------------------------------------------------
 
-  double? _autoScrollTargetForest() {
-    if (_displayedProgress.isEmpty) return null;
-    final values = _displayedProgress.values.toList();
-    final lo = values.reduce(math.min);
-    final hi = values.reduce(math.max);
-    final mid = (lo + hi) / 2.0;
-    final midY = _avatarWorldYForest(mid);
-    final raw = midY - _viewportH / 2;
-    final maxScroll = _scrollController.position.maxScrollExtent;
-    return raw.clamp(0.0, maxScroll);
-  }
+  /// Kick off the cinematic sweep. Called once from onLoad. If for any
+  /// reason there aren't at least 2 participants, we skip straight to
+  /// the resting 3P framing.
+  void _startCinematic(BattleModel battle, String myUid) {
+    if (_cinematicPhase != _CinematicPhase.idle) return;
 
-  double _avatarWorldYForest(double progress) =>
-      _pTop + (1.0 - progress.clamp(0.0, 1.0)) * (_pBottom - _pTop);
-
-  // ---------------------------------------------------------------------------
-  // City auto-follow — drives the InteractiveViewer's transformation.
-  // ---------------------------------------------------------------------------
-
-  void _autoFollowCity(double dtMs) {
-    if (_time < _manualXformUntil) return;
-    if (_displayedProgress.isEmpty) return;
-    if (_cityTile.isEmpty || _cityViewport.isEmpty) return;
-
-    final values = _displayedProgress.values.toList();
-    final lo = values.reduce(math.min);
-    final hi = values.reduce(math.max);
-    final mid = (lo + hi) / 2.0;
-
-    // Translate progress → tile pixel coordinates.
-    final midPoint = BattlegroundPath.positionInTile(
-      mid,
-      _cityTile,
-      pack: ArenaPack.city,
-    );
-
-    // Preserve the user's current zoom; only nudge translation.
-    final current = _cityXform.value;
-    final scale = current.getMaxScaleOnAxis();
-    final targetTx = _cityViewport.width / 2 - midPoint.dx * scale;
-    final targetTy = _cityViewport.height / 2 - midPoint.dy * scale;
-
-    final t = current.getTranslation();
-    final factor = math.min(1.0, dtMs * 1.2);
-    final nextTx = t.x + (targetTx - t.x) * factor;
-    final nextTy = t.y + (targetTy - t.y) * factor;
-
-    if ((nextTx - t.x).abs() < 0.4 && (nextTy - t.y).abs() < 0.4) return;
-
-    final next = Matrix4.identity()
-      ..translate(nextTx, nextTy)
-      ..scale(scale);
-    _cityXform.value = next;
-  }
-
-  /// Re-centres + zooms to fit ALL runners with comfortable padding.
-  /// Triggered by the "fit to runners" button.
-  void _fitCityToRunners() {
-    if (_displayedProgress.isEmpty) return;
-    if (_cityTile.isEmpty || _cityViewport.isEmpty) return;
-
-    final pts = [
-      for (final p in _displayedProgress.values)
-        BattlegroundPath.positionInTile(p, _cityTile, pack: ArenaPack.city),
-    ];
-    var minX = pts.first.dx, maxX = pts.first.dx;
-    var minY = pts.first.dy, maxY = pts.first.dy;
-    for (final p in pts.skip(1)) {
-      if (p.dx < minX) minX = p.dx;
-      if (p.dx > maxX) maxX = p.dx;
-      if (p.dy < minY) minY = p.dy;
-      if (p.dy > maxY) maxY = p.dy;
-    }
-
-    // Pad by 20% of viewport so avatars aren't pressed to the edges.
-    final padX = _cityViewport.width * 0.2;
-    final padY = _cityViewport.height * 0.2;
-    final boxW = math.max(1.0, (maxX - minX) + padX * 2);
-    final boxH = math.max(1.0, (maxY - minY) + padY * 2);
-    final centerX = (minX + maxX) / 2;
-    final centerY = (minY + maxY) / 2;
-
-    final scaleX = _cityViewport.width / boxW;
-    final scaleY = _cityViewport.height / boxH;
-    final scale = math.min(scaleX, scaleY).clamp(0.6, 3.0);
-
-    final tx = _cityViewport.width / 2 - centerX * scale;
-    final ty = _cityViewport.height / 2 - centerY * scale;
-
-    _cityXform.value = Matrix4.identity()
-      ..translate(tx, ty)
-      ..scale(scale);
-    // Don't suppress auto-follow — once the user has fit-to-runners, the
-    // tick-by-tick follow can continue tweaking the centre as runners move.
-    _manualXformUntil = 0;
-  }
-
-  // ---------------------------------------------------------------------------
-  // Target progress + lead-change toast.
-  // ---------------------------------------------------------------------------
-
-  void _recomputeTargets(BattleModel battle, String uid) {
-    final accepted = battle.participants
+    // 1) Rank participants by step count DESC. Only accepted participants
+    //    count (invitees who haven't joined shouldn't get a slot).
+    final ranked = battle.participants
         .where((p) => p.inviteStatus == ParticipantInviteStatus.accepted)
-        .toList();
-    if (accepted.isEmpty) return;
-    final leaderSteps = accepted
-        .map((p) => p.currentSteps)
-        .fold<int>(0, (a, b) => a > b ? a : b);
-    for (final p in accepted) {
-      final progress = leaderSteps <= 0
-          ? 0.0
-          : (p.currentSteps / leaderSteps).clamp(0.0, 1.0);
-      _targetProgress[p.userId] = progress;
-      _displayedProgress.putIfAbsent(p.userId, () => progress);
+        .toList()
+      ..sort((a, b) => b.currentSteps.compareTo(a.currentSteps));
+
+    if (ranked.length < 2) {
+      // 1v1 not-yet-joined case → skip cinematic.
+      _cinematicPhase = _CinematicPhase.done;
+      _applyCameraForMode(_cameraMode);
+      return;
     }
 
-    if (battle.status == BattleStatus.active) {
-      final sorted = [...accepted]
-        ..sort((a, b) => b.currentSteps.compareTo(a.currentSteps));
-      final newLeader = sorted.first;
-      if (_lastLeaderId != null &&
-          _lastLeaderId != newLeader.userId &&
-          newLeader.currentSteps > 0) {
-        _triggerLeadChange(
-            newLeader.userId == uid ? 'You' : newLeader.displayName);
-      }
-      _lastLeaderId = newLeader.userId;
-    }
-  }
-
-  void _triggerLeadChange(String leaderLabel) {
-    _flashUntil = _time + 0.6;
-    HapticFeedback.mediumImpact();
-    _toast = '$leaderLabel took the lead!';
-    _toastTimer?.cancel();
-    _toastTimer = Timer(const Duration(seconds: 2), () {
-      if (!mounted) return;
-      setState(() => _toast = null);
-    });
-  }
-
-  // ---------------------------------------------------------------------------
-  // Pack chooser sheet.
-  // ---------------------------------------------------------------------------
-
-  Future<void> _openPackChooser() async {
-    final current = ref.read(arenaPackPrefProvider);
-    final picked = await showModalBottomSheet<ArenaPack>(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: Colors.transparent,
-      builder: (_) => _PackChooserSheet(current: current),
+    // 2) Assign slots: top of ranking → slot 5, next → slot 4, etc.
+    //    Only assign up to 6 slots; extra participants share the last.
+    _slotForRank = List<int>.generate(
+      ranked.length,
+      (i) => (5 - i).clamp(0, 5),
     );
-    if (picked == null || picked == current) return;
-    await ref.read(arenaPackPrefProvider.notifier).set(picked);
-    _applyOrientationForPack(picked);
-    // Reset zoom/pan so the new pack starts from a clean transform.
-    _cityXform.value = Matrix4.identity();
+
+    // 3) Locate MY rank/slot.
+    final myRankIdx = ranked.indexWhere((p) => p.userId == myUid);
+    _mySlotIndex =
+        myRankIdx >= 0 ? _slotForRank[myRankIdx] : 3; // fallback to middle
+    _isTopRanked = myRankIdx == 0;
+
+    final topSlot = _slotForRank.first;
+    final bottomSlot = _slotForRank.last;
+    final mySlot = _mySlotIndex;
+
+    AppLogger.battle.i('arena3d:cinematicStart', fields: {
+      'topSlot': topSlot,
+      'bottomSlot': bottomSlot,
+      'mySlot': mySlot,
+      'ranked': ranked.length,
+      'isTopRanked': _isTopRanked,
+    });
+
+    // 4) Frame TOP user first.
+    _cinematicPhase = _CinematicPhase.atTop;
+    _frameSlot(topSlot);
+
+    // 5) Schedule the two subsequent moves. Model-viewer interpolates the
+    //    camera automatically between setCameraOrbit / setCameraTarget
+    //    calls, so we just fire the next values at the right beats.
+    _cinematicTimers.add(Timer(const Duration(seconds: 3), () {
+      if (!mounted || _cinematicPhase == _CinematicPhase.done) return;
+      _cinematicPhase = _CinematicPhase.atBottom;
+      _frameSlot(bottomSlot);
+    }));
+    _cinematicTimers.add(Timer(const Duration(seconds: 5), () {
+      if (!mounted || _cinematicPhase == _CinematicPhase.done) return;
+      _cinematicPhase = _CinematicPhase.atMain;
+      _frameSlot(mySlot);
+    }));
+    _cinematicTimers.add(Timer(const Duration(seconds: 7), () {
+      if (!mounted || _cinematicPhase == _CinematicPhase.done) return;
+      _finishCinematic();
+    }));
+    // Force a rebuild so the Skip button is visible.
+    setState(() {});
+  }
+
+  /// Point the camera at a slot's over-shoulder framing. Slot Y is Blender
+  /// coord — convert to model-viewer (mv Z = -Blender Y).
+  void _frameSlot(int slotIndex) {
+    final blenderY = _slotBlenderY[slotIndex.clamp(0, 5)];
+    final mvZChar = -blenderY;
+    // Target 5 m in front of the character (looking down the road).
+    _controller.setCameraTarget(0, 1.6, mvZChar - 5);
+    // Camera 8 m behind target (3 m behind character) at eye level.
+    _controller.setCameraOrbit(0, 90, 8);
+  }
+
+  /// End the cinematic — cancel timers, snap to the standard 3P framing,
+  /// re-enable gestures.
+  void _finishCinematic() {
+    if (_cinematicPhase == _CinematicPhase.done) return;
+    for (final t in _cinematicTimers) {
+      t.cancel();
+    }
+    _cinematicTimers.clear();
+    _cinematicPhase = _CinematicPhase.done;
+    // Rest at YOUR slot rather than arena centre.
+    _frameSlot(_mySlotIndex);
+    AppLogger.battle.i('arena3d:cinematicDone', fields: {});
+    setState(() {});
+  }
+
+  void _skipCinematic() {
+    AppLogger.battle.i('arena3d:cinematicSkip', fields: {});
+    _finishCinematic();
+  }
+
+  /// Cancel + wipe cinematic state (mode toggle, dispose).
+  void _cancelCinematic() {
+    for (final t in _cinematicTimers) {
+      t.cancel();
+    }
+    _cinematicTimers.clear();
+    _cinematicPhase = _CinematicPhase.done;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Camera modes
+  // ---------------------------------------------------------------------------
+
+  /// Push the current [_cameraMode]'s target + orbit onto model-viewer.
+  ///
+  /// Coordinate note: we exported the GLB with `export_yup=True`, so Blender's
+  /// Y (arena depth) becomes model-viewer's -Z, and Blender's Z (height)
+  /// becomes model-viewer's Y. All camera coords below are in
+  /// model-viewer space.
+  ///
+  /// Configure model-viewer's lighting for the loaded TOD.
+  ///
+  /// Each GLB now ships with 52 KHR_lights_punctual entries:
+  ///  - 1 directional sun (color+direction+intensity varies per TOD)
+  ///  - 1 directional fill (opposite side softener)
+  ///  - 50 point lights at each lamp post (0 intensity at day, 1358 at
+  ///    evening, 6522 at night — so lamps physically light the scene at
+  ///    night)
+  ///
+  /// Materials also carry TOD-baked emissions: window glass and lamp
+  /// bulbs are dark at noon, glow warm yellow at evening/night. Same
+  /// applies to awnings (subtle by day, neon at night).
+  ///
+  /// Since the GLB already carries all the light-source variation, this
+  /// helper only needs to configure the tone-map (exposure), how much
+  /// ambient IBL to add on top, and how strong the ground contact
+  /// shadow should read.
+  void _applyShadowConfigForTod(BattlegroundTimeOfDay tod) {
+    late final double intensity;
+    late final double softness;
+    late final double exposure;
+    late final double envIntensity;
+    switch (tod) {
+      case BattlegroundTimeOfDay.morning:
+        intensity = 0.80;
+        softness = 0.45;
+        exposure = 1.00;
+        envIntensity = 0.40;
+        break;
+      case BattlegroundTimeOfDay.afternoon:
+        intensity = 1.00;
+        softness = 0.25;
+        exposure = 0.95;
+        envIntensity = 0.35;
+        break;
+      case BattlegroundTimeOfDay.evening:
+        intensity = 0.65;
+        softness = 0.60;
+        exposure = 0.75;
+        envIntensity = 0.18;
+        break;
+      case BattlegroundTimeOfDay.night:
+        intensity = 0.30;
+        softness = 0.80;
+        exposure = 0.55;
+        envIntensity = 0.04;
+        break;
+    }
+    _controller.setShadowConfig(
+      shadowIntensity: intensity,
+      shadowSoftness: softness,
+      exposure: exposure,
+      environmentImage: 'neutral',
+      environmentIntensity: envIntensity,
+    );
+  }
+
+  /// `setCameraOrbit` uses (θ, φ, radius):
+  ///   • θ (azimuth) — 0° means camera sits on the +Z side of target, looking
+  ///     along -Z. Increasing θ rotates counter-clockwise around the +Y axis.
+  ///   • φ (polar)  — 0° means straight down from above; 90° is horizontal.
+  ///   • radius     — distance from the target point.
+  void _applyCameraForMode(ArenaCameraMode mode) {
+    // NOTE: we ship a LOCAL FORK of flutter_3d_controller (see
+    // packages/flutter_3d_controller_fork) that changes setCameraOrbit's
+    // radius arg from percent-of-auto-frame ('%') to meters ('m'), and
+    // exposes a separate setCameraOrbitBounds() for installing radius
+    // clamps once per mode entry. Values below are meters.
+    switch (mode) {
+      case ArenaCameraMode.thirdPerson:
+        // Eye-level walking view. Reset target/radius; install clamps for
+        // zoom-out at initial radius, zoom-in down to _tpMinRadius.
+        // If slot assignments are known, park the camera at YOUR slot;
+        // otherwise arena centre.
+        final blenderY = _slotForRank.isNotEmpty
+            ? _slotBlenderY[_mySlotIndex.clamp(0, 5)]
+            : 0.0;
+        final mvZTarget = -(blenderY + 5);
+        _tpTargetX = 0;
+        _tpTargetZ = mvZTarget;
+        _tpRadius = _tpInitialRadius;
+        _controller.setCameraOrbitBounds(
+          minRadius: _tpMinRadius,
+          maxRadius: _tpInitialRadius,
+        );
+        _controller.setCameraTarget(0, 1.6, mvZTarget);
+        _controller.setCameraOrbit(0, 90, _tpInitialRadius);
+        break;
+      case ArenaCameraMode.topView:
+        // Reset gesture state — target starts centered, radius at the max
+        // (which is also the initial framing).
+        _topTargetX = 0;
+        _topTargetZ = 0;
+        _topRadius = _topInitialRadius;
+        _controller.setCameraOrbitBounds(
+          minRadius: _topMinRadius,
+          maxRadius: _topInitialRadius,
+        );
+        _controller.setCameraTarget(0, 0, 0);
+        _controller.setCameraOrbit(0, 0, _topInitialRadius);
+        break;
+    }
+    AppLogger.battle.i('arena3d:cameraMode', fields: {'mode': mode.name});
+  }
+
+  // ---------------------------------------------------------------------------
+  // Top-view gesture handling
+  // ---------------------------------------------------------------------------
+
+  void _onTopScaleStart(ScaleStartDetails details) {
+    // Any new touch cancels a pending idle-reset. The timer restarts on
+    // scale end.
+    _topIdleResetTimer?.cancel();
+    _topScaleStartRadius = _topRadius;
+    _topScaleStartTargetX = _topTargetX;
+    _topScaleStartTargetZ = _topTargetZ;
+  }
+
+  void _onTopScaleUpdate(ScaleUpdateDetails details) {
+    if (details.pointerCount >= 2) {
+      // 2-finger pinch → zoom. scale > 1 = fingers moved apart = zoom in.
+      final newRadius = (_topScaleStartRadius / details.scale)
+          .clamp(_topMinRadius, _topInitialRadius);
+      AppLogger.battle.i('arena3d:topZoom', fields: {
+        'scale': details.scale.toStringAsFixed(3),
+        'startRadius': _topScaleStartRadius.toStringAsFixed(2),
+        'newRadius': newRadius.toStringAsFixed(2),
+      });
+      if ((newRadius - _topRadius).abs() > 0.05) {
+        _topRadius = newRadius;
+        _controller.setCameraOrbit(0, 0, _topRadius);
+      }
+    } else if (details.pointerCount == 1) {
+      // 1-finger drag → pan. Convert screen pixels to arena meters using
+      // the current camera height (radius) and model-viewer's default FOV
+      // (~30°). At height H, the horizontal visible width on ground is
+      // 2·H·tan(FOV/2). Use screen width to derive meters-per-pixel.
+      final size = MediaQuery.of(context).size;
+      const halfFovRad = 15.0 * math.pi / 180.0; // half of 30° FOV
+      final visibleWidthMeters = 2 * _topRadius * math.tan(halfFovRad);
+      final metersPerPixel = visibleWidthMeters / size.width;
+
+      final delta = details.focalPointDelta;
+
+      // "Map follows finger" mapping — inverse of the finger direction.
+      // Swipe right → camera goes LEFT (target.x decreases), so the arena
+      // appears to slide right with the finger. Same for vertical.
+      final newX = (_topTargetX - delta.dx * metersPerPixel)
+          .clamp(-_topPanBoundX, _topPanBoundX);
+      final newZ = (_topTargetZ - delta.dy * metersPerPixel)
+          .clamp(-_topPanBoundZ, _topPanBoundZ);
+
+      if ((newX - _topTargetX).abs() > 0.02 ||
+          (newZ - _topTargetZ).abs() > 0.02) {
+        _topTargetX = newX;
+        _topTargetZ = newZ;
+        _controller.setCameraTarget(_topTargetX, 0, _topTargetZ);
+      }
+    }
+  }
+
+  void _onTopScaleEnd(ScaleEndDetails details) {
+    // Kick off the idle-reset timer. If the user touches again inside
+    // this window, ScaleStart cancels it.
+    _topIdleResetTimer?.cancel();
+    _topIdleResetTimer = Timer(_idleResetDelay, _resetTopCameraToInitial);
+  }
+
+  /// Snap camera back to the initial Top-view framing.
+  void _resetTopCameraToInitial() {
+    _topTargetX = 0;
+    _topTargetZ = 0;
+    _topRadius = _topInitialRadius;
+    _controller.setCameraTarget(0, 0, 0);
+    _controller.setCameraOrbit(0, 0, _topInitialRadius);
+    AppLogger.battle.i('arena3d:topIdleReset', fields: {});
+  }
+
+  // ---------------------------------------------------------------------------
+  // Third-person gesture handling
+  // ---------------------------------------------------------------------------
+
+  void _onTpScaleStart(ScaleStartDetails details) {
+    _tpIdleResetTimer?.cancel();
+    _tpScaleStartRadius = _tpRadius;
+    _tpScaleStartTargetX = _tpTargetX;
+    _tpScaleStartTargetZ = _tpTargetZ;
+  }
+
+  void _onTpScaleUpdate(ScaleUpdateDetails details) {
+    if (details.pointerCount >= 2) {
+      // 2-finger pinch → zoom. Radius clamped to [_tpMinRadius, initial].
+      final newRadius = (_tpScaleStartRadius / details.scale)
+          .clamp(_tpMinRadius, _tpInitialRadius);
+      AppLogger.battle.i('arena3d:tpZoom', fields: {
+        'scale': details.scale.toStringAsFixed(3),
+        'startRadius': _tpScaleStartRadius.toStringAsFixed(2),
+        'newRadius': newRadius.toStringAsFixed(2),
+        'currentRadius': _tpRadius.toStringAsFixed(2),
+      });
+      if ((newRadius - _tpRadius).abs() > 0.05) {
+        _tpRadius = newRadius;
+        _controller.setCameraOrbit(0, 90, _tpRadius);
+      }
+    } else if (details.pointerCount == 1) {
+      // 1-finger drag → pan the target. In 3P the camera is horizontal,
+      // so we treat "screen-space" pixel deltas the same way as top view
+      // but scale by radius (distance to target) instead of camera height.
+      final size = MediaQuery.of(context).size;
+      const halfFovRad = 15.0 * math.pi / 180.0;
+      final visibleWidthMeters = 2 * _tpRadius * math.tan(halfFovRad);
+      final metersPerPixel = visibleWidthMeters / size.width;
+
+      final delta = details.focalPointDelta;
+
+      // Map-follows-finger: swipe right → target moves left; swipe up →
+      // target moves toward horizon (walk forward, target.z decreases).
+      final newX = (_tpTargetX - delta.dx * metersPerPixel)
+          .clamp(-_tpPanBoundX, _tpPanBoundX);
+      final newZ = (_tpTargetZ - delta.dy * metersPerPixel)
+          .clamp(_tpPanBoundZMin, _tpPanBoundZMax);
+
+      if ((newX - _tpTargetX).abs() > 0.02 ||
+          (newZ - _tpTargetZ).abs() > 0.02) {
+        _tpTargetX = newX;
+        _tpTargetZ = newZ;
+        _controller.setCameraTarget(_tpTargetX, 1.6, _tpTargetZ);
+      }
+    }
+  }
+
+  void _onTpScaleEnd(ScaleEndDetails details) {
+    _tpIdleResetTimer?.cancel();
+    _tpIdleResetTimer = Timer(_idleResetDelay, _resetTpCameraToInitial);
+  }
+
+  void _resetTpCameraToInitial() {
+    // After the cinematic ends, camera should sit at YOUR slot, not arena
+    // centre. Compute the target Z from the current mySlotIndex.
+    final blenderY = _slotBlenderY[_mySlotIndex.clamp(0, 5)];
+    final mvZTarget = -(blenderY + 5); // target 5m ahead of your slot
+    _tpTargetX = 0;
+    _tpTargetZ = mvZTarget;
+    _tpRadius = _tpInitialRadius;
+    _controller.setCameraTarget(0, 1.6, mvZTarget);
+    _controller.setCameraOrbit(0, 90, _tpInitialRadius);
+    AppLogger.battle
+        .i('arena3d:tpIdleReset', fields: {'mySlot': _mySlotIndex});
+  }
+
+  void _toggleCameraMode() {
+    // Any pending idle-reset for the leaving mode has to be cancelled or
+    // it'd fire in the new mode and clobber that camera.
+    _topIdleResetTimer?.cancel();
+    _tpIdleResetTimer?.cancel();
+    // Toggling the mode kills any in-progress cinematic — the user's
+    // opting out of the intro.
+    if (_cinematicPhase != _CinematicPhase.done) {
+      _cancelCinematic();
+    }
+    setState(() {
+      _cameraMode = _cameraMode == ArenaCameraMode.thirdPerson
+          ? ArenaCameraMode.topView
+          : ArenaCameraMode.thirdPerson;
+    });
+    _applyCameraForMode(_cameraMode);
   }
 
   // ---------------------------------------------------------------------------
@@ -340,11 +612,6 @@ class _BattleGroundScreenState extends ConsumerState<BattleGroundScreen>
 
   @override
   Widget build(BuildContext context) {
-    final pack = ref.watch(arenaPackPrefProvider);
-    // Eager apply on every build so a pack change picked from a sheet —
-    // or restored from Hive on cold start — takes effect immediately.
-    _applyOrientationForPack(pack);
-
     final battleAsync = ref.watch(battleDetailProvider(widget.battleId));
     final uid = ref.watch(authStateProvider).valueOrNull?.id ?? '';
 
@@ -374,185 +641,110 @@ class _BattleGroundScreenState extends ConsumerState<BattleGroundScreen>
             _completionRequested = true;
             ref.read(battleServiceProvider).completeExpiredBattles(uid);
           }
-          _recomputeTargets(battle, uid);
-          return pack.isLandscape
-              ? _buildCityScene(battle, uid)
-              : _buildForestScene(battle, uid);
+          return _buildArenaScene(battle, uid);
         },
       ),
     );
   }
 
-  // ---------------------------------------------------------------------------
-  // Forest scene — vertical stack, SingleChildScrollView.
-  // ---------------------------------------------------------------------------
-
-  Widget _buildForestScene(BattleModel battle, String uid) {
+  Widget _buildArenaScene(BattleModel battle, String uid) {
     final ctx = _arenaContext(battle, uid);
+    final glbPath =
+        'assets/images/battleground/cityView/city_arena_${_timeOfDay.name}.glb';
 
-    return LayoutBuilder(
-      builder: (bctx, c) {
-        final tileW = c.maxWidth;
-        final tileH = tileW * 2; // forest tiles ship at natural 1:2 aspect
-        final viewportH = c.maxHeight;
+    // Viewer is created ONCE per screen open. `enableTouch` is fixed at
+    // false and `activeGestureInterceptor` is fixed at false; both of
+    // those props feed into the underlying WebView init, and changing
+    // them per mode was rebuilding the viewer + reloading the GLB on
+    // every toggle. The plugin's own gesture-interceptor also swallows
+    // touches before Flutter sees them, so we kill it here — we drive
+    // the camera 100% from Flutter regardless of mode.
+    final Widget viewer = Flutter3DViewer(
+      key: ValueKey('arena-${_timeOfDay.name}'),
+      controller: _controller,
+      src: glbPath,
+      progressBarColor: AppColors.primary,
+      enableTouch: false,
+      activeGestureInterceptor: false,
+      onLoad: (address) async {
+        AppLogger.battle.i('arena3d:onLoad', fields: {'src': glbPath});
+        _applyShadowConfigForTod(_timeOfDay);
+        await Future.delayed(const Duration(milliseconds: 800));
+        if (!mounted) return;
+        _applyCameraForMode(_cameraMode);
+        if (_cinematicPhase == _CinematicPhase.idle) {
+          _startCinematic(battle, uid);
+        }
+      },
+      onError: (err) => AppLogger.battle
+          .e('arena3d:onError', fields: {'src': glbPath, 'err': err}),
+    );
 
-        final desiredWorldH = math.max(3 * tileH, 2.5 * viewportH);
-        final tileCount = (desiredWorldH / tileH).ceil();
-        final worldH = tileCount * tileH;
+    // Current user's picked 3D character. If they're #1 on the battle
+    // board load the Taunt GLB (baked animation plays automatically via
+    // AnimatedCharacterViewer's first-anim-on-load logic); otherwise the
+    // neutral pose from character.glb. Sized as a small corner tile so it
+    // sits on top of the arena without covering it.
+    final character = ref.watch(currentCharacter3DProvider);
+    final characterGlb = _isTopRanked
+        ? character.tauntGlbAssetPath
+        : character.glbAssetPath;
 
-        _viewportH = viewportH;
-        _worldH = worldH;
-        _pTop = viewportH / 2;
-        _pBottom = worldH - viewportH / 2;
-
-        final tileSize = Size(tileW, tileH);
-
-        return Stack(
-          fit: StackFit.expand,
-          children: [
-            NotificationListener<ScrollNotification>(
-              onNotification: (n) {
-                if (n is UserScrollNotification &&
-                    n.direction != ScrollDirection.idle) {
-                  _manualScrollUntil = _time + _manualLockoutSeconds;
-                }
-                return false;
-              },
-              child: SingleChildScrollView(
-                controller: _scrollController,
-                physics: const BouncingScrollPhysics(),
-                child: SizedBox(
-                  width: tileW,
-                  height: worldH,
-                  child: Stack(
-                    children: [
-                      for (int i = 0; i < tileCount; i++)
-                        Positioned(
-                          left: 0,
-                          top: i * tileH,
-                          width: tileW,
-                          height: tileH,
-                          child: Image.asset(
-                            ArenaPack.forest.assetFor(_timeOfDay),
-                            fit: BoxFit.fill,
-                            gaplessPlayback: true,
-                          ),
-                        ),
-                      for (final p in battle.participants.where((p) =>
-                          p.inviteStatus ==
-                          ParticipantInviteStatus.accepted))
-                        _ForestAvatar(
-                          participant: p,
-                          worldY: _avatarWorldYForest(
-                              _displayedProgress[p.userId] ?? 0.0),
-                          tileSize: tileSize,
-                          avatarHeight: tileH * 0.085,
-                          isMe: p.userId == uid,
-                          isLeader: ctx.leaderId == p.userId,
-                          isWinner: ctx.frozen &&
-                              (battle.winnerId != null
-                                  ? p.userId == battle.winnerId
-                                  : p.userId == ctx.leaderId),
-                          onTap: p.userId == uid
-                              ? null
-                              : () =>
-                                  showArenaProfilePeek(context, p.userId),
-                        ),
-                    ],
-                  ),
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        viewer,
+        // Top-view gesture overlay — only present in Top mode. Sits on
+        // top of the viewer in the Stack so it wins the hit test.
+        Positioned.fill(
+          child: _cameraMode == ArenaCameraMode.topView
+              ? GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onScaleStart: _onTopScaleStart,
+                  onScaleUpdate: _onTopScaleUpdate,
+                  onScaleEnd: _onTopScaleEnd,
+                )
+              : GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onScaleStart: _onTpScaleStart,
+                  onScaleUpdate: _onTpScaleUpdate,
+                  onScaleEnd: _onTpScaleEnd,
+                ),
+        ),
+        // Corner character tile — shows the current user's picked 3D
+        // avatar. Bottom-right so it doesn't collide with the top-left
+        // close button or top-right camera-mode / XP chip. Non-blocking
+        // for hit-test so the arena gestures still fire underneath.
+        Positioned(
+          right: 16,
+          bottom: 24,
+          child: IgnorePointer(
+            child: Container(
+              width: 120,
+              height: 168,
+              decoration: BoxDecoration(
+                color: Colors.black.withValues(alpha: 0.35),
+                borderRadius: BorderRadius.circular(16),
+                border: Border.all(
+                  color: _isTopRanked
+                      ? AppColors.primary.withValues(alpha: 0.85)
+                      : Colors.white.withValues(alpha: 0.2),
+                  width: _isTopRanked ? 2 : 1,
                 ),
               ),
-            ),
-            ..._sharedChrome(battle, ctx, showFit: false),
-          ],
-        );
-      },
-    );
-  }
-
-  // ---------------------------------------------------------------------------
-  // City scene — single landscape tile, InteractiveViewer.
-  // ---------------------------------------------------------------------------
-
-  Widget _buildCityScene(BattleModel battle, String uid) {
-    final ctx = _arenaContext(battle, uid);
-
-    return LayoutBuilder(
-      builder: (bctx, c) {
-        // Render the tile at viewport HEIGHT so it always fills vertically;
-        // its width follows the natural 2:1 aspect so the trail is generous
-        // and the user can pan/zoom to explore it.
-        final tileH = c.maxHeight;
-        final tileW = tileH * 2;
-        _cityTile = Size(tileW, tileH);
-        _cityViewport = Size(c.maxWidth, c.maxHeight);
-
-        final avatarSize = tileH * 0.075;
-
-        return Stack(
-          fit: StackFit.expand,
-          children: [
-            // The world (tile + avatars), wrapped in InteractiveViewer so
-            // pinch-zoom and two-finger pan work out of the box. We allow
-            // a wide zoom range and let the user explore freely; auto-
-            // follow runs in parallel via `_cityXform`.
-            InteractiveViewer(
-              transformationController: _cityXform,
-              minScale: 0.6,
-              maxScale: 4.0,
-              constrained: false,
-              boundaryMargin: EdgeInsets.symmetric(
-                horizontal: c.maxWidth,
-                vertical: c.maxHeight,
-              ),
-              onInteractionStart: (_) {
-                _manualXformUntil = _time + _manualLockoutSeconds;
-              },
-              child: SizedBox(
-                width: tileW,
-                height: tileH,
-                child: Stack(
-                  children: [
-                    Positioned.fill(
-                      child: Image.asset(
-                        ArenaPack.city.assetFor(_timeOfDay),
-                        fit: BoxFit.fill,
-                        gaplessPlayback: true,
-                      ),
-                    ),
-                    for (final p in battle.participants.where((p) =>
-                        p.inviteStatus ==
-                        ParticipantInviteStatus.accepted))
-                      _CityAvatar(
-                        participant: p,
-                        progress: _displayedProgress[p.userId] ?? 0.0,
-                        tileSize: _cityTile,
-                        avatarSize: avatarSize,
-                        isMe: p.userId == uid,
-                        isLeader: ctx.leaderId == p.userId,
-                        isWinner: ctx.frozen &&
-                            (battle.winnerId != null
-                                ? p.userId == battle.winnerId
-                                : p.userId == ctx.leaderId),
-                        onTap: p.userId == uid
-                            ? null
-                            : () =>
-                                showArenaProfilePeek(context, p.userId),
-                      ),
-                  ],
-                ),
+              clipBehavior: Clip.antiAlias,
+              child: AnimatedCharacterViewer(
+                key: ValueKey('arena-char-${character.id}-$_isTopRanked'),
+                glbAssetPath: characterGlb,
+                progressBarColor: Colors.transparent,
               ),
             ),
-            ..._sharedChrome(battle, ctx, showFit: true),
-          ],
-        );
-      },
+          ),
+        ),
+        ..._sharedChrome(battle, ctx),
+      ],
     );
   }
-
-  // ---------------------------------------------------------------------------
-  // Shared chrome (top bar, toast, leaderboard pill).
-  // ---------------------------------------------------------------------------
 
   _ArenaContext _arenaContext(BattleModel battle, String uid) {
     final now = DateTime.now();
@@ -570,44 +762,17 @@ class _BattleGroundScreenState extends ConsumerState<BattleGroundScreen>
         ? battle.stakeXp * acceptedCount
         : battle.xpReward;
 
-    String? leaderId;
-    int leaderSteps = -1;
-    for (final p in battle.participants) {
-      if (p.inviteStatus != ParticipantInviteStatus.accepted) continue;
-      if (p.currentSteps > leaderSteps) {
-        leaderSteps = p.currentSteps;
-        leaderId = p.userId;
-      }
-    }
-    if (leaderSteps <= 0) leaderId = null;
-
     return _ArenaContext(
       frozen: frozen,
       remaining: remaining,
       total: total,
       potXp: potXp,
-      leaderId: leaderId,
       uid: uid,
     );
   }
 
-  List<Widget> _sharedChrome(
-    BattleModel battle,
-    _ArenaContext ctx, {
-    required bool showFit,
-  }) {
-    final flashAlpha =
-        (_flashUntil - _time > 0) ? ((_flashUntil - _time) / 0.6) : 0.0;
+  List<Widget> _sharedChrome(BattleModel battle, _ArenaContext ctx) {
     return [
-      if (flashAlpha > 0)
-        Positioned.fill(
-          child: IgnorePointer(
-            child: Container(
-              color: AppColors.primary
-                  .withValues(alpha: flashAlpha * 0.18),
-            ),
-          ),
-        ),
       if (ctx.frozen)
         const IgnorePointer(
           child: DecoratedBox(
@@ -631,51 +796,30 @@ class _BattleGroundScreenState extends ConsumerState<BattleGroundScreen>
                 icon: Icons.close,
                 onTap: () => context.pop(),
               ),
-              const SizedBox(width: 6),
-              _GlassIconBtn(
-                icon: Icons.layers_outlined,
-                onTap: _openPackChooser,
-              ),
-              if (showFit) ...[
-                const SizedBox(width: 6),
-                _GlassIconBtn(
-                  icon: Icons.center_focus_strong,
-                  onTap: _fitCityToRunners,
-                ),
-              ],
               const Spacer(),
               CountdownRing(remaining: ctx.remaining, total: ctx.total),
               const Spacer(),
+              _CameraModeToggle(
+                mode: _cameraMode,
+                onTap: _toggleCameraMode,
+              ),
+              const SizedBox(width: 8),
               _PotBadge(xp: ctx.potXp, isStake: battle.stakeXp > 0),
             ],
           ),
         ),
       ),
-      if (_toast != null)
-        Positioned(
-          top: MediaQuery.of(context).padding.top + 86,
-          left: 0,
-          right: 0,
-          child: Center(
-            child: Container(
-              padding: const EdgeInsets.symmetric(
-                  horizontal: 14, vertical: 8),
-              decoration: BoxDecoration(
-                color: Colors.black.withValues(alpha: 0.7),
-                borderRadius: BorderRadius.circular(20),
-                border: Border.all(
-                  color: AppColors.primary.withValues(alpha: 0.4),
-                ),
-              ),
-              child: Text(
-                _toast!,
-                style: const TextStyle(
-                  fontFamily: 'Manrope',
-                  color: Colors.white,
-                  fontWeight: FontWeight.w800,
-                  fontSize: 13,
-                ),
-              ),
+      // Skip button — only visible during the intro cinematic. Sits below
+      // the main chrome row, right-aligned, low-opacity so it doesn't
+      // dominate the cinematic itself.
+      if (_cinematicPhase != _CinematicPhase.done &&
+          _cinematicPhase != _CinematicPhase.idle)
+        SafeArea(
+          child: Align(
+            alignment: Alignment.topRight,
+            child: Padding(
+              padding: const EdgeInsets.only(top: 60, right: 12),
+              child: _SkipIntroBtn(onTap: _skipCinematic),
             ),
           ),
         ),
@@ -700,7 +844,6 @@ class _ArenaContext {
   final Duration remaining;
   final Duration total;
   final int potXp;
-  final String? leaderId;
   final String uid;
 
   _ArenaContext({
@@ -708,344 +851,51 @@ class _ArenaContext {
     required this.remaining,
     required this.total,
     required this.potXp,
-    required this.leaderId,
     required this.uid,
   });
 }
 
-// =============================================================================
-// Forest avatar — positioned by absolute world Y; tile-modulo sampling
-// keeps it on the path within whichever tile copy it's in.
-// =============================================================================
-
-class _ForestAvatar extends StatelessWidget {
-  final BattleParticipant participant;
-  final double worldY;
-  final Size tileSize;
-  final double avatarHeight;
-  final bool isMe;
-  final bool isLeader;
-  final bool isWinner;
-  final VoidCallback? onTap;
-
-  const _ForestAvatar({
-    required this.participant,
-    required this.worldY,
-    required this.tileSize,
-    required this.avatarHeight,
-    required this.isMe,
-    required this.isLeader,
-    required this.isWinner,
-    this.onTap,
-  });
+/// Two-state pill button that flips between the two camera modes. Sits in
+/// the top chrome row so it's always visible without eating arena space.
+class _CameraModeToggle extends StatelessWidget {
+  final ArenaCameraMode mode;
+  final VoidCallback onTap;
+  const _CameraModeToggle({required this.mode, required this.onTap});
 
   @override
   Widget build(BuildContext context) {
-    final tileH = tileSize.height;
-    final yWithinTile = worldY % tileH;
-    final progressInTile = (yWithinTile / tileH).clamp(0.0, 1.0);
-
-    final pathPoint = BattlegroundPath.positionInTile(
-      progressInTile,
-      tileSize,
-      pack: ArenaPack.forest,
-    );
-    final naturalTangent =
-        BattlegroundPath.tangentAt(progressInTile, pack: ArenaPack.forest);
-    // Forest path runs top→bottom; runners move bottom→top through the
-    // stacked world, so the visual tangent is the opposite of natural.
-    final tangent = Offset(-naturalTangent.dx, -naturalTangent.dy);
-    final angle = math.atan2(tangent.dx, -tangent.dy);
-
-    final size = avatarHeight;
-    final left = pathPoint.dx - size / 2;
-    final top = worldY - size / 2;
-
-    return Positioned(
-      left: left,
-      top: top,
-      width: size,
-      height: size,
-      child: _RunnerSprite(
-        participant: participant,
-        angle: angle,
-        isMe: isMe,
-        isLeader: isLeader,
-        isWinner: isWinner,
+    final label = mode == ArenaCameraMode.topView ? 'Top' : '3P';
+    final icon = mode == ArenaCameraMode.topView
+        ? Icons.map_outlined
+        : Icons.videocam_outlined;
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
         onTap: onTap,
-      ),
-    );
-  }
-}
-
-// =============================================================================
-// City avatar — positioned within a single landscape tile by progress.
-// =============================================================================
-
-class _CityAvatar extends StatelessWidget {
-  final BattleParticipant participant;
-  final double progress;
-  final Size tileSize;
-  final double avatarSize;
-  final bool isMe;
-  final bool isLeader;
-  final bool isWinner;
-  final VoidCallback? onTap;
-
-  const _CityAvatar({
-    required this.participant,
-    required this.progress,
-    required this.tileSize,
-    required this.avatarSize,
-    required this.isMe,
-    required this.isLeader,
-    required this.isWinner,
-    this.onTap,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final pathPoint = BattlegroundPath.positionInTile(
-      progress,
-      tileSize,
-      pack: ArenaPack.city,
-    );
-    final tangent =
-        BattlegroundPath.tangentAt(progress, pack: ArenaPack.city);
-    // City path runs left→right and runners move left→right too — no
-    // tangent negation needed.
-    final angle = math.atan2(tangent.dx, -tangent.dy);
-
-    return Positioned(
-      left: pathPoint.dx - avatarSize / 2,
-      top: pathPoint.dy - avatarSize / 2,
-      width: avatarSize,
-      height: avatarSize,
-      child: _RunnerSprite(
-        participant: participant,
-        angle: angle,
-        isMe: isMe,
-        isLeader: isLeader,
-        isWinner: isWinner,
-        onTap: onTap,
-      ),
-    );
-  }
-}
-
-// =============================================================================
-// Shared runner sprite — visual stack (glow + sprite + badges + step chip).
-// =============================================================================
-
-class _RunnerSprite extends StatelessWidget {
-  final BattleParticipant participant;
-  final double angle;
-  final bool isMe;
-  final bool isLeader;
-  final bool isWinner;
-  final VoidCallback? onTap;
-
-  const _RunnerSprite({
-    required this.participant,
-    required this.angle,
-    required this.isMe,
-    required this.isLeader,
-    required this.isWinner,
-    this.onTap,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final avatarId = participant.battleAvatarId ?? Avatar.defaultAvatar.id;
-    final assetPath = Avatar.byId(avatarId).assetPath;
-
-    return GestureDetector(
-      onTap: onTap,
-      behavior: HitTestBehavior.opaque,
-      child: Stack(
-        clipBehavior: Clip.none,
-        children: [
-          if (isMe)
-            Positioned.fill(
-              child: Container(
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  boxShadow: [
-                    BoxShadow(
-                      color: AppColors.primary.withValues(alpha: 0.55),
-                      blurRadius: 14,
-                      spreadRadius: 2,
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          Transform.rotate(
-            angle: angle,
-            child: Image.asset(
-              assetPath,
-              fit: BoxFit.contain,
-              gaplessPlayback: true,
-            ),
+        borderRadius: BorderRadius.circular(20),
+        child: Container(
+          height: 40,
+          padding: const EdgeInsets.symmetric(horizontal: 12),
+          decoration: BoxDecoration(
+            color: Colors.black.withValues(alpha: 0.55),
+            borderRadius: BorderRadius.circular(20),
+            border: Border.all(
+                color: AppColors.primary.withValues(alpha: 0.5)),
           ),
-          if (isLeader && !isWinner)
-            Positioned(
-              top: -10,
-              left: 0,
-              right: 0,
-              child: Center(
-                child: Container(
-                  padding: const EdgeInsets.symmetric(
-                      horizontal: 6, vertical: 2),
-                  decoration: BoxDecoration(
-                    color: AppColors.amber,
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                  child: const Text(
-                    'LEAD',
-                    style: TextStyle(
-                      fontFamily: 'Manrope',
-                      fontSize: 8,
-                      fontWeight: FontWeight.w900,
-                      letterSpacing: 1.2,
-                      color: Colors.black,
-                    ),
-                  ),
-                ),
-              ),
-            ),
-          if (isWinner)
-            Positioned(
-              top: -14,
-              left: 0,
-              right: 0,
-              child: Center(
-                child: Container(
-                  padding: const EdgeInsets.symmetric(
-                      horizontal: 8, vertical: 3),
-                  decoration: BoxDecoration(
-                    color: AppColors.tertiary,
-                    borderRadius: BorderRadius.circular(10),
-                    boxShadow: [
-                      BoxShadow(
-                        color: AppColors.tertiary.withValues(alpha: 0.5),
-                        blurRadius: 10,
-                      ),
-                    ],
-                  ),
-                  child: const Text(
-                    'WINNER',
-                    style: TextStyle(
-                      fontFamily: 'Manrope',
-                      fontSize: 9,
-                      fontWeight: FontWeight.w900,
-                      letterSpacing: 1.5,
-                      color: Colors.black,
-                    ),
-                  ),
-                ),
-              ),
-            ),
-          Positioned(
-            bottom: -16,
-            left: 0,
-            right: 0,
-            child: Center(
-              child: Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
-                decoration: BoxDecoration(
-                  color: Colors.black.withValues(alpha: 0.55),
-                  borderRadius: BorderRadius.circular(6),
-                ),
-                child: Text(
-                  '${participant.currentSteps}',
-                  style: const TextStyle(
-                    fontFamily: 'Manrope',
-                    color: Colors.white,
-                    fontSize: 9,
-                    fontWeight: FontWeight.w800,
-                  ),
-                ),
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-// =============================================================================
-// Pack chooser bottom sheet — two cards, side by side.
-// =============================================================================
-
-class _PackChooserSheet extends StatelessWidget {
-  final ArenaPack current;
-  const _PackChooserSheet({required this.current});
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    return Container(
-      decoration: BoxDecoration(
-        color: AppColors.surfaceContainer,
-        borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
-      ),
-      child: SafeArea(
-        top: false,
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(20, 12, 20, 20),
-          child: Column(
+          child: Row(
             mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Center(
-                child: Container(
-                  width: 36,
-                  height: 4,
-                  margin: const EdgeInsets.only(bottom: 18),
-                  decoration: BoxDecoration(
-                    color: AppColors.onSurface.withValues(alpha: 0.18),
-                    borderRadius: BorderRadius.circular(2),
-                  ),
-                ),
-              ),
+              Icon(icon, color: Colors.white, size: 18),
+              const SizedBox(width: 6),
               Text(
-                'Choose your arena',
-                style: theme.textTheme.titleLarge?.copyWith(
-                  fontWeight: FontWeight.w900,
+                label,
+                style: const TextStyle(
+                  fontFamily: 'Manrope',
                   color: Colors.white,
+                  fontSize: 12,
+                  fontWeight: FontWeight.w800,
+                  letterSpacing: 0.5,
                 ),
-              ),
-              const SizedBox(height: 4),
-              Text(
-                'Forest is portrait. City is landscape — flip your phone.',
-                style: theme.textTheme.bodySmall?.copyWith(
-                  color: AppColors.onSurfaceVariant,
-                ),
-              ),
-              const SizedBox(height: 18),
-              Row(
-                children: [
-                  Expanded(
-                    child: _PackCard(
-                      pack: ArenaPack.forest,
-                      previewAsset:
-                          ArenaPack.forest.assetFor(BattlegroundTimeOfDay.afternoon),
-                      selected: current == ArenaPack.forest,
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: _PackCard(
-                      pack: ArenaPack.city,
-                      previewAsset:
-                          ArenaPack.city.assetFor(BattlegroundTimeOfDay.afternoon),
-                      selected: current == ArenaPack.city,
-                    ),
-                  ),
-                ],
               ),
             ],
           ),
@@ -1055,88 +905,52 @@ class _PackChooserSheet extends StatelessWidget {
   }
 }
 
-class _PackCard extends StatelessWidget {
-  final ArenaPack pack;
-  final String previewAsset;
-  final bool selected;
-  const _PackCard({
-    required this.pack,
-    required this.previewAsset,
-    required this.selected,
-  });
+/// Low-opacity "Skip →" pill shown top-right during the intro cinematic.
+class _SkipIntroBtn extends StatelessWidget {
+  final VoidCallback onTap;
+  const _SkipIntroBtn({required this.onTap});
 
   @override
   Widget build(BuildContext context) {
-    return InkWell(
-      onTap: () => Navigator.of(context).pop(pack),
-      borderRadius: BorderRadius.circular(16),
-      child: Container(
-        padding: const EdgeInsets.all(10),
-        decoration: BoxDecoration(
-          color: selected
-              ? AppColors.primary.withValues(alpha: 0.16)
-              : AppColors.onSurface.withValues(alpha: 0.04),
-          borderRadius: BorderRadius.circular(16),
-          border: Border.all(
-            color: selected
-                ? AppColors.primary
-                : AppColors.onSurface.withValues(alpha: 0.08),
-            width: selected ? 2 : 1,
-          ),
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            AspectRatio(
-              aspectRatio: 1,
-              child: ClipRRect(
-                borderRadius: BorderRadius.circular(10),
-                child: Image.asset(
-                  previewAsset,
-                  fit: BoxFit.cover,
-                  gaplessPlayback: true,
-                ),
-              ),
+    return Opacity(
+      opacity: 0.5,
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(18),
+          child: Container(
+            padding:
+                const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+            decoration: BoxDecoration(
+              color: Colors.black.withValues(alpha: 0.55),
+              borderRadius: BorderRadius.circular(18),
+              border: Border.all(
+                  color: Colors.white.withValues(alpha: 0.25)),
             ),
-            const SizedBox(height: 8),
-            Row(
+            child: const Row(
+              mainAxisSize: MainAxisSize.min,
               children: [
                 Text(
-                  pack.label,
-                  style: const TextStyle(
+                  'Skip',
+                  style: TextStyle(
                     fontFamily: 'Manrope',
                     color: Colors.white,
-                    fontWeight: FontWeight.w800,
-                    fontSize: 14,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w700,
+                    letterSpacing: 0.6,
                   ),
                 ),
-                const Spacer(),
-                if (selected)
-                  Icon(
-                    Icons.check_circle,
-                    color: AppColors.primary,
-                    size: 18,
-                  ),
+                SizedBox(width: 4),
+                Icon(Icons.arrow_forward, color: Colors.white, size: 14),
               ],
             ),
-            Text(
-              pack.isLandscape ? 'Landscape · zoomable' : 'Portrait · scroll',
-              style: TextStyle(
-                fontFamily: 'Manrope',
-                color: AppColors.onSurface.withValues(alpha: 0.55),
-                fontSize: 10,
-              ),
-            ),
-          ],
+          ),
         ),
       ),
     );
   }
 }
-
-// =============================================================================
-// Small chrome elements
-// =============================================================================
 
 class _GlassIconBtn extends StatelessWidget {
   final IconData icon;
@@ -1156,7 +970,8 @@ class _GlassIconBtn extends StatelessWidget {
           decoration: BoxDecoration(
             color: Colors.black.withValues(alpha: 0.55),
             shape: BoxShape.circle,
-            border: Border.all(color: AppColors.onSurface.withValues(alpha: 0.12)),
+            border: Border.all(
+                color: AppColors.onSurface.withValues(alpha: 0.12)),
           ),
           child: Icon(icon, color: Colors.white, size: 20),
         ),
@@ -1201,4 +1016,3 @@ class _PotBadge extends StatelessWidget {
     );
   }
 }
-

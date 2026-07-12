@@ -79,7 +79,7 @@ class RankRow extends StatelessWidget {
             AvatarCircle(
               radius: 20,
               imageUrl: entry.avatarURL,
-              initials: _initials(entry.displayName),
+              initials: _initials(entry.friendlyName),
               borderColor: scheme.outlineVariant,
               borderWidth: 1,
             ),
@@ -88,7 +88,7 @@ class RankRow extends StatelessWidget {
             // ---- Name ----
             Expanded(
               child: Text(
-                highlightYou ? 'You' : entry.displayName,
+                highlightYou ? 'You' : entry.friendlyName,
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
                 style: theme.textTheme.titleSmall?.copyWith(

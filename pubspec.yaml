@@ -95,6 +95,22 @@ dependencies:
   # Battles bottom-nav tab).
   material_design_icons_flutter: ^7.0.7296
 
+  # Bitmoji-style character avatars — user picks face / hair / eyes /
+  # mouth / clothing / accessories and the widget renders the result as
+  # layered SVG. The chosen options are stored as a JSON spec on the
+  # profile (see migration 0026), so a single ~200-byte column syncs
+  # the whole look across devices without shipping PNGs.
+  fluttermoji: ^1.0.2
+
+  # Direct-use transitive deps of `fluttermoji` — we import them
+  # ourselves in the customizer sheet (SharedPreferences to seed the
+  # picker with the user's saved spec) and the FluttermojiAvatar
+  # widget (SvgPicture.string to render other users' character rigs).
+  # Explicit declaration keeps `depend_on_referenced_packages` clean
+  # and pins the version range we've verified against.
+  shared_preferences: ^2.3.3
+  flutter_svg: ^2.0.10+1
+
   # Share cards (Track session, Battle, Streak): render a custom card
   # widget off-screen to a PNG and hand it to the native share sheet.
   # `share_plus` is the share sheet itself; `path_provider` gives us the
@@ -105,6 +121,24 @@ dependencies:
   path_provider: ^2.1.5
   url_launcher: ^6.3.1
   gal: ^2.3.1
+
+  # 3D character rendering — loads the .glb files under
+  # assets/images/3dAvatars/{adam,amy,shannon,jackie}/character.glb (idle
+  # pose) and Taunt.glb (taunt animation). Mixamo-rigged, Blender-converted
+  # from FBX with Draco compression and 512-px textures (~2-7 MB each).
+  # Handles model load, animation playback, and camera orbit inside a widget.
+  flutter_3d_controller: ^2.0.5
+
+dependency_overrides:
+  # Local fork of flutter_3d_controller — patches setCameraOrbit so its
+  # radius argument is passed to model-viewer in **meters** (`10m`) instead
+  # of the upstream's percentage-of-auto-frame (`10%`). The upstream
+  # implementation makes it impossible to place the camera at an absolute
+  # distance from the target, which we need to frame a specific spot in
+  # our 200m-long arena. See packages/flutter_3d_controller_fork/lib/src/
+  # data/datasources/flutter_3d_datasource_mobile.dart:137.
+  flutter_3d_controller:
+    path: packages/flutter_3d_controller_fork
 
 dev_dependencies:
   flutter_test:
@@ -140,13 +174,32 @@ flutter:
     - assets/logos/logo.png
     - assets/logos/logo_square.png
     - assets/animations/splash_runner.mp4
-    # Battleground arena art — two packs, 4 time-of-day variants each.
-    #   • battleground/   — forest (portrait, 1:2) — multi-tile vertical world
-    #   • horizontalBg/   — city   (landscape, 2:1) — single tile + InteractiveViewer
-    # Pack picked by user (arenaPackPrefProvider), time-of-day by clock.
+    # Battleground arena art — portrait 1:2 tiles, stacked vertically,
+    # with the 14% top/bottom crop in `battle_ground_screen` to hide the
+    # tile-seam empty band. Flutter's asset globbing does NOT recurse
+    # into subfolders, so each pack subfolder is listed explicitly.
+    # Time-of-day picked from the device clock (see BattlegroundTimeOfDay).
+    #   • battleground/cityView/   — city tiles (morning/afternoon/
+    #     evening/night). Only pack shipped today; forest was retired.
     - assets/images/battleground/
+    - assets/images/battleground/cityView/
     - assets/images/horizontalBg/
     # 12 runner avatars (bird's-eye view to match the battleground camera).
     # Picked by the user in the avatar picker; stored as battle_avatar_id.
     - assets/images/avatars/
+    # 3D character avatars — four Mixamo-rigged characters, each folder
+    # holds character.glb (idle pose, shown in picker + arena for non-top
+    # players) and Taunt.glb (taunt animation, shown in arena when this
+    # user is #1 on the battle board). See lib/models/character_3d.dart
+    # for the catalog and lib/sheets/character_3d_picker_sheet.dart for
+    # the picker UI.
+    - assets/images/3dAvatars/adam/
+    - assets/images/3dAvatars/amy/
+    - assets/images/3dAvatars/shannon/
+    - assets/images/3dAvatars/jackie/
+    # Welcome-screen carousel mockups — one PNG per bottom-nav tab
+    # (home / battles / track / clan / leaderboard). Drop screenshots
+    # in here; the Welcome screen wires them into a floating phone
+    # frame on a violet gradient.
+    - assets/mockups/
     - .env

@@ -638,7 +638,7 @@ class ClanService {
               rows.map((r) => r['user_id'] as String).toList();
           final profilesRaw = await _supabase
               .from('profiles')
-              .select('id, display_name, avatar_url')
+              .select('id, display_name, preferred_name, avatar_url')
               .inFilter('id', userIds);
           final byId = <String, Map<String, dynamic>>{
             for (final p in profilesRaw as List)

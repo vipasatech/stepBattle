@@ -1,34 +1,37 @@
-﻿import 'dart:io';
-import 'dart:math' as math;
+import 'dart:io';
 
 import 'package:flutter/material.dart';
-import 'package:flutter/scheduler.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:hive_flutter/hive_flutter.dart';
 import 'package:image_picker/image_picker.dart';
 
 import '../../config/colors.dart';
-import '../../models/avatar.dart';
 import '../../models/battle_model.dart';
 import '../../providers/auth_provider.dart';
 import '../../providers/battle_provider.dart';
 import '../../services/native_step_service.dart';
-import '../profile/public_profile_screen.dart';
+import '../../sheets/battle_status_share_sheet.dart';
+import '../../widgets/battle_result_card.dart';
+import '../../widgets/themed_battle_background.dart';
 
-/// "Battle Status" page — a richer post-battle results view for
-/// COMPLETED battles only.
+/// **Battle Status** — the post-battle result page for completed
+/// battles.
 ///
-/// Each accepted participant is rendered as a freely-DRAGGABLE card
-/// (avatar + stats). The user can rearrange the cards anywhere on the
-/// canvas — positions are persisted per battle in Hive under
-/// `battle_layout_<battleId>` so the arrangement survives navigation.
+/// Layout (fully rewritten from the earlier per-avatar draggable
+/// build):
+///   • **Background**: user-picked photo (falls back to the themed
+///     violet-gradient + battleground silhouette). Swipe left / right
+///     to toggle between the two.
+///   • **Transparent battle card**: draggable, sits over the
+///     background. Shows tag (`#1 LAST ONE STANDING` / `OUTFLANKED` /
+///     `DEAD HEAT`), `{me} vs {opp}`, two-tone scores + bar, XP
+///     footer. Same widget renders inside the share PNG.
+///   • **STEPBATTLE wordmark**: draggable, italic-bold Manrope. Two
+///     draggable overlays, both persisted per-battle in Hive.
 ///
-/// The winner's card sits slightly larger and has a continuous star-
-/// particle animation overlaid behind it.
-///
-/// Background: defaults to a tasteful dark plate. The user can tap the
-/// camera FAB and pick a photo from their gallery (or the curated
-/// preset list) to replace it. Per-battle in Hive too.
+/// The share action reuses whatever background + overlay positions
+/// the user chose — the share PNG is a true snapshot of what they
+/// see on screen.
 class BattleStatusScreen extends ConsumerStatefulWidget {
   final String battleId;
   const BattleStatusScreen({super.key, required this.battleId});
@@ -38,95 +41,69 @@ class BattleStatusScreen extends ConsumerStatefulWidget {
       _BattleStatusScreenState();
 }
 
-class _BattleStatusScreenState
-    extends ConsumerState<BattleStatusScreen>
-    with SingleTickerProviderStateMixin {
-  /// One Ticker drives the star particle animation. Reading `_t` in
-  /// build() inside Positioned descendants triggers per-frame rebuilds
-  /// only of the painter — Stack itself is unaffected.
-  late final Ticker _ticker;
-  double _t = 0;
+class _BattleStatusScreenState extends ConsumerState<BattleStatusScreen> {
+  /// Draggable overlay positions in FRACTIONAL canvas coordinates
+  /// (0.0..1.0). Defaults match the share sheet: wordmark near the
+  /// top (row ~2), card near the vertical middle-lower (row ~4).
+  Offset _cardPos = defaultBattleCardPos;
+  Offset _wordmarkPos = defaultBattleWordmarkPos;
 
-  /// Last drag positions, per participant userId. Offsets are stored in
-  /// LOGICAL (display-independent) coordinates — fraction of the canvas
-  /// width/height — so the layout survives orientation/resize.
-  final Map<String, Offset> _positions = {};
-
-  /// Either a local file path (image_picker) or one of the curated
-  /// preset asset paths. Persisted in Hive.
-  String? _backgroundPath;
-  bool _backgroundIsAsset = false;
+  /// Background state:
+  ///   • `_photoPath` set + `_useThemed = false` → user-picked photo
+  ///     (either a file path from image_picker or a bundled asset).
+  ///   • `_useThemed = true`  → themed violet/silhouette painter.
+  ///   • Neither set → prompt for a photo the first time the user
+  ///     tries to share, else render the themed background.
+  String? _photoPath;
+  bool _useThemed = false;
 
   static String _hiveKeyFor(String battleId) =>
-      'battle_layout_$battleId';
+      'battle_status_v2_$battleId';
 
   @override
   void initState() {
     super.initState();
-    _ticker = createTicker((d) {
-      setState(() => _t = d.inMicroseconds / 1e6);
-    })..start();
-    _restoreFromHive();
+    _restore();
   }
 
-  @override
-  void dispose() {
-    _ticker.dispose();
-    super.dispose();
-  }
-
-  void _restoreFromHive() {
+  void _restore() {
     try {
       final box = Hive.box(NativeStepService.boxName);
       final raw = box.get(_hiveKeyFor(widget.battleId));
       if (raw is! Map) return;
-      final positions = raw['positions'];
-      if (positions is Map) {
-        for (final entry in positions.entries) {
-          final v = entry.value;
-          if (v is Map && v['x'] is num && v['y'] is num) {
-            _positions[entry.key.toString()] = Offset(
-              (v['x'] as num).toDouble(),
-              (v['y'] as num).toDouble(),
-            );
-          }
-        }
+      final card = raw['card'];
+      if (card is Map && card['x'] is num && card['y'] is num) {
+        _cardPos = Offset(
+          (card['x'] as num).toDouble(),
+          (card['y'] as num).toDouble(),
+        );
       }
-      _backgroundPath = raw['bg'] as String?;
-      _backgroundIsAsset = raw['bgIsAsset'] as bool? ?? false;
+      final wm = raw['wordmark'];
+      if (wm is Map && wm['x'] is num && wm['y'] is num) {
+        _wordmarkPos = Offset(
+          (wm['x'] as num).toDouble(),
+          (wm['y'] as num).toDouble(),
+        );
+      }
+      _photoPath = raw['photo'] as String?;
+      _useThemed = raw['useThemed'] as bool? ?? false;
       setState(() {});
-    } catch (_) {/* ignore corrupted entries */}
+    } catch (_) {/* corrupted entry — start fresh */}
   }
 
-  void _saveToHive() {
+  void _save() {
     try {
       final box = Hive.box(NativeStepService.boxName);
       box.put(_hiveKeyFor(widget.battleId), {
-        'positions': _positions.map(
-          (k, v) => MapEntry(k, {'x': v.dx, 'y': v.dy}),
-        ),
-        'bg': _backgroundPath,
-        'bgIsAsset': _backgroundIsAsset,
+        'card': {'x': _cardPos.dx, 'y': _cardPos.dy},
+        'wordmark': {'x': _wordmarkPos.dx, 'y': _wordmarkPos.dy},
+        'photo': _photoPath,
+        'useThemed': _useThemed,
       });
     } catch (_) {}
   }
 
-  Future<void> _pickBackground() async {
-    final choice = await showModalBottomSheet<_BgChoice>(
-      context: context,
-      backgroundColor: AppColors.surfaceContainer,
-      builder: (_) => const _BackgroundPickerSheet(),
-    );
-    if (choice == null) return;
-    if (choice.assetPath != null) {
-      setState(() {
-        _backgroundPath = choice.assetPath;
-        _backgroundIsAsset = true;
-      });
-      _saveToHive();
-      return;
-    }
-    // From gallery — image_picker returns a local file path.
+  Future<void> _pickPhoto() async {
     final picker = ImagePicker();
     final picked = await picker.pickImage(
       source: ImageSource.gallery,
@@ -135,10 +112,23 @@ class _BattleStatusScreenState
     );
     if (picked == null) return;
     setState(() {
-      _backgroundPath = picked.path;
-      _backgroundIsAsset = false;
+      _photoPath = picked.path;
+      _useThemed = false;
     });
-    _saveToHive();
+    _save();
+  }
+
+  /// Called by the horizontal swipe detector. Positive velocity =
+  /// swipe right (finger dragged left→right) — toggle away from the
+  /// photo to the themed background. Negative = swipe left — toggle
+  /// back to the photo when one is set.
+  void _onHorizontalFling(double vx) {
+    if (vx > 0) {
+      setState(() => _useThemed = true);
+    } else if (_photoPath != null) {
+      setState(() => _useThemed = false);
+    }
+    _save();
   }
 
   @override
@@ -147,24 +137,41 @@ class _BattleStatusScreenState
     final uid = ref.watch(authStateProvider).valueOrNull?.id ?? '';
     return Scaffold(
       backgroundColor: Colors.black,
+      extendBodyBehindAppBar: true,
       appBar: AppBar(
+        backgroundColor: Colors.transparent,
+        elevation: 0,
         leading: IconButton(
-          icon: const Icon(Icons.arrow_back),
+          icon: const Icon(Icons.arrow_back, color: Colors.white),
           onPressed: () => Navigator.of(context).maybePop(),
         ),
-        title: const Text('Battle Status'),
         actions: [
-          IconButton(
-            icon: const Icon(Icons.photo_camera_outlined),
-            tooltip: 'Change background',
-            onPressed: _pickBackground,
+          asyncBattle.when(
+            data: (b) => (b != null && b.status == BattleStatus.completed)
+                ? IconButton(
+                    icon: const Icon(Icons.ios_share, color: Colors.white),
+                    tooltip: 'Share',
+                    onPressed: () => _onShare(b, uid),
+                  )
+                : const SizedBox.shrink(),
+            loading: () => const SizedBox.shrink(),
+            error: (_, __) => const SizedBox.shrink(),
           ),
           IconButton(
-            icon: const Icon(Icons.refresh),
+            icon: const Icon(Icons.photo_camera_outlined,
+                color: Colors.white),
+            tooltip: 'Change background',
+            onPressed: _pickPhoto,
+          ),
+          IconButton(
+            icon: const Icon(Icons.refresh, color: Colors.white),
             tooltip: 'Reset layout',
             onPressed: () {
-              setState(() => _positions.clear());
-              _saveToHive();
+              setState(() {
+                _cardPos = defaultBattleCardPos;
+                _wordmarkPos = defaultBattleWordmarkPos;
+              });
+              _save();
             },
           ),
         ],
@@ -187,7 +194,7 @@ class _BattleStatusScreenState
           if (battle.status != BattleStatus.completed) {
             return Center(
               child: Padding(
-                padding: EdgeInsets.all(24),
+                padding: const EdgeInsets.all(24),
                 child: Text(
                   'Battle Status opens once the battle has ended.',
                   textAlign: TextAlign.center,
@@ -196,492 +203,246 @@ class _BattleStatusScreenState
               ),
             );
           }
-          return LayoutBuilder(builder: (ctx, c) {
-            final accepted = battle.participants
-                .where((p) =>
-                    p.inviteStatus == ParticipantInviteStatus.accepted)
-                .toList();
-
-            // Seed default positions for participants without a saved
-            // location. Winner sits centred slightly high, others fan
-            // out around them.
-            final winnerId = battle.winnerId;
-            for (var i = 0; i < accepted.length; i++) {
-              final p = accepted[i];
-              if (_positions.containsKey(p.userId)) continue;
-              _positions[p.userId] = _defaultSeedPosition(
-                index: i,
-                total: accepted.length,
-                isWinner: p.userId == winnerId,
-              );
-            }
-
-            return Stack(
-              fit: StackFit.expand,
-              children: [
-                // Background — preset asset or user-picked photo.
-                _Background(
-                  path: _backgroundPath,
-                  isAsset: _backgroundIsAsset,
-                ),
-                // Subtle dark gradient overlay so cards stay legible
-                // against busy backgrounds.
-                const IgnorePointer(
-                  child: DecoratedBox(
-                    decoration: BoxDecoration(
-                      gradient: LinearGradient(
-                        begin: Alignment.topCenter,
-                        end: Alignment.bottomCenter,
-                        colors: [Color(0x66000000), Color(0x33000000)],
-                      ),
-                    ),
-                    child: SizedBox.expand(),
-                  ),
-                ),
-
-                // Cards — one per accepted participant.
-                for (final p in accepted)
-                  _DraggableParticipantCard(
-                    key: ValueKey(p.userId),
-                    participant: p,
-                    isWinner: p.userId == winnerId,
-                    isMe: p.userId == uid,
-                    canvasSize: Size(c.maxWidth, c.maxHeight),
-                    position: _positions[p.userId]!,
-                    time: _t,
-                    onPositionChanged: (offset) {
-                      _positions[p.userId] = offset;
-                    },
-                    onPositionFinalized: (offset) {
-                      _positions[p.userId] = offset;
-                      _saveToHive();
-                    },
-                    onTap: p.userId == uid
-                        ? null
-                        : () => showArenaProfilePeek(context, p.userId),
-                  ),
-              ],
-            );
-          });
+          return _Canvas(
+            battle: battle,
+            uid: uid,
+            cardPos: _cardPos,
+            wordmarkPos: _wordmarkPos,
+            photoPath: _photoPath,
+            useThemed: _useThemed,
+            onCardMoved: (o) {
+              setState(() => _cardPos = o);
+            },
+            onCardSettled: () => _save(),
+            onWordmarkMoved: (o) {
+              setState(() => _wordmarkPos = o);
+            },
+            onWordmarkSettled: () => _save(),
+            onHorizontalFling: _onHorizontalFling,
+          );
         },
       ),
     );
   }
 
-  Offset _defaultSeedPosition({
-    required int index,
-    required int total,
-    required bool isWinner,
-  }) {
-    // Position values are normalized to canvas size (0..1) so they
-    // survive orientation changes. Winner anchored at the top-centre,
-    // others distributed below.
-    if (isWinner) return const Offset(0.5, 0.28);
-    final ringSlot = total <= 1 ? 0 : index % math.max(1, total - 1);
-    final spread = total <= 1 ? 0 : ringSlot / math.max(1, total - 1);
-    return Offset(
-      0.20 + spread * 0.60,
-      0.55 + (index.isOdd ? 0.10 : 0.0),
+  /// Share entry point. If the user hasn't picked a photo AND hasn't
+  /// explicitly chosen the themed background, prompt for a photo now
+  /// (per the "reuse Battle Status photo → prompt if none" spec).
+  Future<void> _onShare(BattleModel battle, String uid) async {
+    if (_photoPath == null && !_useThemed) {
+      await _pickPhoto();
+    }
+    if (!mounted) return;
+    await showBattleStatusShareSheet(
+      context,
+      battle: battle,
+      uid: uid,
+      photoPath: _photoPath,
+      useThemed: _useThemed,
+      cardPos: _cardPos,
+      wordmarkPos: _wordmarkPos,
     );
   }
 }
 
-// =============================================================================
-// Background renderer
-// =============================================================================
+/// The interactive canvas — background + two draggable overlays +
+/// horizontal swipe detector for switching background modes.
+class _Canvas extends StatelessWidget {
+  final BattleModel battle;
+  final String uid;
+  final Offset cardPos;
+  final Offset wordmarkPos;
+  final String? photoPath;
+  final bool useThemed;
+  final ValueChanged<Offset> onCardMoved;
+  final VoidCallback onCardSettled;
+  final ValueChanged<Offset> onWordmarkMoved;
+  final VoidCallback onWordmarkSettled;
+  final ValueChanged<double> onHorizontalFling;
 
-class _Background extends StatelessWidget {
-  final String? path;
-  final bool isAsset;
-  const _Background({required this.path, required this.isAsset});
-
-  @override
-  Widget build(BuildContext context) {
-    if (path == null) {
-      // Default gradient backdrop.
-      return const DecoratedBox(
-        decoration: BoxDecoration(
-          gradient: LinearGradient(
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
-            colors: [
-              Color(0xFF1A0F2A),
-              Color(0xFF0E0A1A),
-            ],
-          ),
-        ),
-        child: SizedBox.expand(),
-      );
-    }
-    if (isAsset) {
-      return Image.asset(path!, fit: BoxFit.cover);
-    }
-    // Local file from image_picker.
-    return Image.file(File(path!), fit: BoxFit.cover);
-  }
-}
-
-// =============================================================================
-// Draggable participant card with optional star-particle overlay
-// =============================================================================
-
-class _DraggableParticipantCard extends StatefulWidget {
-  final BattleParticipant participant;
-  final bool isWinner;
-  final bool isMe;
-  final Size canvasSize;
-  final Offset position; // normalized 0..1
-  final double time;
-  final ValueChanged<Offset> onPositionChanged;
-  final ValueChanged<Offset> onPositionFinalized;
-  final VoidCallback? onTap;
-
-  const _DraggableParticipantCard({
-    super.key,
-    required this.participant,
-    required this.isWinner,
-    required this.isMe,
-    required this.canvasSize,
-    required this.position,
-    required this.time,
-    required this.onPositionChanged,
-    required this.onPositionFinalized,
-    this.onTap,
+  const _Canvas({
+    required this.battle,
+    required this.uid,
+    required this.cardPos,
+    required this.wordmarkPos,
+    required this.photoPath,
+    required this.useThemed,
+    required this.onCardMoved,
+    required this.onCardSettled,
+    required this.onWordmarkMoved,
+    required this.onWordmarkSettled,
+    required this.onHorizontalFling,
   });
 
   @override
-  State<_DraggableParticipantCard> createState() =>
-      _DraggableParticipantCardState();
-}
-
-class _DraggableParticipantCardState
-    extends State<_DraggableParticipantCard> {
-  late Offset _pos;
-
-  @override
-  void initState() {
-    super.initState();
-    _pos = widget.position;
-  }
-
-  @override
-  void didUpdateWidget(_DraggableParticipantCard oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    // Adopt external position changes (e.g., from layout reset) only if
-    // the user isn't currently dragging.
-    if (oldWidget.position != widget.position) {
-      _pos = widget.position;
-    }
-  }
-
-  @override
   Widget build(BuildContext context) {
-    // Card sizing: winners get a 1.2x boost so they're visually
-    // dominant. Locked dimensions so the user can predict where the
-    // card lands when dragged.
-    final scale = widget.isWinner ? 1.2 : 1.0;
-    final cardWidth = 150.0 * scale;
-    final cardHeight = 180.0 * scale;
-
-    // Convert normalized position → pixel offset on the canvas.
-    final pixelLeft = _pos.dx * widget.canvasSize.width - cardWidth / 2;
-    final pixelTop = _pos.dy * widget.canvasSize.height - cardHeight / 2;
-
-    return Positioned(
-      left: pixelLeft,
-      top: pixelTop,
-      width: cardWidth,
-      height: cardHeight,
-      child: GestureDetector(
-        onTap: widget.onTap,
-        onPanUpdate: (details) {
-          // Convert pixel delta → normalized delta.
-          final dx = details.delta.dx / widget.canvasSize.width;
-          final dy = details.delta.dy / widget.canvasSize.height;
-          final next = Offset(
-            (_pos.dx + dx).clamp(0.05, 0.95),
-            (_pos.dy + dy).clamp(0.05, 0.95),
-          );
-          setState(() => _pos = next);
-          widget.onPositionChanged(next);
-        },
-        onPanEnd: (_) {
-          widget.onPositionFinalized(_pos);
+    return LayoutBuilder(builder: (ctx, c) {
+      final canvas = Size(c.maxWidth, c.maxHeight);
+      return GestureDetector(
+        // Horizontal fling on empty canvas toggles background mode.
+        // Vertical drags fall through so the draggable overlays can
+        // handle their own gestures unimpeded.
+        onHorizontalDragEnd: (details) {
+          final vx = details.primaryVelocity ?? 0;
+          if (vx.abs() < 300) return; // too slow — ignore
+          onHorizontalFling(vx);
         },
         child: Stack(
-          clipBehavior: Clip.none,
+          fit: StackFit.expand,
           children: [
-            // Stars overlay (winner only) — drawn first so card sits on top.
-            if (widget.isWinner)
-              Positioned.fill(
-                child: IgnorePointer(
-                  child: CustomPaint(
-                    painter: _StarsPainter(
-                      time: widget.time,
-                      seed: widget.participant.userId.hashCode,
-                    ),
-                  ),
-                ),
+            // Background — one of three states.
+            _BackgroundLayer(
+              photoPath: photoPath,
+              useThemed: useThemed,
+              cardCenterFraction: cardPos.dy,
+            ),
+            // Draggable transparent battle card.
+            _DraggableOverlay(
+              position: cardPos,
+              canvas: canvas,
+              onMoved: onCardMoved,
+              onSettled: onCardSettled,
+              child: SizedBox(
+                width: canvas.width * 0.86,
+                child: BattleResultCard(battle: battle, uid: uid),
               ),
-            // Card body.
-            _ParticipantCardBody(
-              participant: widget.participant,
-              isWinner: widget.isWinner,
-              isMe: widget.isMe,
-              cardWidth: cardWidth,
-              cardHeight: cardHeight,
+            ),
+            // Draggable STEPBATTLE wordmark.
+            _DraggableOverlay(
+              position: wordmarkPos,
+              canvas: canvas,
+              onMoved: onWordmarkMoved,
+              onSettled: onWordmarkSettled,
+              child: const _Wordmark(),
             ),
           ],
         ),
-      ),
-    );
+      );
+    });
   }
 }
 
-class _ParticipantCardBody extends StatelessWidget {
-  final BattleParticipant participant;
-  final bool isWinner;
-  final bool isMe;
-  final double cardWidth;
-  final double cardHeight;
-
-  const _ParticipantCardBody({
-    required this.participant,
-    required this.isWinner,
-    required this.isMe,
-    required this.cardWidth,
-    required this.cardHeight,
+/// Renders the current background layer. Priority:
+///   1. `useThemed == true`  → themed painter.
+///   2. `photoPath != null`  → user-picked photo (file path from
+///      image_picker; asset paths also work here transparently thanks
+///      to `Image.file` vs `Image.asset` picking).
+///   3. Otherwise fall back to the themed painter so the screen
+///      never looks broken.
+class _BackgroundLayer extends StatelessWidget {
+  final String? photoPath;
+  final bool useThemed;
+  final double cardCenterFraction;
+  const _BackgroundLayer({
+    required this.photoPath,
+    required this.useThemed,
+    required this.cardCenterFraction,
   });
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final accent = isWinner ? AppColors.tertiary : AppColors.primary;
-    final avatarId =
-        participant.battleAvatarId ?? Avatar.defaultAvatar.id;
-    return Container(
-      width: cardWidth,
-      height: cardHeight,
-      decoration: BoxDecoration(
-        color: Colors.black.withValues(alpha: 0.55),
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: accent.withValues(alpha: 0.6), width: 2),
-        boxShadow: [
-          BoxShadow(
-            color: accent.withValues(alpha: 0.35),
-            blurRadius: 18,
-            spreadRadius: 1,
+    if (useThemed || photoPath == null) {
+      return ThemedBattleBackground(cardCenterFraction: cardCenterFraction);
+    }
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        Image.file(File(photoPath!), fit: BoxFit.cover),
+        // Subtle dark scrim so overlay text stays legible over busy
+        // photos.
+        const DecoratedBox(
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              begin: Alignment.topCenter,
+              end: Alignment.bottomCenter,
+              colors: [Color(0x55000000), Color(0x22000000)],
+            ),
           ),
-        ],
-      ),
-      child: Padding(
-        padding: const EdgeInsets.all(8),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            if (isWinner)
-              Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                decoration: BoxDecoration(
-                  color: AppColors.tertiary,
-                  borderRadius: BorderRadius.circular(10),
-                ),
-                child: const Text(
-                  'WINNER',
-                  style: TextStyle(
-                    fontFamily: 'Manrope',
-                    fontSize: 9,
-                    fontWeight: FontWeight.w900,
-                    letterSpacing: 1.5,
-                    color: Colors.black,
-                  ),
-                ),
-              )
-            else if (isMe)
-              Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                decoration: BoxDecoration(
-                  color: AppColors.primary.withValues(alpha: 0.2),
-                  borderRadius: BorderRadius.circular(8),
-                  border: Border.all(
-                    color: AppColors.primary.withValues(alpha: 0.5),
-                  ),
-                ),
-                child: Text(
-                  'YOU',
-                  style: TextStyle(
-                    fontFamily: 'Manrope',
-                    fontSize: 9,
-                    fontWeight: FontWeight.w900,
-                    letterSpacing: 1.2,
-                    color: AppColors.primary,
-                  ),
-                ),
-              )
-            else
-              const SizedBox(height: 16),
-            const SizedBox(height: 6),
-            Expanded(
-              child: Image.asset(
-                Avatar.byId(avatarId).assetPath,
-                fit: BoxFit.contain,
-              ),
-            ),
-            const SizedBox(height: 4),
-            Text(
-              participant.displayName.isEmpty
-                  ? '—'
-                  : participant.displayName,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: theme.textTheme.labelMedium?.copyWith(
-                color: Colors.white,
-                fontWeight: FontWeight.w800,
-              ),
-            ),
-            const SizedBox(height: 2),
-            Text(
-              '${participant.currentSteps} steps',
-              style: theme.textTheme.labelSmall?.copyWith(
-                color: AppColors.onSurfaceVariant,
-              ),
-            ),
-          ],
+          child: SizedBox.expand(),
         ),
-      ),
+      ],
     );
   }
 }
 
-// =============================================================================
-// Star-particle painter for the winner overlay
-// =============================================================================
-
-class _StarsPainter extends CustomPainter {
-  final double time;
-  final int seed;
-  _StarsPainter({required this.time, required this.seed});
-
-  static const int _starCount = 14;
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final rand = math.Random(seed);
-    final paint = Paint()..style = PaintingStyle.fill;
-    for (var i = 0; i < _starCount; i++) {
-      final baseX = rand.nextDouble();
-      final baseY = rand.nextDouble();
-      final speed = 0.6 + rand.nextDouble() * 0.8;
-      // Twinkle phase — pulse alpha + size on a sine wave.
-      final phase = (time * speed + i * 0.5) % 1.0;
-      final twinkle = (math.sin(phase * math.pi * 2) + 1) / 2; // 0..1
-      final alpha = (0.4 + twinkle * 0.6).clamp(0.0, 1.0);
-      final radius = 1.5 + twinkle * 2.5;
-      paint.color = Color.fromRGBO(
-        255,
-        220,
-        130,
-        alpha,
-      );
-      canvas.drawCircle(
-        Offset(baseX * size.width, baseY * size.height),
-        radius,
-        paint,
-      );
-    }
-  }
-
-  @override
-  bool shouldRepaint(covariant _StarsPainter oldDelegate) =>
-      oldDelegate.time != time;
-}
-
-// =============================================================================
-// Background picker sheet
-// =============================================================================
-
-class _BgChoice {
-  final String? assetPath; // null = gallery pick
-  const _BgChoice.gallery() : assetPath = null;
-  const _BgChoice.asset(this.assetPath);
-}
-
-class _BackgroundPickerSheet extends StatelessWidget {
-  const _BackgroundPickerSheet();
-
-  /// Curated preset backgrounds. Reuses the battleground tile art we
-  /// already ship so we don't need new assets just for this picker.
-  static const _presets = <_PresetBg>[
-    _PresetBg(
-      label: 'Forest (Morning)',
-      assetPath: 'assets/images/battleground/morningVersion.png',
-    ),
-    _PresetBg(
-      label: 'Forest (Evening)',
-      assetPath: 'assets/images/battleground/eveningVersion.png',
-    ),
-    _PresetBg(
-      label: 'Forest (Night)',
-      assetPath: 'assets/images/battleground/nightVersion.png',
-    ),
-  ];
+/// The italic-bold STEPBATTLE wordmark that lives as the second
+/// draggable overlay. Matches the welcome-carousel + app-bar
+/// treatment: uppercase, Manrope italic, wide letter-spacing.
+class _Wordmark extends StatelessWidget {
+  const _Wordmark();
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    return SafeArea(
-      top: false,
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
+    return const Text(
+      'STEPBATTLE',
+      style: TextStyle(
+        color: Colors.white,
+        fontFamily: 'Manrope',
+        fontStyle: FontStyle.italic,
+        fontWeight: FontWeight.w900,
+        fontSize: 24,
+        letterSpacing: 3,
+        shadows: [
+          Shadow(color: Color(0xCC000000), blurRadius: 10),
+        ],
+      ),
+    );
+  }
+}
+
+/// Generic pan-to-move overlay that centres its [child] on a fractional
+/// [position] within [canvas]. Emits [onMoved] on every pan update and
+/// [onSettled] when the pointer lifts (used to persist to Hive
+/// exactly once per interaction).
+///
+/// Positions are clamped to the [0, 1] range so the user can't drag
+/// an overlay past the visible area.
+class _DraggableOverlay extends StatelessWidget {
+  final Offset position;
+  final Size canvas;
+  final Widget child;
+  final ValueChanged<Offset> onMoved;
+  final VoidCallback onSettled;
+
+  const _DraggableOverlay({
+    required this.position,
+    required this.canvas,
+    required this.child,
+    required this.onMoved,
+    required this.onSettled,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final absX = position.dx * canvas.width;
+    final absY = position.dy * canvas.height;
+    return Positioned(
+      left: 0,
+      top: 0,
+      width: canvas.width,
+      height: canvas.height,
+      child: IgnorePointer(
+        ignoring: false,
+        child: Stack(
           children: [
-            Text('Background',
-                style: theme.textTheme.titleMedium
-                    ?.copyWith(fontWeight: FontWeight.w800)),
-            const SizedBox(height: 12),
-            // Gallery pick row.
-            ListTile(
-              contentPadding: EdgeInsets.zero,
-              leading: Icon(Icons.photo_library_outlined,
-                  color: AppColors.primary),
-              title: const Text('Pick from gallery'),
-              onTap: () =>
-                  Navigator.of(context).pop(const _BgChoice.gallery()),
-            ),
-            const Divider(),
-            // Presets grid.
-            Text('OR PICK A PRESET',
-                style: theme.textTheme.labelSmall?.copyWith(
-                  color: AppColors.onSurfaceVariant,
-                  letterSpacing: 1.5,
-                  fontWeight: FontWeight.w800,
-                )),
-            const SizedBox(height: 8),
-            SizedBox(
-              height: 100,
-              child: ListView.separated(
-                scrollDirection: Axis.horizontal,
-                itemCount: _presets.length,
-                separatorBuilder: (_, __) => const SizedBox(width: 10),
-                itemBuilder: (_, i) {
-                  final p = _presets[i];
-                  return GestureDetector(
-                    onTap: () => Navigator.of(context)
-                        .pop(_BgChoice.asset(p.assetPath)),
-                    child: ClipRRect(
-                      borderRadius: BorderRadius.circular(12),
-                      child: SizedBox(
-                        width: 80,
-                        height: 100,
-                        child: Image.asset(p.assetPath, fit: BoxFit.cover),
-                      ),
-                    ),
-                  );
-                },
+            Positioned(
+              left: absX,
+              top: absY,
+              child: FractionalTranslation(
+                translation: const Offset(-0.5, -0.5),
+                child: GestureDetector(
+                  onPanUpdate: (details) {
+                    final newX =
+                        ((absX + details.delta.dx) / canvas.width)
+                            .clamp(0.05, 0.95);
+                    final newY =
+                        ((absY + details.delta.dy) / canvas.height)
+                            .clamp(0.05, 0.95);
+                    onMoved(Offset(newX, newY));
+                  },
+                  onPanEnd: (_) => onSettled(),
+                  child: child,
+                ),
               ),
             ),
           ],
@@ -689,10 +450,4 @@ class _BackgroundPickerSheet extends StatelessWidget {
       ),
     );
   }
-}
-
-class _PresetBg {
-  final String label;
-  final String assetPath;
-  const _PresetBg({required this.label, required this.assetPath});
 }

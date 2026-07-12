@@ -5,6 +5,7 @@ import '../../../models/user_model.dart';
 import '../../../providers/battle_provider.dart';
 import '../../../providers/leaderboard_provider.dart';
 import '../../../widgets/avatar_circle.dart';
+import '../../../widgets/buy_xp_cta.dart';
 
 /// Profile header: large avatar, display name with edit icon, 4 stat pills.
 class UserIdentitySection extends ConsumerWidget {
@@ -44,8 +45,8 @@ class UserIdentitySection extends ConsumerWidget {
               child: AvatarCircle(
                 radius: 56,
                 imageUrl: user.avatarURL,
-                initials: user.displayName.isNotEmpty
-                    ? user.displayName[0].toUpperCase()
+                initials: user.friendlyName.isNotEmpty
+                    ? user.friendlyName[0].toUpperCase()
                     : '?',
                 borderColor: AppColors.background,
                 borderWidth: 3,
@@ -73,7 +74,7 @@ class UserIdentitySection extends ConsumerWidget {
         Row(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Text(user.displayName,
+            Text(user.friendlyName,
                 style: theme.textTheme.headlineMedium
                     ?.copyWith(fontWeight: FontWeight.w700)),
             const SizedBox(width: 8),
@@ -91,7 +92,11 @@ class UserIdentitySection extends ConsumerWidget {
           alignment: WrapAlignment.center,
           children: [
             _StatChip(label: 'Level ${user.level}', color: AppColors.primary),
-            _StatChip(label: '${user.totalXP} XP', color: AppColors.tertiary),
+            // Animated +XP CTA replaces the passive XP stat chip that
+            // used to live in this slot — shows the balance AND lets
+            // the user open the Buy XP sheet, same widget as the
+            // Home tab's AppBar centre.
+            const BuyXpCta(),
             _StatChip(
                 label: '${user.currentStreak} Day Streak',
                 color: AppColors.primary),

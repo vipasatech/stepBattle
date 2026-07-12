@@ -3,6 +3,7 @@ import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
 
 import '../../models/run_session_model.dart';
+import '../map_tile_layer.dart';
 import '_card_shared.dart';
 import 'share_card_size.dart';
 
@@ -97,11 +98,10 @@ class MapShareCard extends StatelessWidget {
                   ),
                 ),
                 children: [
-                  TileLayer(
-                    urlTemplate:
-                        'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-                    userAgentPackageName: 'com.stepbattle.stepbattle',
-                  ),
+                  // Share cards render off-screen — use the light
+                  // tile set so the exported PNG doesn't look wrong
+                  // on light-mode receivers.
+                  osmTileLayerForBrightness(Brightness.light),
                   PolylineLayer(
                     polylines: [
                       Polyline(

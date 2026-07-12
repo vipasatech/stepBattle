@@ -1,11 +1,12 @@
 ﻿import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
+
 import '../../config/colors.dart';
 import '../../models/leaderboard_entry_model.dart';
 import '../../providers/leaderboard_provider.dart';
 import '../../providers/user_provider.dart';
 import '../../sheets/location_permission_sheet.dart';
-import '../../sheets/public_profile_sheet.dart';
 import '../../sheets/set_home_sheet.dart';
 import '../../widgets/empty_state.dart';
 import '../../widgets/needs_location_card.dart';
@@ -524,20 +525,10 @@ class _LeaderboardList extends StatelessWidget {
   }
 
   void _showProfile(BuildContext context, LeaderboardEntry entry) {
-    // `useRootNavigator: true` is the critical one — without it the
-    // modal opens inside the tab's Navigator, which sits BEHIND the
-    // shell's persistent bottom nav bar, so the sheet's action
-    // buttons were being obscured. Escaping to the root Navigator
-    // makes the sheet cover the whole screen. `isScrollControlled +
-    // useSafeArea` still matter so the sheet sizes to its content
-    // and respects the system-level intrusions.
-    showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      useSafeArea: true,
-      useRootNavigator: true,
-      backgroundColor: Colors.transparent,
-      builder: (_) => PublicProfileSheet(entry: entry),
-    );
+    // Full-screen public profile page instead of the peek sheet —
+    // taps from the leaderboard now navigate to `/users/:userId`
+    // (root navigator route defined in routes.dart) so users see the
+    // same profile surface as the arena avatar taps.
+    context.push('/users/${entry.userId}');
   }
 }

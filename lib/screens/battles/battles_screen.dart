@@ -5,6 +5,7 @@ import '../../config/colors.dart';
 import '../../models/battle_model.dart';
 import '../../providers/auth_provider.dart';
 import '../../providers/battle_provider.dart';
+import '../../sheets/avatar_customizer_sheet.dart';
 import '../../sheets/new_battle_selection_sheet.dart';
 import '../../widgets/avatar_circle.dart';
 import '../../widgets/empty_state.dart';
@@ -69,7 +70,12 @@ class _BattlesScreenState extends ConsumerState<BattlesScreen> {
     );
   }
 
-  void _showNewBattleSheet(BuildContext context) {
+  Future<void> _showNewBattleSheet(BuildContext context) async {
+    // First-run avatar setup — every user who creates a battle should
+    // have their character rig on file so opponents see them as a
+    // Bitmoji-style avatar rather than initials. No-op if already set.
+    await showAvatarCustomizerIfNeeded(context, ref);
+    if (!context.mounted) return;
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
@@ -346,10 +352,20 @@ class _BattlesBody extends ConsumerWidget {
             // Completed — tap opens the post-battle Status page (drag
             // cards, swap background, see winner with star particles)
             // rather than the live arena.
+            //
+            // We show at most the 5 most-recent finishers on this tab;
+            // the chevron on the section header opens the full-history
+            // page when there are more.
             if (completed.isNotEmpty) ...[
-              _SectionHeader(title: 'Completed', count: completed.length),
+              _SectionHeader(
+                title: 'Completed',
+                count: completed.length,
+                onChevronTap: completed.length > 5
+                    ? () => context.push('/battles/completed')
+                    : null,
+              ),
               const SizedBox(height: 12),
-              ...completed.map((b) => Padding(
+              ...completed.take(5).map((b) => Padding(
                     padding: const EdgeInsets.only(bottom: 12),
                     child: BattleCard(
                       battle: b,
@@ -493,8 +509,8 @@ class _IncomingInviteCardState extends ConsumerState<_IncomingInviteCard> {
               AvatarCircle(
                 radius: 22,
                 imageUrl: inviter.avatarURL,
-                initials: inviter.displayName.isNotEmpty
-                    ? inviter.displayName[0].toUpperCase()
+                initials: inviter.friendlyName.isNotEmpty
+                    ? inviter.friendlyName[0].toUpperCase()
                     : '?',
                 borderColor: AppColors.primary,
               ),
@@ -503,7 +519,7 @@ class _IncomingInviteCardState extends ConsumerState<_IncomingInviteCard> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text('${inviter.displayName} challenged you',
+                    Text('${inviter.friendlyName} challenged you',
                         style: theme.textTheme.titleSmall
                             ?.copyWith(fontWeight: FontWeight.w700),
                         maxLines: 1,
@@ -603,6 +619,7 @@ class _DiscoverEntryTile extends ConsumerWidget {
                 code: code,
                 userId: me.userId,
                 displayName: me.displayName,
+                preferredName: me.preferredName,
                 avatarUrl: me.avatarURL,
               );
       if (context.mounted) {

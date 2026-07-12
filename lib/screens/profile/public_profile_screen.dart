@@ -113,7 +113,7 @@ class _PublicIdentity extends StatelessWidget {
               ),
               child: AvatarCircle(
                 imageUrl: user.avatarURL,
-                initials: _initials(user.displayName),
+                initials: _initials(user.friendlyName),
                 radius: 44,
               ),
             ),
@@ -121,7 +121,7 @@ class _PublicIdentity extends StatelessWidget {
         ),
         const SizedBox(height: 12),
         Text(
-          user.displayName.isEmpty ? '—' : user.displayName,
+          user.friendlyName.isEmpty ? '—' : user.friendlyName,
           style: theme.textTheme.headlineSmall?.copyWith(
             fontWeight: FontWeight.w800,
           ),
@@ -382,12 +382,12 @@ class ArenaProfilePeekSheet extends ConsumerWidget {
                     children: [
                       AvatarCircle(
                         imageUrl: user.avatarURL,
-                        initials: _initials(user.displayName),
+                        initials: _initials(user.friendlyName),
                         radius: 32,
                       ),
                       const SizedBox(height: 10),
                       Text(
-                        user.displayName.isEmpty ? '—' : user.displayName,
+                        user.friendlyName.isEmpty ? '—' : user.friendlyName,
                         style: theme.textTheme.titleMedium?.copyWith(
                           fontWeight: FontWeight.w800,
                         ),

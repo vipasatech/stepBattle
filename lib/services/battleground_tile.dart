@@ -1,50 +1,61 @@
-/// Battleground arena art selection — two orthogonal axes:
+/// Battleground arena art selection.
 ///
-///   1. [ArenaPack]      — which scenery (forest vs. city). User preference,
-///                          persisted to Hive. Forest is vertical/portrait
-///                          (1:2); city is horizontal/landscape (2:1).
-///   2. [BattlegroundTimeOfDay] — picked from the device clock at build time.
-///                          Same composition, four lighting variants.
-///
-/// Combining the two yields the concrete asset path via [ArenaPack.assetFor].
+/// The forest pack was retired — city is now the only shipped pack. The
+/// [ArenaPack] enum is kept as an extension point in case future packs
+/// (stadium, mountain, night-city, etc.) land later. Time-of-day still
+/// picks between morning/afternoon/evening/night lighting variants of
+/// the same pack from the device clock at build time.
 library;
 
 /// Which scenery the user wants in the battle arena.
 ///
-///   • forest — portrait tiles in `assets/images/battleground/`, 1024×2048.
-///     Multiple copies stack vertically because the path is designed to
-///     loop top↔bottom.
-///   • city   — landscape WebPs in `assets/images/horizontalBg/`, 2048×1024.
-///     A single tile is enough; the screen flips to landscape and pans
-///     left↔right.
+/// Portrait 1:2 tiles named `morningView.png` / `afternoonView.png` /
+/// `eveningView.png` / `nightView.png`, living in a pack-specific
+/// subfolder under `assets/images/battleground/`. Tiles stack vertically
+/// at render time; the 14% top/bottom crop in `battle_ground_screen.dart`
+/// hides the seam that the generator's empty-sidewalk edges would
+/// otherwise create.
+///
+///   • city → `assets/images/battleground/cityView/*.png`
+///
+/// [forest] is retained as an INTERNAL value — the forest tile art was
+/// retired, but `battleground_path.dart` still uses this enum value to
+/// select the vertical path routing (`_forestWaypoints`, top→bottom) that
+/// the arena's vertical scroll view depends on. Do NOT expose forest as a
+/// user-pickable pack; `assetFor` would fail. It's kept solely as a
+/// routing constant.
 enum ArenaPack {
-  forest,
-  city;
+  city,
+  forest;
 
   /// Returns the asset path for this pack + time-of-day combination.
+  /// Only defined for shipped packs (city). [forest] is a routing-only
+  /// value and calling this on it throws.
   String assetFor(BattlegroundTimeOfDay tod) {
-    switch (this) {
-      case ArenaPack.forest:
-        return 'assets/images/battleground/${tod.name}Version.png';
-      case ArenaPack.city:
-        return 'assets/images/horizontalBg/${tod.name}Version.webp';
-    }
+    final folder = switch (this) {
+      ArenaPack.city => 'cityView',
+      ArenaPack.forest =>
+        throw StateError('forest is a routing-only value; no tile asset'),
+    };
+    return 'assets/images/battleground/$folder/${tod.name}View.png';
   }
 
-  /// True when this pack is wider than tall (city). The arena screen uses
-  /// this to flip orientation and switch between vertical-stack and
-  /// horizontal-pan layouts.
-  bool get isLandscape => this == ArenaPack.city;
+  /// True when this pack is wider than tall. Currently always false —
+  /// kept as an extension point in case a future pack ships as landscape.
+  bool get isLandscape => false;
 
-  /// Display label for the in-arena chooser.
+  /// Display label for the in-arena chooser (if / when we ship one).
   String get label => switch (this) {
-        ArenaPack.forest => 'Forest',
         ArenaPack.city => 'City',
+        ArenaPack.forest => 'Forest',
       };
 
+  /// Parse the persisted preference key. Legacy `'forest'` values (from
+  /// pre-0027 builds) transparently migrate to [ArenaPack.city] on next
+  /// read — the enum value is preserved for path routing, but the user's
+  /// arena preference is city.
   static ArenaPack fromKey(String? key) => switch (key) {
-        'city' => ArenaPack.city,
-        _ => ArenaPack.forest,
+        _ => ArenaPack.city,
       };
 }
 

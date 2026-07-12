@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../config/colors.dart';
 import '../providers/user_provider.dart';
 import '../widgets/bottom_sheet_handle.dart';
+import 'streak_share_sheet.dart';
 
 /// Streak history sheet — current streak, best streak, streak bonus info.
 class StreakHistorySheet extends ConsumerWidget {
@@ -52,9 +53,25 @@ class StreakHistorySheet extends ConsumerWidget {
           ),
           const SizedBox(height: 16),
 
-          Text('Streak',
-              style: theme.textTheme.headlineMedium
-                  ?.copyWith(fontWeight: FontWeight.w700)),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Text('Streak',
+                  style: theme.textTheme.headlineMedium
+                      ?.copyWith(fontWeight: FontWeight.w700)),
+              const SizedBox(width: 8),
+              // Share the current streak as a Story-sized card.
+              IconButton(
+                icon: Icon(Icons.ios_share, color: AppColors.primary),
+                tooltip: 'Share streak',
+                onPressed: () => showStreakShareSheet(
+                  context,
+                  currentStreak: current,
+                  bestStreak: best,
+                ),
+              ),
+            ],
+          ),
           const SizedBox(height: 24),
 
           // Current streak

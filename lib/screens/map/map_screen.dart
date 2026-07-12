@@ -4,13 +4,25 @@ import 'package:flutter_map/flutter_map.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:latlong2/latlong.dart';
+import 'package:material_design_icons_flutter/material_design_icons_flutter.dart';
 import '../../config/colors.dart';
+import '../../models/leaderboard_entry_model.dart';
 import '../../models/user_model.dart';
+import '../../providers/leaderboard_provider.dart';
 import '../../providers/user_provider.dart';
 import '../../services/geo_boundary_loader.dart';
+import '../../sheets/avatar_customizer_sheet.dart';
+import '../../widgets/fluttermoji_avatar.dart';
+import '../../widgets/map_tile_layer.dart';
 
-/// The four canonical zoom tiers we snap between.
-enum MapTier { world, country, state, district }
+/// The canonical zoom tiers we snap between.
+///
+/// `city` was added between `state` and `district` for the map screen's
+/// filter row (District / City / State / Country). We don't have city
+/// polygon data yet, so the City tier renders as a zoomed-in view over
+/// the district polygons — it's mostly a "closer look" preset until
+/// city boundaries land.
+enum MapTier { world, country, state, city, district }
 
 /// Named extension so tests can import + exercise the tier transition logic
 /// without spinning up the [MapScreen] widget.
@@ -20,18 +32,21 @@ extension MapTierX on MapTier {
         MapTier.world => 2.0,
         MapTier.country => 4.5,
         MapTier.state => 6.5,
-        MapTier.district => 9.5,
+        MapTier.city => 8.5,
+        MapTier.district => 10.5,
       };
 
   String get label => switch (this) {
         MapTier.world => 'WORLD',
         MapTier.country => 'COUNTRY',
         MapTier.state => 'STATE',
+        MapTier.city => 'CITY',
         MapTier.district => 'DISTRICT',
       };
 
   MapTier? get oneOut => switch (this) {
-        MapTier.district => MapTier.state,
+        MapTier.district => MapTier.city,
+        MapTier.city => MapTier.state,
         MapTier.state => MapTier.country,
         MapTier.country => MapTier.world,
         MapTier.world => null,
@@ -40,7 +55,8 @@ extension MapTierX on MapTier {
   MapTier? get oneIn => switch (this) {
         MapTier.world => MapTier.country,
         MapTier.country => MapTier.state,
-        MapTier.state => MapTier.district,
+        MapTier.state => MapTier.city,
+        MapTier.city => MapTier.district,
         MapTier.district => null,
       };
 }
@@ -83,7 +99,17 @@ class _MapScreenState extends ConsumerState<MapScreen>
   void initState() {
     super.initState();
     _map = MapController();
-    WidgetsBinding.instance.addPostFrameCallback((_) => _bootstrap());
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      // Prompt the user to design their character avatar the first
+      // time they open the Map. Cancellation is fine — the sheet
+      // pops up again on the next Map / Create Battle entry until
+      // they save a spec.
+      if (mounted) {
+        await showAvatarCustomizerIfNeeded(context, ref);
+      }
+      if (!mounted) return;
+      _bootstrap();
+    });
   }
 
   @override
@@ -256,44 +282,28 @@ class _MapScreenState extends ConsumerState<MapScreen>
   // Tier transitions
   // ---------------------------------------------------------------------------
 
-  Future<void> _zoomOutOneTier() async {
-    final next = _tier.oneOut;
-    if (next == null) return;
+  /// Jump straight to [target] tier. Used by the filter-chip row so a
+  /// user tapping "Country" from "District" doesn't have to step
+  /// through State + Country in sequence.
+  Future<void> _jumpToTier(MapTier target) async {
+    if (target == _tier) return;
     final user = ref.read(userProfileProvider).valueOrNull;
     if (user == null) return;
-
-    final dest = switch (next) {
+    final dest = switch (target) {
       MapTier.world => const LatLng(20, 0),
       MapTier.country => _countryCenter(user.countryCode) ??
           _userHomeCenter(user),
       MapTier.state =>
         _stateCenter(user) ?? _userHomeCenter(user),
+      MapTier.city => _userHomeCenter(user),
       MapTier.district => _userHomeCenter(user),
     };
-
-    await _animateCameraTo(dest, next.targetZoom,
-        const Duration(milliseconds: 700));
-    if (mounted) setState(() => _tier = next);
-  }
-
-  Future<void> _zoomInOneTier() async {
-    final next = _tier.oneIn;
-    if (next == null) return;
-    final user = ref.read(userProfileProvider).valueOrNull;
-    if (user == null) return;
-
-    final dest = switch (next) {
-      MapTier.country => _countryCenter(user.countryCode) ??
-          _userHomeCenter(user),
-      MapTier.state =>
-        _stateCenter(user) ?? _userHomeCenter(user),
-      MapTier.district => _userHomeCenter(user),
-      MapTier.world => const LatLng(20, 0),
-    };
-
-    await _animateCameraTo(dest, next.targetZoom,
-        const Duration(milliseconds: 700));
-    if (mounted) setState(() => _tier = next);
+    await _animateCameraTo(
+      dest,
+      target.targetZoom,
+      const Duration(milliseconds: 700),
+    );
+    if (mounted) setState(() => _tier = target);
   }
 
   /// User pinch-zoomed/scrolled — snap to nearest tier when their gesture
@@ -332,7 +342,6 @@ class _MapScreenState extends ConsumerState<MapScreen>
   @override
   Widget build(BuildContext context) {
     final user = ref.watch(userProfileProvider).valueOrNull;
-    final theme = Theme.of(context);
 
     return Scaffold(
       backgroundColor: AppColors.background,
@@ -356,7 +365,16 @@ class _MapScreenState extends ConsumerState<MapScreen>
               onMapEvent: _onMapEvent,
             ),
             children: [
-              // No tile layer — pure polygon canvas on dark background.
+              // Raster basemap — CartoDB dark_all in dark mode, OSM
+              // default in light. Same helper used by the Track live
+              // + session detail maps so all three share tile visuals.
+              osmTileLayer(context),
+
+              // Polygon overlays layered ON TOP of the tiles at very
+              // low opacity so the road / label detail from the
+              // basemap still reads through. The current-scope home
+              // region uses a stronger tint + solid border so it
+              // pops within its parent.
               if (_tier == MapTier.world && _worldCountries.isNotEmpty)
                 PolygonLayer(
                   polygons: [
@@ -365,29 +383,12 @@ class _MapScreenState extends ConsumerState<MapScreen>
                         Polygon(
                           points: ring,
                           color: _isHomeCountry(user, c)
-                              ? AppColors.primary.withValues(alpha: 0.35)
-                              : AppColors.surfaceContainerHigh
-                                  .withValues(alpha: 0.7),
+                              ? AppColors.primary.withValues(alpha: 0.30)
+                              : Colors.transparent,
                           borderColor: AppColors.outlineVariant
-                              .withValues(alpha: 0.4),
+                              .withValues(alpha: 0.35),
                           borderStrokeWidth: 0.5,
                         ),
-                  ],
-                ),
-              if (_tier != MapTier.world && _worldCountries.isNotEmpty)
-                PolygonLayer(
-                  polygons: [
-                    for (final c in _worldCountries)
-                      if (!_isHomeCountry(user, c))
-                        for (final ring in c.polygons)
-                          Polygon(
-                            points: ring,
-                            color: AppColors.surfaceContainerHigh
-                                .withValues(alpha: 0.4),
-                            borderColor: AppColors.outlineVariant
-                                .withValues(alpha: 0.15),
-                            borderStrokeWidth: 0.3,
-                          ),
                   ],
                 ),
               if (_tier != MapTier.world && _countryStates.isNotEmpty)
@@ -397,19 +398,26 @@ class _MapScreenState extends ConsumerState<MapScreen>
                       for (final ring in s.polygons)
                         Polygon(
                           points: ring,
-                          color: _isHomeState(user, s)
-                              ? AppColors.primary.withValues(alpha: 0.25)
-                              : AppColors.primary.withValues(alpha: 0.06),
-                          borderColor: AppColors.primary.withValues(alpha: 0.4),
-                          borderStrokeWidth: 0.6,
+                          color: _isHomeState(user, s) &&
+                                  _tier == MapTier.state
+                              ? AppColors.primary.withValues(alpha: 0.22)
+                              : Colors.transparent,
+                          borderColor: AppColors.primary.withValues(
+                              alpha: _tier == MapTier.state ? 0.7 : 0.35),
+                          borderStrokeWidth:
+                              _tier == MapTier.state ? 1.0 : 0.5,
                         ),
                   ],
                 ),
 
-              // District polygons only visible at state/district zoom.
-              // Renders on top of the state polygons so the home district
-              // stands out within the highlighted state outline.
-              if ((_tier == MapTier.state || _tier == MapTier.district) &&
+              // District polygons stay visible at state / city /
+              // district zoom. `city` isn't a real polygon tier — we
+              // use the same district outlines but render them a
+              // touch thicker so the region under the camera stays
+              // legible over the basemap.
+              if ((_tier == MapTier.state ||
+                      _tier == MapTier.city ||
+                      _tier == MapTier.district) &&
                   _stateDistricts.isNotEmpty)
                 PolygonLayer(
                   polygons: [
@@ -417,17 +425,30 @@ class _MapScreenState extends ConsumerState<MapScreen>
                       for (final ring in d.polygons)
                         Polygon(
                           points: ring,
-                          color: _isHomeDistrict(user, d)
-                              ? AppColors.primary.withValues(alpha: 0.5)
-                              : AppColors.primary.withValues(alpha: 0.12),
+                          color: _isHomeDistrict(user, d) &&
+                                  (_tier == MapTier.district ||
+                                      _tier == MapTier.city)
+                              ? AppColors.primary.withValues(alpha: 0.35)
+                              : Colors.transparent,
                           borderColor: _isHomeDistrict(user, d)
                               ? AppColors.primary
-                              : AppColors.primary.withValues(alpha: 0.6),
+                              : AppColors.primary.withValues(alpha: 0.5),
                           borderStrokeWidth:
-                              _isHomeDistrict(user, d) ? 1.2 : 0.5,
+                              _isHomeDistrict(user, d) ? 1.6 : 0.6,
                         ),
                   ],
                 ),
+
+              // Leader marker for the current scope. Renders a small
+              // fan of avatars — leader at the top with a crown +
+              // ambient glow, top followers arranged in a row below.
+              // Positioned at the region centre (home district / state
+              // / country centre depending on the tier).
+              _LeaderMarkerLayer(
+                center: _regionCenterForCurrentTier(user),
+                tier: _tier,
+              ),
+
               if (user?.hasHome ?? false)
                 MarkerLayer(
                   markers: [
@@ -471,59 +492,17 @@ class _MapScreenState extends ConsumerState<MapScreen>
             ),
           ),
 
-          // Bottom chrome — zoom-step buttons + scope leaderboard preview
+          // Bottom chrome — 4-way tier filter (District / City / State
+          // / Country). Tapping a chip animates to that tier's zoom
+          // and refocuses on the matching region centre.
           SafeArea(
             child: Align(
               alignment: Alignment.bottomCenter,
               child: Padding(
                 padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 14, vertical: 10),
-                      decoration: BoxDecoration(
-                        color: Colors.black.withValues(alpha: 0.55),
-                        borderRadius: BorderRadius.circular(20),
-                        border: Border.all(
-                          color: AppColors.onSurface.withValues(alpha: 0.08),
-                        ),
-                      ),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          _ZoomStepButton(
-                            icon: Icons.zoom_out,
-                            enabled: _tier.oneOut != null,
-                            onTap: _zoomOutOneTier,
-                          ),
-                          const SizedBox(width: 12),
-                          Container(
-                            padding: const EdgeInsets.symmetric(
-                                horizontal: 12, vertical: 6),
-                            decoration: BoxDecoration(
-                              color: AppColors.primary.withValues(alpha: 0.15),
-                              borderRadius: BorderRadius.circular(8),
-                            ),
-                            child: Text(
-                              _scopeLabel(user),
-                              style: theme.textTheme.labelMedium?.copyWith(
-                                color: AppColors.primary,
-                                fontWeight: FontWeight.w800,
-                              ),
-                            ),
-                          ),
-                          const SizedBox(width: 12),
-                          _ZoomStepButton(
-                            icon: Icons.zoom_in,
-                            enabled: _tier.oneIn != null,
-                            onTap: _zoomInOneTier,
-                          ),
-                        ],
-                      ),
-                    ),
-                  ],
+                child: _TierFilterBar(
+                  current: _tier,
+                  onSelect: _jumpToTier,
                 ),
               ),
             ),
@@ -540,9 +519,29 @@ class _MapScreenState extends ConsumerState<MapScreen>
       MapTier.country => (user.countryName ?? user.countryCode ?? 'COUNTRY')
           .toUpperCase(),
       MapTier.state => (user.stateName ?? 'STATE').toUpperCase(),
+      MapTier.city =>
+        (user.districtName ?? user.stateName ?? 'CITY').toUpperCase(),
       MapTier.district =>
         (user.districtName ?? 'DISTRICT').toUpperCase(),
     };
+  }
+
+  /// The lat/lng we point the leader marker at for the current tier.
+  /// For District / City the leader clusters over the user's home
+  /// district; for State / Country over the region centre.
+  LatLng? _regionCenterForCurrentTier(UserModel? user) {
+    if (user == null) return null;
+    switch (_tier) {
+      case MapTier.world:
+        return null; // No single-region leader at world zoom.
+      case MapTier.country:
+        return _countryCenter(user.countryCode) ?? _userHomeCenter(user);
+      case MapTier.state:
+        return _stateCenter(user) ?? _userHomeCenter(user);
+      case MapTier.city:
+      case MapTier.district:
+        return _userHomeCenter(user);
+    }
   }
 
   bool _isHomeCountry(UserModel? user, GeoRegion region) {
@@ -664,17 +663,63 @@ class _TierBadge extends StatelessWidget {
         MapTier.world => Icons.public,
         MapTier.country => Icons.flag,
         MapTier.state => Icons.map,
-        MapTier.district => Icons.location_city,
+        MapTier.city => Icons.location_city,
+        MapTier.district => Icons.pin_drop,
       };
 }
 
-class _ZoomStepButton extends StatelessWidget {
-  final IconData icon;
-  final bool enabled;
+/// Bottom-anchored 4-way filter: District / City / State / Country.
+/// The selected chip is filled with brand-primary; the rest are
+/// outlined ghost-chips over the map. Sits inside a glass pill so it
+/// stays legible over both light-tile and dark-tile basemaps.
+class _TierFilterBar extends StatelessWidget {
+  final MapTier current;
+  final ValueChanged<MapTier> onSelect;
+  const _TierFilterBar({required this.current, required this.onSelect});
+
+  static const _tiers = <MapTier>[
+    MapTier.district,
+    MapTier.city,
+    MapTier.state,
+    MapTier.country,
+  ];
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(6),
+      decoration: BoxDecoration(
+        color: Colors.black.withValues(alpha: 0.6),
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(
+          color: AppColors.onSurface.withValues(alpha: 0.10),
+        ),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          for (final t in _tiers)
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 3),
+              child: _TierChip(
+                label: t.label,
+                selected: t == current,
+                onTap: () => onSelect(t),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+class _TierChip extends StatelessWidget {
+  final String label;
+  final bool selected;
   final VoidCallback onTap;
-  const _ZoomStepButton({
-    required this.icon,
-    required this.enabled,
+  const _TierChip({
+    required this.label,
+    required this.selected,
     required this.onTap,
   });
 
@@ -683,24 +728,204 @@ class _ZoomStepButton extends StatelessWidget {
     return Material(
       color: Colors.transparent,
       child: InkWell(
-        onTap: enabled ? onTap : null,
-        borderRadius: BorderRadius.circular(18),
-        child: Container(
-          width: 36,
-          height: 36,
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(999),
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 180),
+          padding:
+              const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
           decoration: BoxDecoration(
-            color: enabled
-                ? AppColors.primary.withValues(alpha: 0.15)
-                : AppColors.onSurface.withValues(alpha: 0.04),
-            shape: BoxShape.circle,
-          ),
-          child: Icon(
-            icon,
-            size: 18,
-            color: enabled
+            color: selected
                 ? AppColors.primary
-                : AppColors.onSurfaceVariant.withValues(alpha: 0.4),
+                : AppColors.primary.withValues(alpha: 0.10),
+            borderRadius: BorderRadius.circular(999),
           ),
+          child: Text(
+            label,
+            style: TextStyle(
+              color: selected ? Colors.white : AppColors.primary,
+              fontFamily: 'Manrope',
+              fontWeight: FontWeight.w800,
+              fontSize: 11,
+              letterSpacing: 0.6,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Renders the top-N leaderboard entries for the current scope as a
+/// cluster on the map:
+///
+///   • Leader (rank 1) — bigger 62 dp avatar, brand-primary halo,
+///     crown icon perched on top. Anchored just above the region
+///     centre.
+///   • Followers (ranks 2–5) — 34 dp avatars in a horizontal row
+///     under the leader, no crown.
+///
+/// The whole cluster lives inside a single `Marker` so the fan doesn't
+/// spread apart when the user zooms — everything scales with the
+/// avatar dp not the map's coordinate space.
+class _LeaderMarkerLayer extends ConsumerWidget {
+  final LatLng? center;
+  final MapTier tier;
+  const _LeaderMarkerLayer({required this.center, required this.tier});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    // World tier — no meaningful single-scope leader to show.
+    if (center == null || tier == MapTier.world) {
+      return const SizedBox.shrink();
+    }
+
+    // Which leaderboard feeds this tier? City reuses the district
+    // list because we don't have a distinct city ranking yet.
+    final AsyncValue<List<LeaderboardEntry>> board = switch (tier) {
+      MapTier.country => ref.watch(countryLeaderboardProvider),
+      MapTier.state => ref.watch(stateLeaderboardProvider),
+      MapTier.city => ref.watch(districtLeaderboardProvider),
+      MapTier.district => ref.watch(districtLeaderboardProvider),
+      MapTier.world => const AsyncValue.data(<LeaderboardEntry>[]),
+    };
+
+    final entries = board.valueOrNull ?? const <LeaderboardEntry>[];
+    if (entries.isEmpty) return const SizedBox.shrink();
+
+    final leader = entries.first;
+    final followers = entries.length > 1
+        ? entries.sublist(1, entries.length.clamp(0, 5))
+        : const <LeaderboardEntry>[];
+
+    return MarkerLayer(
+      markers: [
+        Marker(
+          point: center!,
+          width: 260,
+          height: 160,
+          alignment: Alignment.center,
+          child: _LeaderCluster(leader: leader, followers: followers),
+        ),
+      ],
+    );
+  }
+}
+
+class _LeaderCluster extends StatelessWidget {
+  final LeaderboardEntry leader;
+  final List<LeaderboardEntry> followers;
+  const _LeaderCluster({required this.leader, required this.followers});
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        // ---- Leader --------------------------------------------
+        Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              MdiIcons.crown,
+              color: AppColors.amber,
+              size: 26,
+              shadows: [
+                Shadow(
+                  color: AppColors.amber.withValues(alpha: 0.6),
+                  blurRadius: 12,
+                ),
+              ],
+            ),
+            const SizedBox(height: 2),
+            Container(
+              padding: const EdgeInsets.all(3),
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                boxShadow: [
+                  BoxShadow(
+                    color: AppColors.primary.withValues(alpha: 0.65),
+                    blurRadius: 20,
+                    spreadRadius: 2,
+                  ),
+                ],
+              ),
+              child: FluttermojiAvatar(
+                config: leader.avatarConfig,
+                imageUrl: leader.avatarURL,
+                initials: _initials(leader.friendlyName),
+                radius: 28,
+                borderColor: Colors.white,
+                borderWidth: 2,
+              ),
+            ),
+            const SizedBox(height: 4),
+            _NamePill(name: leader.friendlyName, leader: true),
+          ],
+        ),
+        if (followers.isNotEmpty) ...[
+          const SizedBox(height: 6),
+          Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              for (final f in followers)
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 3),
+                  child: FluttermojiAvatar(
+                    config: f.avatarConfig,
+                    imageUrl: f.avatarURL,
+                    initials: _initials(f.friendlyName),
+                    radius: 15,
+                    borderColor: Colors.white.withValues(alpha: 0.85),
+                    borderWidth: 1.5,
+                  ),
+                ),
+            ],
+          ),
+        ],
+      ],
+    );
+  }
+
+  static String _initials(String name) {
+    if (name.trim().isEmpty) return '?';
+    final parts = name.trim().split(RegExp(r'\s+'));
+    if (parts.length >= 2) {
+      return '${parts[0][0]}${parts[1][0]}'.toUpperCase();
+    }
+    return name[0].toUpperCase();
+  }
+}
+
+/// Small dark-glass name pill sitting under an avatar. `leader: true`
+/// gives it a brand-primary text colour for the top-ranked user.
+class _NamePill extends StatelessWidget {
+  final String name;
+  final bool leader;
+  const _NamePill({required this.name, required this.leader});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      constraints: const BoxConstraints(maxWidth: 130),
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+      decoration: BoxDecoration(
+        color: Colors.black.withValues(alpha: 0.7),
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(
+          color: AppColors.onSurface.withValues(alpha: 0.12),
+        ),
+      ),
+      child: Text(
+        name,
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+        textAlign: TextAlign.center,
+        style: TextStyle(
+          color: leader ? AppColors.primary : Colors.white,
+          fontFamily: 'Manrope',
+          fontSize: 11,
+          fontWeight: FontWeight.w800,
         ),
       ),
     );

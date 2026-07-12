@@ -279,8 +279,8 @@ class _MemberRow extends StatelessWidget {
               AvatarCircle(
                 radius: 22,
                 imageUrl: member.avatarURL,
-                initials: member.displayName.isNotEmpty
-                    ? member.displayName[0].toUpperCase()
+                initials: member.friendlyName.isNotEmpty
+                    ? member.friendlyName[0].toUpperCase()
                     : '?',
                 borderColor: member.isCaptain
                     ? AppColors.primary
@@ -311,7 +311,7 @@ class _MemberRow extends StatelessWidget {
               children: [
                 Row(
                   children: [
-                    Text(member.displayName,
+                    Text(member.friendlyName,
                         style: theme.textTheme.titleSmall
                             ?.copyWith(fontWeight: FontWeight.w600)),
                     const SizedBox(width: 8),

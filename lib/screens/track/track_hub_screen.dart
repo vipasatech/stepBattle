@@ -209,13 +209,6 @@ class _TrackHubScreenState extends ConsumerState<TrackHubScreen> {
           ),
 
           const SizedBox(height: 28),
-          Text('RECENT SESSIONS',
-              style: theme.textTheme.labelSmall?.copyWith(
-                color: AppColors.onSurfaceVariant,
-                letterSpacing: 2,
-              )),
-          const SizedBox(height: 10),
-
           historyAsync.when(
             loading: () => const Padding(
               padding: EdgeInsets.symmetric(vertical: 24),
@@ -228,24 +221,81 @@ class _TrackHubScreenState extends ConsumerState<TrackHubScreen> {
             ),
             data: (sessions) {
               if (sessions.isEmpty) {
-                return const EmptyState(
-                  icon: Icons.directions_run,
-                  title: 'No runs yet',
-                  subtitle: 'Tap "Start run" above to record your first one.',
+                return Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    _RecentSessionsHeader(
+                      onSeeAll: null,
+                    ),
+                    const SizedBox(height: 10),
+                    const EmptyState(
+                      icon: Icons.directions_run,
+                      title: 'No runs yet',
+                      subtitle:
+                          'Tap "Start run" above to record your first one.',
+                    ),
+                  ],
                 );
               }
+              // Cap the hub at the 5 most-recent sessions; chevron on
+              // the header opens the full-history page when there's
+              // more.
+              final visible = sessions.take(5).toList();
               return Column(
-                children: sessions
-                    .map((s) => Padding(
-                          padding: const EdgeInsets.only(bottom: 8),
-                          child: _SessionTile(session: s),
-                        ))
-                    .toList(),
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  _RecentSessionsHeader(
+                    onSeeAll: sessions.length > 5
+                        ? () => context.push('/track/history')
+                        : null,
+                  ),
+                  const SizedBox(height: 10),
+                  ...visible.map((s) => Padding(
+                        padding: const EdgeInsets.only(bottom: 8),
+                        child: _SessionTile(session: s),
+                      )),
+                ],
               );
             },
           ),
         ],
       ),
+    );
+  }
+}
+
+/// Small-caps section header + optional right-arrow chevron for
+/// "RECENT SESSIONS". Passing a non-null [onSeeAll] renders the
+/// chevron in brand-violet and wires the tap; passing null hides it.
+class _RecentSessionsHeader extends StatelessWidget {
+  final VoidCallback? onSeeAll;
+  const _RecentSessionsHeader({required this.onSeeAll});
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Row(
+      children: [
+        Expanded(
+          child: Text(
+            'RECENT SESSIONS',
+            style: theme.textTheme.labelSmall?.copyWith(
+              color: AppColors.onSurfaceVariant,
+              letterSpacing: 2,
+            ),
+          ),
+        ),
+        if (onSeeAll != null)
+          GestureDetector(
+            onTap: onSeeAll,
+            behavior: HitTestBehavior.opaque,
+            child: Icon(
+              Icons.chevron_right,
+              size: 22,
+              color: AppColors.primary,
+            ),
+          ),
+      ],
     );
   }
 }

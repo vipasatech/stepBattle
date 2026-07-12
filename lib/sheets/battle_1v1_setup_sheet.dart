@@ -146,12 +146,14 @@ class _Battle1v1SetupSheetState extends ConsumerState<Battle1v1SetupSheet> {
         BattleParticipant(
           userId: me.userId,
           displayName: me.displayName.isEmpty ? 'You' : me.displayName,
+          preferredName: me.preferredName,
           avatarURL: me.avatarURL,
         ),
         if (_selectedOpponent != null)
           BattleParticipant(
             userId: _selectedOpponent!.userId,
             displayName: _selectedOpponent!.displayName,
+            preferredName: _selectedOpponent!.preferredName,
             avatarURL: _selectedOpponent!.avatarURL,
           ),
       ];
@@ -272,12 +274,12 @@ class _Battle1v1SetupSheetState extends ConsumerState<Battle1v1SetupSheet> {
                           child: _PlayerCard(
                             initials: _selectedOpponent == null
                                 ? null
-                                : (_selectedOpponent!.displayName.isNotEmpty
-                                    ? _selectedOpponent!.displayName[0]
+                                : (_selectedOpponent!.friendlyName.isNotEmpty
+                                    ? _selectedOpponent!.friendlyName[0]
                                         .toUpperCase()
                                     : '?'),
                             imageUrl: _selectedOpponent?.avatarURL,
-                            name: _selectedOpponent?.displayName ??
+                            name: _selectedOpponent?.friendlyName ??
                                 '+ Select Opponent',
                             isPlaceholder: _selectedOpponent == null,
                           ),

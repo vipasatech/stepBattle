@@ -51,6 +51,13 @@ class UserModel {
   final String userId;
   final String userCode; // e.g. "#U4X92" — permanent public ID
   final String displayName;
+
+  /// Optional nickname the user prefers to be addressed by. When set,
+  /// [friendlyName] returns this; otherwise it falls back to
+  /// [displayName]. Bounded 1..40 chars server-side (see migration
+  /// 0024 for the check constraint).
+  final String? preferredName;
+
   final String? avatarURL;
   final String email;
   final String? phone;
@@ -123,11 +130,34 @@ class UserModel {
   /// Self-reported fitness level. See [FitnessLevel] for wire values.
   final FitnessLevel? fitnessLevel;
 
+  /// Self-reported height in centimetres. Feeds the BMI multiplier in
+  /// `GoalFormula`. Null = unanswered → formula treats BMI as neutral.
+  final int? heightCm;
+
+  /// Self-reported weight in kilograms. Feeds the BMI multiplier in
+  /// `GoalFormula`. Null = unanswered → formula treats BMI as neutral.
+  final double? weightKg;
+
   /// User's selected battle-ground runner avatar — one of the 12 bird's-
   /// eye-view PNGs in `assets/images/avatars/`. Distinct from
   /// [avatarURL], which is the profile photo. See migration 0019 and
   /// [Avatar.byId]. Defaults to 'avatar_01' for legacy rows.
   final String battleAvatarId;
+
+  /// User's chosen 3D character id — `'women'` or `'men'`. Nullable when
+  /// the user has never opened the 3D picker; in that case the client
+  /// falls back to `Character3D.defaultForGender(gender)`. Loaded by
+  /// `flutter_3d_controller` from `assets/images/3dAvatars/<id>/runner.glb`.
+  /// See migration 0027 and `lib/models/character_3d.dart`.
+  final String? character3dId;
+
+  /// Bitmoji-style character avatar spec — a JSON blob produced by the
+  /// `fluttermoji` package's customizer (face / hair / eyes / mouth /
+  /// outfit / accessory ids). Nullable — a user without one still
+  /// renders via [avatarURL] or the initials fallback. Set from the
+  /// full-screen avatar-customizer sheet triggered on Create Battle
+  /// and Map entry (migration 0026).
+  final Map<String, dynamic>? avatarConfig;
 
   // ── Streak recovery state (migration 0016) ────────────────────────────────
   /// Date of the missed day that triggered recovery mode. Null when not in
@@ -149,6 +179,7 @@ class UserModel {
     required this.userId,
     required this.userCode,
     required this.displayName,
+    this.preferredName,
     this.avatarURL,
     required this.email,
     this.phone,
@@ -178,11 +209,27 @@ class UserModel {
     this.dateOfBirth,
     this.gender,
     this.fitnessLevel,
+    this.heightCm,
+    this.weightKg,
     this.battleAvatarId = 'avatar_01',
+    this.character3dId,
+    this.avatarConfig,
     this.streakRecoveryStartedAt,
     this.streakUsedRecoveryInCurrentRun = false,
     this.lastStreakMilestoneAwarded = 0,
   });
+
+  /// Name to render in friendly UI surfaces (leaderboard rows,
+  /// share cards, greetings, etc.). Prefers [preferredName] when the
+  /// user has answered the "what do you want to be called" question;
+  /// otherwise falls back to the full [displayName]. Empty / whitespace
+  /// preferred names are ignored so a stray blank never eats the
+  /// display name.
+  String get friendlyName {
+    final trimmed = preferredName?.trim();
+    if (trimmed != null && trimmed.isNotEmpty) return trimmed;
+    return displayName;
+  }
 
   /// Whether the user has set a home district yet.
   bool get hasHome =>
@@ -241,6 +288,7 @@ class UserModel {
       userId: data['id'] as String? ?? '',
       userCode: data['user_code'] as String? ?? '',
       displayName: data['display_name'] as String? ?? '',
+      preferredName: data['preferred_name'] as String?,
       avatarURL: data['avatar_url'] as String?,
       email: data['email'] as String? ?? '',
       phone: data['phone'] as String?,
@@ -272,8 +320,14 @@ class UserModel {
       dateOfBirth: parseTs(data['date_of_birth']),
       gender: Gender.fromWire(data['gender'] as String?),
       fitnessLevel: FitnessLevel.fromWire(data['fitness_level'] as String?),
+      heightCm: (data['height_cm'] as num?)?.toInt(),
+      weightKg: (data['weight_kg'] as num?)?.toDouble(),
       battleAvatarId:
           (data['battle_avatar_id'] as String?) ?? 'avatar_01',
+      character3dId: data['character_3d_id'] as String?,
+      // JSONB — Supabase returns as Map<String, dynamic> already; the
+      // cast keeps the value type honest.
+      avatarConfig: (data['avatar_config'] as Map?)?.cast<String, dynamic>(),
       streakRecoveryStartedAt: parseTs(data['streak_recovery_started_at']),
       streakUsedRecoveryInCurrentRun:
           data['streak_used_recovery_in_current_run'] as bool? ?? false,
@@ -291,6 +345,7 @@ class UserModel {
       'id': userId,
       'user_code': userCode,
       'display_name': displayName,
+      'preferred_name': preferredName,
       'avatar_url': avatarURL,
       'email': email,
       // phone: no column on profiles yet; UserModel.phone stays null
@@ -321,7 +376,11 @@ class UserModel {
       'date_of_birth': iso(dateOfBirth)?.split('T').first,
       'gender': gender?.wire,
       'fitness_level': fitnessLevel?.wire,
+      'height_cm': heightCm,
+      'weight_kg': weightKg,
       'battle_avatar_id': battleAvatarId,
+      'character_3d_id': character3dId,
+      'avatar_config': avatarConfig,
       'streak_recovery_started_at':
           iso(streakRecoveryStartedAt)?.split('T').first,
       'streak_used_recovery_in_current_run': streakUsedRecoveryInCurrentRun,
@@ -335,6 +394,7 @@ class UserModel {
       userId: doc.id,
       userCode: data['userCode'] as String? ?? '',
       displayName: data['displayName'] as String? ?? '',
+      preferredName: data['preferredName'] as String?,
       avatarURL: data['avatarURL'] as String?,
       email: data['email'] as String? ?? '',
       phone: data['phone'] as String?,
@@ -369,6 +429,7 @@ class UserModel {
     return {
       'userCode': userCode,
       'displayName': displayName,
+      'preferredName': preferredName,
       'avatarURL': avatarURL,
       'email': email,
       'phone': phone,
@@ -401,6 +462,7 @@ class UserModel {
 
   UserModel copyWith({
     String? displayName,
+    String? preferredName,
     String? avatarURL,
     String? phone,
     int? level,
@@ -428,7 +490,11 @@ class UserModel {
     DateTime? dateOfBirth,
     Gender? gender,
     FitnessLevel? fitnessLevel,
+    int? heightCm,
+    double? weightKg,
     String? battleAvatarId,
+    String? character3dId,
+    Map<String, dynamic>? avatarConfig,
     DateTime? streakRecoveryStartedAt,
     bool? streakUsedRecoveryInCurrentRun,
     int? lastStreakMilestoneAwarded,
@@ -438,6 +504,7 @@ class UserModel {
       userId: userId,
       userCode: userCode,
       displayName: displayName ?? this.displayName,
+      preferredName: preferredName ?? this.preferredName,
       avatarURL: avatarURL ?? this.avatarURL,
       email: email,
       phone: phone ?? this.phone,
@@ -468,7 +535,11 @@ class UserModel {
       dateOfBirth: dateOfBirth ?? this.dateOfBirth,
       gender: gender ?? this.gender,
       fitnessLevel: fitnessLevel ?? this.fitnessLevel,
+      heightCm: heightCm ?? this.heightCm,
+      weightKg: weightKg ?? this.weightKg,
       battleAvatarId: battleAvatarId ?? this.battleAvatarId,
+      character3dId: character3dId ?? this.character3dId,
+      avatarConfig: avatarConfig ?? this.avatarConfig,
       // clearStreakRecovery wins over an explicit pass — used by the
       // streak service when recovery is completed or expired.
       streakRecoveryStartedAt: clearStreakRecovery

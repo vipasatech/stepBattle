@@ -101,32 +101,65 @@ class SupabaseAuthService {
         'Apple sign-in is not configured for Supabase yet.');
   }
 
-  Future<AuthResponse> signInWithEmail(String email, String password) async {
-    AppLogger.auth.i('signInWithEmail:start', fields: {'email': email});
+  // Password-based email signIn/signUp were removed when we moved to
+  // fully passwordless (OTP) auth. See `sendEmailOtp` +
+  // `verifyEmailOtp` below for the current path. Existing accounts
+  // that were created with a password still work through the OTP
+  // flow — Supabase accepts an OTP for any email-registered user.
+
+  // ---------------------------------------------------------------------------
+  // Passwordless (OTP) email auth
+  //
+  // Strava-style login/signup: user types email → Supabase emails a
+  // 6-digit code → user enters code → session created. Same code path
+  // handles both first-time signup AND repeat login — Supabase's
+  // `signInWithOtp` will create the auth user if they don't exist, or
+  // just re-sign an existing one. The client-side flow uses one screen
+  // for each phase (email input + code entry).
+  // ---------------------------------------------------------------------------
+
+  /// Send a 6-digit sign-in OTP to [email]. Works for both signup and
+  /// login — no branch on our side. Returns silently on success.
+  Future<void> sendEmailOtp(String email) async {
+    AppLogger.auth.i('sendEmailOtp:start', fields: {'email': email});
     try {
-      final res = await _supabase.auth
-          .signInWithPassword(email: email, password: password);
-      AppLogger.auth.i('signInWithEmail:done', fields: {'uid': res.user?.id});
-      return res;
+      await _supabase.auth.signInWithOtp(email: email);
+      AppLogger.auth.i('sendEmailOtp:done', fields: {'email': email});
     } catch (e, s) {
-      AppLogger.auth.e('signInWithEmail:failed',
+      AppLogger.auth.e('sendEmailOtp:failed',
           fields: {'email': email}, error: e, stack: s);
       rethrow;
     }
   }
 
-  Future<AuthResponse> signUpWithEmail(String email, String password) async {
-    AppLogger.auth.i('signUpWithEmail:start', fields: {'email': email});
+  /// Verify the OTP from [sendEmailOtp]. On success the returned
+  /// [AuthResponse] carries an active session and the redirect gate
+  /// routes to /onboarding (fresh signup) or /home (returning user).
+  Future<AuthResponse> verifyEmailOtp({
+    required String email,
+    required String otp,
+  }) async {
+    AppLogger.auth.i('verifyEmailOtp:start', fields: {'email': email});
     try {
-      final res = await _supabase.auth.signUp(email: email, password: password);
-      AppLogger.auth.i('signUpWithEmail:done', fields: {'uid': res.user?.id});
+      final res = await _supabase.auth.verifyOTP(
+        email: email,
+        token: otp,
+        type: OtpType.email,
+      );
+      AppLogger.auth
+          .i('verifyEmailOtp:done', fields: {'uid': res.user?.id});
       return res;
     } catch (e, s) {
-      AppLogger.auth.e('signUpWithEmail:failed',
+      AppLogger.auth.e('verifyEmailOtp:failed',
           fields: {'email': email}, error: e, stack: s);
       rethrow;
     }
   }
+
+  // Password-reset methods were removed alongside the switch to
+  // passwordless OTP auth — there's no password to reset. If we ever
+  // add a "change email" flow, `signInWithOtp` on the new address is
+  // the replacement.
 
   Future<void> signOut() async {
     final uid = _supabase.auth.currentUser?.id;
@@ -198,11 +231,21 @@ class SupabaseAuthService {
     required DateTime dateOfBirth,
     required String gender,
     required String fitnessLevel,
+    /// `preferred_name` — casual/friendly name shown in place of
+    /// `display_name` (see [UserModel.friendlyName]). We persist NULL
+    /// when the user tapped Continue with an empty field so we can
+    /// distinguish "user has explicitly provided a nickname" from
+    /// "user hasn't chosen one yet" and re-prompt them on the next
+    /// login. The DB CHECK constraint (char_length BETWEEN 1 AND 40)
+    /// passes on NULL — Postgres CHECK is skipped when the expression
+    /// is NULL.
+    String? preferredName,
     String? avatarUrl,
   }) async {
     AppLogger.auth.i('completeOnboarding:start', fields: {
       'uid': userId,
       'displayName': displayName,
+      'preferredName': preferredName,
       'gender': gender,
       'fitnessLevel': fitnessLevel,
     });
@@ -211,6 +254,10 @@ class SupabaseAuthService {
       final userCode = await _generateUniqueUserCode();
       await _supabase.from('profiles').update({
         'display_name': displayName,
+        // `preferred_name` may be null — pass it through verbatim so
+        // we clear the column when the user goes through onboarding
+        // again with a cleared field.
+        'preferred_name': preferredName,
         'daily_step_goal': dailyStepGoal,
         'user_code': userCode,
         'date_of_birth': dateOfBirth.toIso8601String().split('T').first,
@@ -248,6 +295,50 @@ class SupabaseAuthService {
     }
   }
 
+  /// Update the user's selected 3D character (migration 0027). Id is one
+  /// of `Character3D.catalog` — currently 'women' or 'men'. Passing
+  /// `null` clears the column and lets the client fall back to the
+  /// gender-based default.
+  Future<void> updateCharacter3D({
+    required String userId,
+    required String? characterId,
+  }) async {
+    try {
+      await _supabase
+          .from('profiles')
+          .update({'character_3d_id': characterId}).eq('id', userId);
+      AppLogger.auth.i('updateCharacter3D',
+          fields: {'uid': userId, 'id': characterId});
+    } catch (e, s) {
+      AppLogger.auth.e('updateCharacter3D:failed',
+          fields: {'uid': userId, 'id': characterId}, error: e, stack: s);
+      rethrow;
+    }
+  }
+
+  /// Persist the fluttermoji character-avatar spec (see migration 0026
+  /// and [UserModel.avatarConfig]). Passing `null` clears the column,
+  /// which reverts the client to the URL-based [UserModel.avatarURL]
+  /// fallback.
+  Future<void> updateAvatarConfig({
+    required String userId,
+    required Map<String, dynamic>? config,
+  }) async {
+    try {
+      await _supabase
+          .from('profiles')
+          .update({'avatar_config': config}).eq('id', userId);
+      AppLogger.auth.i('updateAvatarConfig', fields: {
+        'uid': userId,
+        'set': config != null,
+      });
+    } catch (e, s) {
+      AppLogger.auth.e('updateAvatarConfig:failed',
+          fields: {'uid': userId}, error: e, stack: s);
+      rethrow;
+    }
+  }
+
   /// Update only the survey-derived profile fields (DOB / gender /
   /// fitness level). Used by the "Complete your profile" sheet for
   /// pre-survey users who already have a display_name and goal set —
@@ -257,17 +348,32 @@ class SupabaseAuthService {
     required DateTime dateOfBirth,
     required String gender,
     required String fitnessLevel,
+    String? preferredName,
+    int? heightCm,
+    double? weightKg,
   }) async {
     AppLogger.auth.i('updateSurveyFields:start', fields: {
       'uid': userId,
       'gender': gender,
       'fitnessLevel': fitnessLevel,
+      'preferredNameSet': preferredName != null,
+      'heightSet': heightCm != null,
+      'weightSet': weightKg != null,
     });
     try {
+      // Empty string collapses to null so the CHECK constraint on
+      // preferred_name (1..40 chars) can't reject a blank save.
+      final trimmed = preferredName?.trim();
+      final nameForDb = (trimmed == null || trimmed.isEmpty) ? null : trimmed;
       await _supabase.from('profiles').update({
         'date_of_birth': dateOfBirth.toIso8601String().split('T').first,
         'gender': gender,
         'fitness_level': fitnessLevel,
+        'preferred_name': nameForDb,
+        // Height / weight are optional; null-passthrough lets the user
+        // clear the fields if they want (empty numeric input → null).
+        'height_cm': heightCm,
+        'weight_kg': weightKg,
       }).eq('id', userId);
       AppLogger.auth
           .i('updateSurveyFields:done', fields: {'uid': userId});

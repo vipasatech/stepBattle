@@ -65,7 +65,7 @@ class FloatingRankCard extends StatelessWidget {
               AvatarCircle(
                 radius: 20,
                 imageUrl: entry.avatarURL,
-                initials: _initials(entry.displayName),
+                initials: _initials(entry.friendlyName),
                 borderColor: AppColors.primary.withValues(alpha: 0.5),
                 borderWidth: 2,
               ),

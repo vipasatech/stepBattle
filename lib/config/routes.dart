@@ -5,6 +5,7 @@ import '../providers/auth_provider.dart';
 import '../utils/app_logger.dart';
 import '../screens/shell/main_shell.dart';
 import '../screens/home/home_screen.dart';
+import '../screens/battles/all_completed_battles_screen.dart';
 import '../screens/battles/battles_screen.dart';
 import '../screens/battles/discover_battles_screen.dart';
 import '../screens/battles/pending_battles_screen.dart';
@@ -14,15 +15,20 @@ import '../screens/clan/clan_screen.dart';
 import '../screens/clan/clan_details_screen.dart';
 import '../screens/day_summary/day_summary_screen.dart';
 import '../screens/leaderboard/leaderboard_screen.dart';
+import '../screens/auth/email_otp_verify_screen.dart';
 import '../screens/auth/login_screen.dart';
 import '../screens/auth/onboarding_screen.dart';
+import '../screens/auth/signup_screen.dart';
+import '../screens/auth/welcome_screen.dart';
 import '../screens/clan_battle/create_clan_battle_screen.dart';
 import '../screens/clan_battle/join_clan_battle_screen.dart';
 import '../screens/map/map_screen.dart';
 import '../screens/onboarding/health_setup_screen.dart';
 import '../screens/profile/profile_screen.dart';
+import '../screens/profile/public_profile_screen.dart';
 import '../screens/splash_screen.dart';
 import '../screens/profile/step_sources_screen.dart';
+import '../screens/track/all_track_sessions_screen.dart';
 import '../screens/track/edit_session_screen.dart';
 import '../screens/track/save_activity_screen.dart';
 import '../screens/track/track_hub_screen.dart';
@@ -108,19 +114,38 @@ final routerProvider = Provider<GoRouter>((ref) {
       final user = authState.valueOrNull;
       final isLoggedIn = user != null;
       final isOnLoginPage = location == '/login';
+      final isOnSignupPage = location == '/signup';
+      final isOnWelcomePage = location == '/welcome';
       final isOnOnboarding = location == '/onboarding';
+      // `/verify-otp` is the passwordless OTP entry step reached
+      // after the email is submitted on signup/login. `verifyOTP`
+      // establishes a session mid-flow so this route stays allowed
+      // for either auth state — the signed-in redirect below skips
+      // it. After a successful verify the redirect gate routes to
+      // /home or /onboarding without needing explicit navigation.
+      final isOnOtpVerify = location == '/verify-otp';
 
-      // Not logged in → force login
+      // Not logged in → force to one of the auth surfaces. Any of
+      // /welcome, /login, /signup, or /verify-otp are allowed; a
+      // signed-out user landing anywhere else gets bounced to
+      // /welcome (the entry point that mirrors first-install).
       if (!isLoggedIn) {
-        return isOnLoginPage ? null : '/login';
+        if (isOnWelcomePage ||
+            isOnLoginPage ||
+            isOnSignupPage ||
+            isOnOtpVerify) {
+          return null;
+        }
+        return '/welcome';
       }
 
-      // After sign-in we leave /login. Optimistically route to /home — the
-      // onboarding check below will catch unfinished profiles on the next
-      // redirect pass and bounce them to /onboarding without surfacing the
-      // wrong screen. Sending everyone to /onboarding here re-prompts the
-      // name-entry screen on every login for users who already onboarded.
-      if (isOnLoginPage) {
+      // After sign-in we leave the auth surfaces. Optimistically route
+      // to /home — the onboarding check below will catch unfinished
+      // profiles on the next redirect pass. Sending everyone straight
+      // to /onboarding here re-prompts the name-entry screen on every
+      // login for users who already onboarded.
+      if (isOnLoginPage || isOnSignupPage || isOnWelcomePage ||
+          isOnOtpVerify) {
         return '/home';
       }
 
@@ -151,10 +176,50 @@ final routerProvider = Provider<GoRouter>((ref) {
       ),
 
       // Auth routes
+      //
+      // Flow for a fresh install:
+      //   /splash → (no session) → /welcome
+      //     → tap "Join for free" → /signup → after signUp, redirect
+      //       moves them to /home which the onboarding gate below
+      //       bounces to /onboarding.
+      //     → tap "Log in"        → /login → after signIn, redirect
+      //       moves them to /home (or /onboarding if profile is
+      //       incomplete).
+      GoRoute(
+        path: '/welcome',
+        name: 'welcome',
+        builder: (context, state) => const WelcomeScreen(),
+      ),
       GoRoute(
         path: '/login',
         name: 'login',
         builder: (context, state) => const LoginScreen(),
+      ),
+      GoRoute(
+        path: '/signup',
+        name: 'signup',
+        builder: (context, state) => const SignupScreen(),
+      ),
+      // Passwordless OTP verify — reached from /signup or /login
+      // after the user tapped "Send code". Supabase's signInWithOtp
+      // handles signup and login in one call, so this single screen
+      // covers both flows; the `mode` query param is cosmetic (drives
+      // the header copy only).
+      GoRoute(
+        path: '/verify-otp',
+        name: 'verifyOtp',
+        builder: (context, state) {
+          final email = state.uri.queryParameters['email'];
+          final mode = state.uri.queryParameters['mode'] ?? 'login';
+          if (email == null || email.isEmpty) {
+            // Direct nav / deep link with no email → bounce to the
+            // welcome page rather than render a broken screen.
+            WidgetsBinding.instance.addPostFrameCallback(
+                (_) => context.go('/welcome'));
+            return const Scaffold(body: SizedBox.shrink());
+          }
+          return EmailOtpVerifyScreen(email: email, mode: mode);
+        },
       ),
       GoRoute(
         path: '/onboarding',
@@ -168,6 +233,18 @@ final routerProvider = Provider<GoRouter>((ref) {
         path: '/profile',
         name: 'profile',
         builder: (context, state) => const ProfileScreen(),
+      ),
+
+      // Public profile for OTHER users — reached from leaderboard
+      // rows, friend list rows, arena avatars, etc. `/users/:userId`
+      // (root navigator so the destination covers the shell nav bar).
+      GoRoute(
+        parentNavigatorKey: _rootNavigatorKey,
+        path: '/users/:userId',
+        name: 'publicProfile',
+        builder: (context, state) => PublicProfileScreen(
+          userId: state.pathParameters['userId']!,
+        ),
       ),
 
       // Step source diagnostics (developer / support screen)
@@ -212,6 +289,16 @@ final routerProvider = Provider<GoRouter>((ref) {
         builder: (context, state) => BattleStatusScreen(
           battleId: state.pathParameters['id']!,
         ),
+      ),
+
+      // Full-history overflow for the Battles tab's "Completed"
+      // section. Reached via the chevron on the section header when
+      // the completed count is > 5.
+      GoRoute(
+        parentNavigatorKey: _rootNavigatorKey,
+        path: '/battles/completed',
+        name: 'allCompletedBattles',
+        builder: (context, state) => const AllCompletedBattlesScreen(),
       ),
 
       // Day Summary — per-date view of steps, XP, battles, and track
@@ -270,6 +357,16 @@ final routerProvider = Provider<GoRouter>((ref) {
         builder: (context, state) => TrackSessionDetailScreen(
           sessionId: state.pathParameters['id']!,
         ),
+      ),
+
+      // Full-history overflow for the Track hub's "RECENT SESSIONS"
+      // section. Reached via the chevron on the section header when
+      // the history count is > 5.
+      GoRoute(
+        parentNavigatorKey: _rootNavigatorKey,
+        path: '/track/history',
+        name: 'trackHistory',
+        builder: (context, state) => const AllTrackSessionsScreen(),
       ),
 
       // Edit an already-saved session — reached from the pencil icon on

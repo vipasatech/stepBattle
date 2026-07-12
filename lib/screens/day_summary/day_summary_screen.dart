@@ -8,6 +8,8 @@ import '../../models/run_session_model.dart';
 import '../../providers/auth_provider.dart';
 import '../../providers/day_summary_provider.dart';
 import '../../widgets/glass_card.dart';
+import '../track/track_session_detail_screen.dart';
+import 'widgets/day_summary_battle_card.dart';
 
 /// Per-day summary screen.
 ///
@@ -76,16 +78,19 @@ class DaySummaryScreen extends ConsumerWidget {
 // Body — scrolling stack of stat card + battle section + activity section
 // =============================================================================
 
-class _DayBody extends StatelessWidget {
+class _DayBody extends ConsumerWidget {
   final DaySummaryData data;
   final double strideMeters;
 
   const _DayBody({required this.data, required this.strideMeters});
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final distanceMeters = data.steps * strideMeters;
     final bothEmpty = !data.hasBattles && !data.hasSessions;
+    // Needed by LiveBattleCard / CompletedBattleCard to derive per-user
+    // step deltas and "you won"/"you lost" captions.
+    final uid = ref.watch(authStateProvider).valueOrNull?.id ?? '';
 
     return ListView(
       padding: const EdgeInsets.fromLTRB(20, 16, 20, 40),
@@ -109,24 +114,175 @@ class _DayBody extends StatelessWidget {
           _SectionHeader(label: 'BATTLES'),
           const SizedBox(height: 10),
           if (data.hasBattles)
-            ...data.battles.map((b) => Padding(
-                  padding: const EdgeInsets.only(bottom: 10),
-                  child: _BattleTile(battle: b),
-                ))
+            // Same cards the Battles tab shows for live / completed
+            // battles — read-only here (no arena button, no tap-to-
+            // open). Non-live/completed statuses (pending, scheduled,
+            // cancelled) still use the compact tile because the big
+            // cards need per-user step deltas that only exist once a
+            // battle is live.
+            ..._buildBattleCards(data.battles, uid)
           else
             const _EmptyBanner(text: 'No battle data recorded'),
           const SizedBox(height: 20),
           _SectionHeader(label: 'ACTIVITY'),
           const SizedBox(height: 10),
           if (data.hasSessions)
+            // Same rich track-session card the Home tab's "today's
+            // session" peek uses — 2×2 stats grid + kcal + media
+            // carousel with map + photos. Non-clickable here.
             ...data.sessions.map((s) => Padding(
-                  padding: const EdgeInsets.only(bottom: 10),
-                  child: _SessionTile(session: s),
+                  padding: const EdgeInsets.only(bottom: 16),
+                  child: _DaySummarySessionCard(session: s),
                 ))
           else
             const _EmptyBanner(text: 'No activity data recorded'),
         ],
       ],
+    );
+  }
+
+  /// Build the ordered widget list for the BATTLES section.
+  ///
+  /// 1v1 battles (active + completed with a known opponent) render as
+  /// the rich [DaySummaryBattleCard]. If the user played MULTIPLE
+  /// qualifying 1v1s on this date, the cards stack into a swipeable
+  /// [_BattleCarousel] with page dots. Group / team / cancelled /
+  /// pending battles fall back to the compact [_BattleTile] since
+  /// "You vs X" and single-opponent step deltas don't map cleanly.
+  List<Widget> _buildBattleCards(List<BattleModel> battles, String uid) {
+    final rich = <BattleModel>[];
+    final fallback = <BattleModel>[];
+
+    for (final b in battles) {
+      final isRichEligible = b.type == BattleType.oneVsOne &&
+          (b.status == BattleStatus.active ||
+              b.status == BattleStatus.completed) &&
+          b.opponentFor(uid) != null;
+      if (isRichEligible) {
+        rich.add(b);
+      } else {
+        fallback.add(b);
+      }
+    }
+
+    final widgets = <Widget>[];
+
+    if (rich.length == 1) {
+      widgets.add(Padding(
+        padding: const EdgeInsets.only(bottom: 12),
+        child: DaySummaryBattleCard(battle: rich.first, uid: uid),
+      ));
+    } else if (rich.length > 1) {
+      widgets.add(Padding(
+        padding: const EdgeInsets.only(bottom: 12),
+        child: _BattleCarousel(battles: rich, uid: uid),
+      ));
+    }
+
+    for (final b in fallback) {
+      widgets.add(Padding(
+        padding: const EdgeInsets.only(bottom: 12),
+        child: _BattleTile(battle: b),
+      ));
+    }
+
+    return widgets;
+  }
+}
+
+/// Swipeable stack of `DaySummaryBattleCard`s — used when the user
+/// has multiple 1v1 battles on the same day. Small dots below track
+/// the current page; the PageView itself has default bouncing physics
+/// so the swipe feel matches the rest of the app.
+class _BattleCarousel extends StatefulWidget {
+  final List<BattleModel> battles;
+  final String uid;
+  const _BattleCarousel({required this.battles, required this.uid});
+
+  @override
+  State<_BattleCarousel> createState() => _BattleCarouselState();
+}
+
+class _BattleCarouselState extends State<_BattleCarousel> {
+  final _controller = PageController();
+  int _page = 0;
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        // 220 dp accommodates the rich card's content on typical
+        // Manrope-scaled devices. If your text scale is 1.3× the
+        // bottom footer might crowd; that's a rare edge case.
+        SizedBox(
+          height: 220,
+          child: PageView.builder(
+            controller: _controller,
+            itemCount: widget.battles.length,
+            onPageChanged: (i) => setState(() => _page = i),
+            itemBuilder: (_, i) => DaySummaryBattleCard(
+              battle: widget.battles[i],
+              uid: widget.uid,
+            ),
+          ),
+        ),
+        const SizedBox(height: 8),
+        Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            for (int i = 0; i < widget.battles.length; i++)
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 3),
+                child: AnimatedContainer(
+                  duration: const Duration(milliseconds: 200),
+                  width: i == _page ? 16 : 7,
+                  height: 7,
+                  decoration: BoxDecoration(
+                    color: i == _page
+                        ? AppColors.primary
+                        : AppColors.outlineVariant.withValues(alpha: 0.5),
+                    borderRadius: BorderRadius.circular(4),
+                  ),
+                ),
+              ),
+          ],
+        ),
+      ],
+    );
+  }
+}
+
+/// Read-only wrapper around [SessionDetailBody] for Day Summary's
+/// ACTIVITY section. Same 2×2 stats grid + kcal + media carousel the
+/// Home tab's "today's session" peek shows, minus the InkWell — the
+/// user is already on a day-detail page so tapping shouldn't nav
+/// anywhere.
+class _DaySummarySessionCard extends StatelessWidget {
+  final RunSession session;
+  const _DaySummarySessionCard({required this.session});
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Container(
+      decoration: BoxDecoration(
+        color: scheme.surfaceContainerLow,
+        borderRadius: BorderRadius.circular(20),
+      ),
+      padding: const EdgeInsets.fromLTRB(18, 18, 18, 20),
+      child: SessionDetailBody(
+        session: session,
+        compactStats: true,
+        showDisclosures: false,
+        showMetaChips: false,
+      ),
     );
   }
 }
@@ -503,7 +659,7 @@ class _BattleTile extends ConsumerWidget {
       // Spectator-ish case — just list participants.
       return b.participants
           .take(3)
-          .map((p) => p.displayName)
+          .map((p) => p.friendlyName)
           .join(' · ');
     }
     final opponents = b.participants
@@ -511,7 +667,7 @@ class _BattleTile extends ConsumerWidget {
         .toList();
     if (opponents.isEmpty) return 'Solo battle';
     if (opponents.length == 1) {
-      return 'You vs ${opponents.first.displayName}';
+      return 'You vs ${opponents.first.friendlyName}';
     }
     return 'You + ${opponents.length} others';
   }
@@ -571,79 +727,6 @@ class _BattleTone {
   });
 }
 
-// =============================================================================
-// Track-session tile — same shape as the Track hub's Recent list
-// =============================================================================
-
-class _SessionTile extends StatelessWidget {
-  final RunSession session;
-  const _SessionTile({required this.session});
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final km = session.distanceMeters / 1000;
-    final dur = _formatDuration(session.durationSeconds);
-
-    return GestureDetector(
-      onTap: () => context.push('/track/session/${session.id}'),
-      child: Container(
-        padding: const EdgeInsets.all(14),
-        decoration: BoxDecoration(
-          color: AppColors.surfaceContainerLow,
-          borderRadius: BorderRadius.circular(14),
-          border: Border.all(
-              color: AppColors.outlineVariant.withValues(alpha: 0.3)),
-        ),
-        child: Row(
-          children: [
-            Container(
-              width: 40,
-              height: 40,
-              decoration: BoxDecoration(
-                color: AppColors.primary.withValues(alpha: 0.15),
-                borderRadius: BorderRadius.circular(10),
-              ),
-              child: Icon(Icons.directions_run,
-                  color: AppColors.primary, size: 20),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    session.displayName,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: theme.textTheme.titleSmall
-                        ?.copyWith(fontWeight: FontWeight.w700),
-                  ),
-                  const SizedBox(height: 2),
-                  Text(
-                    '${km.toStringAsFixed(2)} km · $dur · '
-                    '${session.steps} steps',
-                    style: theme.textTheme.labelSmall?.copyWith(
-                      color: AppColors.onSurfaceVariant,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            Icon(Icons.chevron_right,
-                size: 18, color: AppColors.onSurfaceVariant),
-          ],
-        ),
-      ),
-    );
-  }
-
-  static String _formatDuration(int seconds) {
-    final h = seconds ~/ 3600;
-    final m = (seconds % 3600) ~/ 60;
-    final s = seconds % 60;
-    if (h > 0) return '${h}h ${m}m';
-    if (m > 0) return '${m}m ${s}s';
-    return '${s}s';
-  }
-}
+// Track-session rendering moved to [_DaySummarySessionCard] (near the
+// top of the file), which wraps SessionDetailBody so the Day Summary
+// activity list looks like the Home tab's "today's session" peek.

@@ -116,8 +116,8 @@ class _PendingRowState extends ConsumerState<_PendingRow> {
     final otherLabel = others.isEmpty
         ? 'Opponent'
         : others.length == 1
-            ? others.first.displayName
-            : '${others.first.displayName} +${others.length - 1}';
+            ? others.first.friendlyName
+            : '${others.first.friendlyName} +${others.length - 1}';
     final firstOther = others.isNotEmpty ? others.first : null;
 
     final waitingCount = battle.invitedUserIds
@@ -136,8 +136,8 @@ class _PendingRowState extends ConsumerState<_PendingRow> {
               AvatarCircle(
                 radius: 20,
                 imageUrl: firstOther?.avatarURL,
-                initials: (firstOther?.displayName.isNotEmpty ?? false)
-                    ? firstOther!.displayName[0].toUpperCase()
+                initials: (firstOther?.friendlyName.isNotEmpty ?? false)
+                    ? firstOther!.friendlyName[0].toUpperCase()
                     : '?',
                 borderColor: AppColors.amber.withValues(alpha: 0.5),
               ),

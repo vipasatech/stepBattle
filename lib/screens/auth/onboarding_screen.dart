@@ -10,7 +10,25 @@ import '../../models/user_model.dart';
 import '../../providers/auth_provider.dart';
 import '../../services/goal_formula.dart';
 
-/// Mandatory, no-skip onboarding (8 steps).
+/// 8-step onboarding — auto-skips steps whose answers are already on
+/// file or whose permissions are already granted, so returning users
+/// only see the pages they still need to fill.
+///
+/// Prefill sources:
+///   • `currentUserProvider` → seeds display name, DOB, gender,
+///     fitness level, and daily goal from the profile row (Google /
+///     Apple sign-in often lands the display name pre-filled).
+///   • `Permission.activityRecognition.status` and
+///     `Permission.locationWhenInUse.status` — if already granted on
+///     the device, the corresponding step is marked satisfied and
+///     skipped during forward navigation.
+///
+/// Landing behaviour:
+///   • Everything satisfied → runs `completeOnboarding` immediately
+///     and routes to `/home` without ever painting a step page.
+///   • Some fields missing → `initialPage` is set to the first
+///     unsatisfied step so the user starts wherever they actually
+///     have work to do.
 ///
 /// Design follows the user-supplied Strava-inspired reference set:
 ///   • Full-screen black background, no logo, no progress bar.
@@ -21,13 +39,15 @@ import '../../services/goal_formula.dart';
 ///
 /// Steps:
 ///   1. Display name (3–20 chars)
-///   2. Date of birth (wheel picker dialog, min age 13)
-///   3. Gender
-///   4. Fitness level
-///   5. Activity recognition permission
-///   6. Location permission (precise foreground)
-///   7. Step-source confirmation (info-only)
-///   8. Goal pick (clamped to [GoalFormula] range)
+///   2. Preferred name (optional casual name — leave blank to use
+///      display name)
+///   3. Date of birth (wheel picker dialog, min age 13)
+///   4. Gender
+///   5. Fitness level
+///   6. Activity recognition permission
+///   7. Location permission (precise foreground)
+///   8. Step-source confirmation (info-only)
+///   9. Goal pick (clamped to [GoalFormula] range)
 class OnboardingScreen extends ConsumerStatefulWidget {
   const OnboardingScreen({super.key});
 
@@ -38,14 +58,41 @@ class OnboardingScreen extends ConsumerStatefulWidget {
 class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
   /// Minimum age (COPPA / DPDP Act safety).
   static const int _minAge = 13;
-  static const int _totalSteps = 8;
+  static const int _totalSteps = 9;
+  /// Index of the info-only "How we track your steps" page. Kept in
+  /// one place so the skip logic doesn't drift when steps are
+  /// reordered.
+  static const int _infoStepIndex = 7;
 
-  final _pageController = PageController();
+  /// Late so we can honour a computed `initialPage` after the prefill
+  /// resolves. Constructed in [_applyPrefill], not in the field
+  /// initialiser, and then handed to the [PageView] once we know where
+  /// to land.
+  PageController? _pageController;
   int _currentPage = 0;
 
-  // Step 1 — name
+  /// True while `_applyPrefill` is running (blocks the initial paint
+  /// so we don't briefly show step 1 before jumping past it, and so
+  /// we don't paint anything at all when the user is going to be
+  /// silently sent to /home).
+  bool _prefilling = true;
+
+  // Step 0 — display name
   final _usernameController = TextEditingController();
   String? _usernameError;
+
+  // Step 1 — preferred name. Nullable-until-answered: `null` means the
+  // user has not yet been through this step; a non-null value
+  // (including empty string) means they saw the step and either
+  // typed a nickname or tapped Continue to accept "call me by my
+  // display name". `hasCompletedOnboardingProvider` uses this
+  // null-vs-non-null distinction to decide whether an existing user
+  // needs to be routed back through onboarding.
+  final _preferredNameController = TextEditingController();
+  /// True once the user has landed on the preferred-name step at
+  /// least once — used to satisfy `_stepIsSatisfied(1)` when they
+  /// hit Continue on an empty field (which is a valid answer).
+  bool _preferredNamePrompted = false;
 
   // Step 2 — DOB
   DateTime? _dateOfBirth;
@@ -76,13 +123,203 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
     // Keep the username field in sync with setState() so the Continue
     // button enables/disables as the user types.
     _usernameController.addListener(() => setState(() {}));
+    // Prefill from profile + permission status, then decide where to
+    // land. Kicked from a post-frame callback so the widget is
+    // mounted before we call setState / navigate.
+    WidgetsBinding.instance.addPostFrameCallback((_) => _applyPrefill());
   }
 
   @override
   void dispose() {
-    _pageController.dispose();
+    _pageController?.dispose();
     _usernameController.dispose();
+    _preferredNameController.dispose();
     super.dispose();
+  }
+
+  /// Read whatever the profile already has + which permissions are
+  /// already granted, seed local state, then either silently
+  /// completeOnboarding (everything set) or land the PageView on the
+  /// first unanswered step.
+  Future<void> _applyPrefill() async {
+    // --- profile fields ------------------------------------------
+    try {
+      final profile = await ref.read(currentUserProvider.future);
+      if (profile != null) {
+        if (profile.displayName.isNotEmpty &&
+            _usernameController.text.isEmpty) {
+          _usernameController.text = profile.displayName;
+        }
+        // Preferred name — populate the text field with whatever's
+        // on file. A non-null value means the user has already
+        // provided a nickname (or a previous session persisted
+        // one), so mark the step prompted. If it's null but the
+        // session flag says we've already asked in this login
+        // session, also mark it prompted so re-mounting the
+        // Onboarding screen doesn't re-show the step.
+        if (profile.preferredName != null) {
+          if (_preferredNameController.text.isEmpty) {
+            _preferredNameController.text = profile.preferredName!;
+          }
+          _preferredNamePrompted = true;
+        } else if (ref.read(preferredNameAskedThisSessionProvider)) {
+          _preferredNamePrompted = true;
+        }
+        _dateOfBirth ??= profile.dateOfBirth;
+        _gender ??= profile.gender;
+        _fitnessLevel ??= profile.fitnessLevel;
+        // Only accept the goal if it's a real user-set value — the
+        // model defaults to 8000 for fresh rows, which we don't want
+        // to treat as "already answered".
+        if (_dailyGoal == null &&
+            profile.dailyStepGoal > 0 &&
+            profile.dailyStepGoal != 8000) {
+          _dailyGoal = profile.dailyStepGoal;
+        }
+      }
+    } catch (_) {
+      // Prefill is best-effort. Any failure just means the user sees
+      // the full onboarding flow — safer than blocking on it.
+    }
+
+    // --- permission grants ---------------------------------------
+    try {
+      final actGranted = await Permission.activityRecognition.isGranted;
+      final locGranted = await Permission.locationWhenInUse.isGranted;
+      // Marking `prompted` alongside `granted` lets the existing
+      // `_canContinue` gating treat the step as satisfied, and the
+      // permission body's button renders as "Granted" (disabled).
+      _activityRecognitionGranted = actGranted;
+      _activityRecognitionPrompted = actGranted;
+      _locationGranted = locGranted;
+      _locationPrompted = locGranted;
+    } catch (_) {
+      // As above — permission_handler can throw on some platforms
+      // (desktop). If we can't read the status, treat as "not
+      // granted" so the user sees the prompt.
+    }
+
+    if (!mounted) return;
+
+    // --- decide landing page -------------------------------------
+    final firstUnanswered = _firstUnansweredForLanding();
+    if (firstUnanswered == null) {
+      // Everything's already set + all perms granted → silent skip.
+      // We call completeOnboarding directly to make sure any
+      // remaining fields (e.g., a goal seeded from the formula)
+      // land in the profile row and hasOnboarded flips to true.
+      _dailyGoal ??=
+          _recommended()?.target ?? GoalFormula.fallback.target;
+      _completeOnboarding();
+      return;
+    }
+    setState(() {
+      _pageController = PageController(initialPage: firstUnanswered);
+      _currentPage = firstUnanswered;
+      _prefilling = false;
+    });
+  }
+
+  /// Whether step [i]'s payload is already provided.
+  ///
+  /// Step [_infoStepIndex] (info-only "how we track your steps") has
+  /// no payload and is treated as *unsatisfiable* — the walk never
+  /// skips it on the way forward. The landing calc below strips it
+  /// out separately so a fully-set-up returning user never sees it.
+  bool _stepIsSatisfied(int i) {
+    switch (i) {
+      case 0:
+        final name = _usernameController.text.trim();
+        return name.length >= 3 && name.length <= 20;
+      case 1:
+        // Preferred name is satisfied once we've prompted the user
+        // for it (even if they left it blank). Prefill sets the
+        // prompted flag if the profile already has a non-null
+        // preferred_name value.
+        return _preferredNamePrompted;
+      case 2:
+        return _dateOfBirth != null &&
+            _ageFromDob(_dateOfBirth!) >= _minAge;
+      case 3:
+        return _gender != null;
+      case 4:
+        return _fitnessLevel != null;
+      case 5:
+        return _activityRecognitionGranted;
+      case 6:
+        return _locationGranted;
+      case 7:
+        return false; // info page — always show in normal walk
+      case 8:
+        return _dailyGoal != null;
+      default:
+        return true;
+    }
+  }
+
+  /// First step that still needs the user's attention, for the
+  /// landing decision.
+  ///
+  /// Behaviour:
+  ///   • **Silent full-skip**: if every field is resolved and every
+  ///     permission granted, return null so the caller runs
+  ///     `completeOnboarding` directly and the user goes straight to
+  ///     `/home` without seeing any step.
+  ///   • **Returning user** (has at least one of DOB / gender /
+  ///     fitness set): skip to the first unresolved step. Their
+  ///     display name was already collected before, so we don't
+  ///     re-ask for it — the common case is an existing user
+  ///     bounced back by `hasCompletedOnboardingProvider` because
+  ///     `preferred_name` is null, and we want them to land
+  ///     directly on the preferred-name step.
+  ///   • **First-time user** (all survey fields null): always land
+  ///     on step 0 (name) — even when it's prefilled from OAuth
+  ///     metadata. Silently skipping a prefilled name left users
+  ///     confused ("the survey didn't ask for my name"). The
+  ///     prefill still buys them a one-tap Continue.
+  ///
+  /// Info-only step [_infoStepIndex] is stripped from the scan so
+  /// returning users never open onboarding on the info page.
+  int? _firstUnansweredForLanding() {
+    var everythingSatisfied = true;
+    for (int i = 0; i < _totalSteps; i++) {
+      if (i == _infoStepIndex) continue;
+      if (!_stepIsSatisfied(i)) {
+        everythingSatisfied = false;
+        break;
+      }
+    }
+    if (everythingSatisfied) return null;
+
+    // Returning user? Any prior survey answer is the signal — the
+    // fields don't get set to non-null by the auth trigger, only by
+    // a previous completeOnboarding call.
+    final hasPriorSurvey = _dateOfBirth != null ||
+        _gender != null ||
+        _fitnessLevel != null;
+    if (hasPriorSurvey) {
+      for (int i = 0; i < _totalSteps; i++) {
+        if (i == _infoStepIndex) continue;
+        if (!_stepIsSatisfied(i)) return i;
+      }
+      return null;
+    }
+
+    // First-time user: force step 0 so they see / confirm the name
+    // even when display_name is prefilled from OAuth metadata.
+    return 0;
+  }
+
+  /// Next relevant step after [after] during forward navigation.
+  /// Skips any step whose payload is already satisfied. Returns null
+  /// when there's nothing left, which the caller treats as
+  /// "onboarding complete".
+  int? _nextRelevantStep(int after) {
+    for (int i = after + 1; i < _totalSteps; i++) {
+      if (_stepIsSatisfied(i)) continue;
+      return i;
+    }
+    return null;
   }
 
   bool get _canContinue {
@@ -91,18 +328,22 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
         final name = _usernameController.text.trim();
         return name.length >= 3 && name.length <= 20;
       case 1:
-        return _dateOfBirth != null && _ageFromDob(_dateOfBirth!) >= _minAge;
+        // Preferred name — always allowed to advance (empty means "no
+        // nickname, use display name").
+        return true;
       case 2:
-        return _gender != null;
+        return _dateOfBirth != null && _ageFromDob(_dateOfBirth!) >= _minAge;
       case 3:
-        return _fitnessLevel != null;
+        return _gender != null;
       case 4:
-        return _activityRecognitionPrompted;
+        return _fitnessLevel != null;
       case 5:
-        return _locationPrompted;
+        return _activityRecognitionPrompted;
       case 6:
-        return true; // info-only
+        return _locationPrompted;
       case 7:
+        return true; // info-only
+      case 8:
         return _dailyGoal != null;
     }
     return false;
@@ -118,18 +359,32 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
       }
       setState(() => _usernameError = null);
     }
-    // Seed goal from formula on first arrival at the goal step.
-    if (_currentPage == 6) {
+    // Mark the preferred-name step "seen" so _stepIsSatisfied(1)
+    // returns true from here on (until the user gets bounced back
+    // through onboarding for some other reason).
+    if (_currentPage == 1) {
+      _preferredNamePrompted = true;
+    }
+    // Seed goal from formula on first arrival at the info page (step
+    // before goal). By the time the user reaches step _goalStepIndex
+    // we want _dailyGoal to already have a value so the goal card
+    // renders with the recommendation.
+    if (_currentPage == _infoStepIndex) {
       _dailyGoal ??= _recommended()?.target ?? GoalFormula.fallback.target;
     }
-    if (_currentPage < _totalSteps - 1) {
-      _pageController.nextPage(
-        duration: const Duration(milliseconds: 280),
-        curve: Curves.easeOutCubic,
-      );
-    } else {
+    // Skip over any subsequent steps that are already satisfied by
+    // prefill / prior grants, instead of the mechanical +1. If
+    // nothing's left, we're done.
+    final next = _nextRelevantStep(_currentPage);
+    if (next == null) {
       _completeOnboarding();
+      return;
     }
+    _pageController?.animateToPage(
+      next,
+      duration: const Duration(milliseconds: 280),
+      curve: Curves.easeOutCubic,
+    );
   }
 
   StepGoalRecommendation? _recommended() {
@@ -158,9 +413,17 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
     setState(() => _submitting = true);
     try {
       final user = Supabase.instance.client.auth.currentUser!;
+      final displayName = _usernameController.text.trim();
+      final preferredInput = _preferredNameController.text.trim();
+      // NULL preserves the "user hasn't chosen a nickname" state so
+      // we can re-prompt on the next login. The DB CHECK
+      // (char_length BETWEEN 1 AND 40) is skipped when the value is
+      // NULL, so this passes.
+      final String? preferredName = preferredInput.isEmpty ? null : preferredInput;
       await ref.read(authServiceProvider).completeOnboarding(
             userId: user.id,
-            displayName: _usernameController.text.trim(),
+            displayName: displayName,
+            preferredName: preferredName,
             dailyStepGoal: _dailyGoal!,
             dateOfBirth: _dateOfBirth!,
             gender: _gender!.wire,
@@ -168,6 +431,12 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
             avatarUrl: user.userMetadata?['avatar_url'] as String?,
           );
       if (mounted) {
+        // Flip the session flag so the redirect gate stops
+        // considering this user "unonboarded" over a null
+        // preferred_name — otherwise we'd loop right back to
+        // /onboarding. Next login (fresh Riverpod scope, new auth
+        // id) resets the flag and we ask again.
+        ref.read(preferredNameAskedThisSessionProvider.notifier).state = true;
         ref.invalidate(hasCompletedOnboardingProvider);
         ref.invalidate(currentUserProvider);
         context.go('/home');
@@ -185,6 +454,17 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
 
   @override
   Widget build(BuildContext context) {
+    // While prefill is in flight (or on the way to a silent full-
+    // skip) show a plain background — no logo, no spinner, no half-
+    // painted step. This is invisible to the user because prefill
+    // resolves in the same frame the splash screen was already
+    // showing.
+    if (_prefilling || _pageController == null) {
+      return Scaffold(
+        backgroundColor: AppColors.background,
+        body: const SizedBox.shrink(),
+      );
+    }
     final name = _usernameController.text.trim();
     return Scaffold(
       backgroundColor: AppColors.background,
@@ -193,13 +473,18 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
           children: [
             Expanded(
               child: PageView(
-                controller: _pageController,
+                controller: _pageController!,
                 physics: const NeverScrollableScrollPhysics(),
                 onPageChanged: (i) => setState(() => _currentPage = i),
                 children: [
                   _StepName(
                     controller: _usernameController,
                     errorText: _usernameError,
+                  ),
+                  _StepPreferredName(
+                    controller: _preferredNameController,
+                    displayName: name,
+                    onChanged: () => setState(() {}),
                   ),
                   _StepDob(
                     name: name,
@@ -288,43 +573,147 @@ class _StepName extends StatelessWidget {
       title: 'What should we\ncall you?',
       subtitle:
           'This is the name your friends, opponents, and clan will see.',
-      body: TextField(
-        controller: controller,
-        textCapitalization: TextCapitalization.words,
-        maxLength: 20,
-        cursorColor: AppColors.primary,
-        style: const TextStyle(
-          fontSize: 18,
-          fontWeight: FontWeight.w700,
-          color: Colors.white,
-        ),
-        decoration: InputDecoration(
-          labelText: 'Display name',
-          labelStyle: TextStyle(color: AppColors.onSurfaceVariant),
-          hintText: 'e.g. Prashanth',
-          hintStyle: TextStyle(color: AppColors.onSurfaceVariant),
-          errorText: errorText,
-          counterText: '',
-          filled: true,
-          fillColor: _OnboardingTokens.cardFill,
-          contentPadding:
-              const EdgeInsets.symmetric(horizontal: 18, vertical: 18),
-          border: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(14),
-            borderSide: BorderSide.none,
+      body: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Field label sits ABOVE the input (matches the DOB step).
+          // Previously the label lived inside the InputDecoration as
+          // `labelText`, but with no border to anchor to it floated
+          // right on top of the typed text, causing the "Display
+          // name" caption and the actual name to overlap.
+          const Text(
+            'Display name',
+            style: TextStyle(
+              color: Colors.white,
+              fontWeight: FontWeight.w800,
+              fontSize: 15,
+            ),
           ),
-          focusedBorder: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(14),
-            borderSide: BorderSide(color: AppColors.primary, width: 2),
+          const SizedBox(height: 10),
+          TextField(
+            controller: controller,
+            textCapitalization: TextCapitalization.words,
+            maxLength: 20,
+            cursorColor: AppColors.primary,
+            style: const TextStyle(
+              fontSize: 18,
+              fontWeight: FontWeight.w700,
+              color: Colors.white,
+            ),
+            decoration: InputDecoration(
+              hintText: 'e.g. Prashanth',
+              hintStyle: TextStyle(color: AppColors.onSurfaceVariant),
+              errorText: errorText,
+              counterText: '',
+              filled: true,
+              fillColor: _OnboardingTokens.cardFill,
+              contentPadding: const EdgeInsets.symmetric(
+                  horizontal: 18, vertical: 18),
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(14),
+                borderSide: BorderSide.none,
+              ),
+              enabledBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(14),
+                borderSide: BorderSide.none,
+              ),
+              focusedBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(14),
+                borderSide: BorderSide(color: AppColors.primary, width: 2),
+              ),
+            ),
           ),
-        ),
+        ],
       ),
     );
   }
 }
 
 // =============================================================================
-// Step 2 — Date of birth (wheel picker dialog)
+// Step 2 — Preferred name (optional casual name)
+// =============================================================================
+class _StepPreferredName extends StatelessWidget {
+  final TextEditingController controller;
+
+  /// The display name the user just entered on the previous step —
+  /// shown as the "otherwise we'll use…" fallback text so the user
+  /// knows exactly what leaving this blank does.
+  final String displayName;
+
+  /// Called on every keystroke so the shell can rebuild the Continue
+  /// button state (unused for gating — preferred name is always
+  /// allowed to advance — but harmless to notify).
+  final VoidCallback onChanged;
+
+  const _StepPreferredName({
+    required this.controller,
+    required this.displayName,
+    required this.onChanged,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final fallback = displayName.trim().isEmpty ? 'your full name' : displayName;
+    return _StepShell(
+      title: 'What should\nwe call you?',
+      subtitle:
+          'A shorter, casual name that friends, opponents, and clan members will see. Leave blank to use $fallback.',
+      body: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Label ABOVE the field — same fix as the display-name and
+          // DOB steps. `labelText` inside a borderless InputDecoration
+          // ends up floating on top of the typed value.
+          const Text(
+            'Preferred name (optional)',
+            style: TextStyle(
+              color: Colors.white,
+              fontWeight: FontWeight.w800,
+              fontSize: 15,
+            ),
+          ),
+          const SizedBox(height: 10),
+          TextField(
+            controller: controller,
+            textCapitalization: TextCapitalization.words,
+            maxLength: 40,
+            cursorColor: AppColors.primary,
+            onChanged: (_) => onChanged(),
+            style: const TextStyle(
+              fontSize: 18,
+              fontWeight: FontWeight.w700,
+              color: Colors.white,
+            ),
+            decoration: InputDecoration(
+              hintText: 'e.g. Prash',
+              hintStyle: TextStyle(color: AppColors.onSurfaceVariant),
+              counterText: '',
+              filled: true,
+              fillColor: _OnboardingTokens.cardFill,
+              contentPadding: const EdgeInsets.symmetric(
+                  horizontal: 18, vertical: 18),
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(14),
+                borderSide: BorderSide.none,
+              ),
+              enabledBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(14),
+                borderSide: BorderSide.none,
+              ),
+              focusedBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(14),
+                borderSide: BorderSide(color: AppColors.primary, width: 2),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// =============================================================================
+// Step 3 — Date of birth (wheel picker dialog)
 // =============================================================================
 class _StepDob extends StatelessWidget {
   final String name;
@@ -341,7 +730,7 @@ class _StepDob extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final formatted = value == null
-        ? 'Tap to choose'
+        ? ''
         : '${value!.day} ${_monthName(value!.month)} ${value!.year}';
     final greeting = name.isEmpty ? 'Welcome!' : 'Welcome, $name!';
 
@@ -354,47 +743,57 @@ class _StepDob extends StatelessWidget {
       body: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(
+          // Field label — bold white, matches the Strava reference.
+          const Text(
             'Birthday',
             style: TextStyle(
-              color: AppColors.onSurfaceVariant,
-              fontWeight: FontWeight.w700,
-              fontSize: 13,
-              letterSpacing: 0.5,
+              color: Colors.white,
+              fontWeight: FontWeight.w800,
+              fontSize: 15,
             ),
           ),
           const SizedBox(height: 10),
+          // Outlined tap target — transparent fill + subtle border,
+          // no placeholder text so the empty state matches the
+          // reference exactly. Once a date is picked the formatted
+          // string appears inside.
           GestureDetector(
             onTap: () => _openWheelPicker(context),
             child: Container(
+              height: 60,
               padding:
-                  const EdgeInsets.symmetric(horizontal: 18, vertical: 22),
+                  const EdgeInsets.symmetric(horizontal: 18),
+              alignment: Alignment.centerLeft,
               decoration: BoxDecoration(
-                color: _OnboardingTokens.cardFill,
+                color: Colors.transparent,
                 borderRadius: BorderRadius.circular(14),
+                border: Border.all(
+                  color: AppColors.onSurface.withValues(alpha: 0.35),
+                  width: 1.2,
+                ),
               ),
               child: Text(
                 formatted,
-                style: TextStyle(
+                style: const TextStyle(
                   fontSize: 18,
                   fontWeight: FontWeight.w700,
-                  color: value == null
-                      ? AppColors.onSurfaceVariant
-                      : Colors.white,
+                  color: Colors.white,
                 ),
               ),
             ),
           ),
-          if (value != null) ...[
-            const SizedBox(height: 10),
-            Text(
-              'You\'re ${_ageFromDob(value!)} — looks good.',
-              style: TextStyle(
-                color: AppColors.onSurfaceVariant,
-                fontSize: 13,
-              ),
+          const SizedBox(height: 10),
+          // Static privacy caption — matches the reference. We used
+          // to show a computed "You're 24 — looks good." helper
+          // here; dropped in favour of the privacy note so first-
+          // paint spacing matches whether a date is picked or not.
+          Text(
+            'Your birthday or age will not appear on your profile.',
+            style: TextStyle(
+              color: AppColors.onSurfaceVariant,
+              fontSize: 13,
             ),
-          ],
+          ),
         ],
       ),
     );
@@ -426,14 +825,18 @@ class _StepDob extends StatelessWidget {
               ),
               const SizedBox(height: 12),
               SizedBox(
-                height: 220,
+                // Slightly taller than a default picker so the row
+                // density matches the Strava reference the user
+                // shared: ~7 rows visible with the selected row
+                // clearly centred and the outer rows fading out.
+                height: 240,
                 child: CupertinoTheme(
                   data: const CupertinoThemeData(
                     brightness: Brightness.dark,
                     textTheme: CupertinoTextThemeData(
                       dateTimePickerTextStyle: TextStyle(
                         color: Colors.white,
-                        fontSize: 22,
+                        fontSize: 21,
                         fontWeight: FontWeight.w600,
                       ),
                     ),
@@ -505,16 +908,6 @@ class _StepDob extends StatelessWidget {
     if (result != null) onPicked(result);
   }
 
-  int _ageFromDob(DateTime dob) {
-    final now = DateTime.now();
-    var y = now.year - dob.year;
-    if (now.month < dob.month ||
-        (now.month == dob.month && now.day < dob.day)) {
-      y--;
-    }
-    return y;
-  }
-
   static String _monthName(int m) => const [
         'Jan',
         'Feb',
@@ -542,7 +935,7 @@ class _StepGender extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return _StepShell(
-      title: 'What\'s your\ngender?',
+      title: 'What\'s your gender?',
       subtitle:
           'We\'ll use this to determine which leaderboards you appear on.',
       body: Column(
@@ -935,9 +1328,6 @@ class _OnboardingTokens {
   static Color get cardFill => AppColors.isDark
       ? const Color(0xFF2A2A2D)
       : AppColors.surfaceContainerHigh;
-  static Color get cardSelectedFill => AppColors.isDark
-      ? const Color(0xFF323036)
-      : AppColors.surfaceContainerHighest;
   static Color get dialogFill => AppColors.isDark
       ? const Color(0xFF1C1C1F)
       : AppColors.surfaceContainer;
@@ -955,12 +1345,16 @@ class _StepShell extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // Top-anchored layout with a generous ~48 dp top offset for
+    // breathing room from the status bar. Matches the Strava
+    // reference the user shared: title just below the safe area,
+    // body directly under the caption, everything hugs the top and
+    // the primary CTA sits at the bottom via the parent Scaffold.
     return SingleChildScrollView(
-      padding: const EdgeInsets.fromLTRB(20, 8, 20, 16),
+      padding: const EdgeInsets.fromLTRB(20, 48, 20, 16),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const SizedBox(height: 12),
           Text(
             title,
             style: const TextStyle(
@@ -1004,6 +1398,14 @@ class _OptionCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // Selected card inverts the palette: solid white fill with dark
+    // text (matches the Strava reference the user shared). Unselected
+    // cards stay dark grey with white text. No visible border on
+    // either state — the fill contrast alone signals selection.
+    final Color titleColor = selected ? Colors.black : Colors.white;
+    final Color descriptionColor = selected
+        ? Colors.black.withValues(alpha: 0.75)
+        : Colors.white.withValues(alpha: 0.85);
     return GestureDetector(
       onTap: onTap,
       child: AnimatedContainer(
@@ -1016,22 +1418,16 @@ class _OptionCard extends StatelessWidget {
         width: double.infinity,
         padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 18),
         decoration: BoxDecoration(
-          color: selected
-              ? _OnboardingTokens.cardSelectedFill
-              : _OnboardingTokens.cardFill,
+          color: selected ? Colors.white : _OnboardingTokens.cardFill,
           borderRadius: BorderRadius.circular(14),
-          border: Border.all(
-            color: selected ? AppColors.primary : Colors.transparent,
-            width: 2,
-          ),
         ),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(
               title,
-              style: const TextStyle(
-                color: Colors.white,
+              style: TextStyle(
+                color: titleColor,
                 fontSize: 17,
                 fontWeight: FontWeight.w800,
               ),
@@ -1040,8 +1436,8 @@ class _OptionCard extends StatelessWidget {
               const SizedBox(height: 6),
               Text(
                 description!,
-                style: const TextStyle(
-                  color: Colors.white,
+                style: TextStyle(
+                  color: descriptionColor,
                   fontSize: 14,
                   height: 1.3,
                 ),
