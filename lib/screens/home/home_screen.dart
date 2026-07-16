@@ -13,9 +13,11 @@ import 'widgets/overview_card.dart';
 import 'widgets/stat_pills_row.dart';
 import 'widgets/active_battle_card.dart';
 import 'widgets/daily_target_card.dart';
+import 'widgets/highlighted_missions_section.dart';
 import 'widgets/map_preview_card.dart';
 import 'widgets/streak_strip.dart';
 import 'widgets/todays_session_card.dart';
+import 'widgets/upgrade_banner_card.dart';
 
 class HomeScreen extends ConsumerWidget {
   const HomeScreen({super.key});
@@ -176,6 +178,11 @@ class _HomeBody extends StatelessWidget {
         StreakStrip(),
         SizedBox(height: 28),
 
+        // "Go Pro" banner — only renders for Free-tier users; self-
+        // hides after upgrade. Self-consumes its own bottom padding
+        // via the wrapper so ordering below stays clean when hidden.
+        UpgradeBannerCard(),
+
         // Section 1: Overview card + stat pills
         OverviewCard(),
         SizedBox(height: 12),
@@ -187,6 +194,11 @@ class _HomeBody extends StatelessWidget {
         ActiveBattleCard(),
 
         SizedBox(height: 32),
+
+        // Featured missions — populated by admin rows whose
+        // `should_show_in_home = true`. Auto-hides when the user has
+        // nothing featured, so no phantom gap on ordinary days.
+        HighlightedMissionsSection(),
 
         // Today's track session (only renders when the user has a
         // qualifying run/walk from today — see TodaysSessionCard for
