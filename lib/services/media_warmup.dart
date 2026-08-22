@@ -1,7 +1,9 @@
 import 'dart:async';
 
 import 'package:flutter/services.dart';
-import 'package:flutter_inappwebview/flutter_inappwebview.dart';
+// [3D-DISABLED-2026-08-21] flutter_inappwebview import removed alongside
+// the 3D system. Re-add when re-enabling primeWebViewEngine below.
+// import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 
 import '../utils/app_logger.dart';
 import 'battleground_tile.dart';
@@ -50,28 +52,33 @@ class MediaWarmup {
     }
   }
 
-  /// Force the Android/iOS system WebView provider to initialize before
-  /// the corner character viewer (Flutter3DViewer) mounts.
-  ///
-  /// The arena went 2D but the small corner character tile still uses
-  /// Flutter3DViewer to render an animated GLB. Priming the WebView
-  /// provider at boot means that tile's first paint is instant instead
-  /// of paying the ~500-1000 ms Chromium/V8 cold-start cost.
-  ///
-  /// `getDefaultUserAgent()` is the smallest safe API on
-  /// flutter_inappwebview that forces provider init. Silent failure —
-  /// warmup is best-effort.
-  static Future<void> primeWebViewEngine() async {
-    final stopwatch = Stopwatch()..start();
-    try {
-      final ua = await InAppWebViewController.getDefaultUserAgent();
-      AppLogger.battle.i('mediaWarmup:webViewPrimed', fields: {
-        'ms': stopwatch.elapsedMilliseconds,
-        'uaLen': ua.length,
-      });
-    } catch (e) {
-      AppLogger.battle.w('mediaWarmup:webViewPrimeFailed',
-          fields: {'ms': stopwatch.elapsedMilliseconds, 'err': e.toString()});
-    }
-  }
+  // [3D-DISABLED-2026-08-21] — primeWebViewEngine commented out.
+  // The 3D character system is disabled, so the WebView provider never
+  // gets used and warming it is pure waste. See lib/models/character_3d
+  // .dart header for the full re-enable checklist.
+  //
+  // /// Force the Android/iOS system WebView provider to initialize before
+  // /// the corner character viewer (Flutter3DViewer) mounts.
+  // ///
+  // /// The arena went 2D but the small corner character tile still uses
+  // /// Flutter3DViewer to render an animated GLB. Priming the WebView
+  // /// provider at boot means that tile's first paint is instant instead
+  // /// of paying the ~500-1000 ms Chromium/V8 cold-start cost.
+  // ///
+  // /// `getDefaultUserAgent()` is the smallest safe API on
+  // /// flutter_inappwebview that forces provider init. Silent failure —
+  // /// warmup is best-effort.
+  // static Future<void> primeWebViewEngine() async {
+  //   final stopwatch = Stopwatch()..start();
+  //   try {
+  //     final ua = await InAppWebViewController.getDefaultUserAgent();
+  //     AppLogger.battle.i('mediaWarmup:webViewPrimed', fields: {
+  //       'ms': stopwatch.elapsedMilliseconds,
+  //       'uaLen': ua.length,
+  //     });
+  //   } catch (e) {
+  //     AppLogger.battle.w('mediaWarmup:webViewPrimeFailed',
+  //         fields: {'ms': stopwatch.elapsedMilliseconds, 'err': e.toString()});
+  //   }
+  // }
 }

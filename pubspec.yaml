@@ -161,31 +161,44 @@ dependencies:
   sentry_flutter: ^8.11.0
   posthog_flutter: ^4.10.0
 
-  # 3D character rendering — loads the .glb files under
-  # assets/images/3dAvatars/{adam,amy,shannon,jackie}/character.glb (idle
-  # pose) and Taunt.glb (taunt animation). Mixamo-rigged, Blender-converted
-  # from FBX with Draco compression and 512-px textures (~2-7 MB each).
-  # Handles model load, animation playback, and camera orbit inside a widget.
-  flutter_3d_controller: ^2.0.5
-
-  # WebView used by flutter_3d_controller under the hood. Declared as
-  # a direct dep (in addition to the transitive one) so we can call
-  # InAppWebViewController.getDefaultUserAgent() at splash to warm the
-  # Android/iOS WebView provider — see MediaWarmup.primeWebViewEngine.
-  # Version pin matches what the fork resolves.
-  flutter_inappwebview: ^6.1.5
+  # [3D-DISABLED-2026-08-21] — flutter_3d_controller commented out. The
+  # picker sheet was never opened from any screen (verified via grep on
+  # showCharacter3DPickerSheet) so the entire feature shipped dead,
+  # bloating the AAB by ~35 MB in GLB assets + the compile weight of
+  # this package + flutter_inappwebview + the vendored fork under
+  # packages/flutter_3d_controller_fork/. See lib/models/character_3d
+  # .dart header for the full re-enable checklist.
+  #
+  # # 3D character rendering — loads the .glb files under
+  # # assets/images/3dAvatars/{adam,amy,shannon,jackie}/character.glb (idle
+  # # pose) and Taunt.glb (taunt animation). Mixamo-rigged, Blender-converted
+  # # from FBX with Draco compression and 512-px textures (~2-7 MB each).
+  # # Handles model load, animation playback, and camera orbit inside a widget.
+  # flutter_3d_controller: ^2.0.5
+  #
+  # # WebView used by flutter_3d_controller under the hood. Declared as
+  # # a direct dep (in addition to the transitive one) so we can call
+  # # InAppWebViewController.getDefaultUserAgent() at splash to warm the
+  # # Android/iOS WebView provider — see MediaWarmup.primeWebViewEngine.
+  # # Version pin matches what the fork resolves.
+  # flutter_inappwebview: ^6.1.5
   android_alarm_manager_plus: 4.0.7
 
 dependency_overrides:
-  # Local fork of flutter_3d_controller — patches setCameraOrbit so its
-  # radius argument is passed to model-viewer in **meters** (`10m`) instead
-  # of the upstream's percentage-of-auto-frame (`10%`). The upstream
-  # implementation makes it impossible to place the camera at an absolute
-  # distance from the target, which we need to frame a specific spot in
-  # our 200m-long arena. See packages/flutter_3d_controller_fork/lib/src/
-  # data/datasources/flutter_3d_datasource_mobile.dart:137.
-  flutter_3d_controller:
-    path: packages/flutter_3d_controller_fork
+  # [3D-DISABLED-2026-08-21] — vendored fork override commented out. The
+  # `packages/flutter_3d_controller_fork/` folder is left in git so a
+  # future re-enable just uncomments this block. See lib/models/character_3d
+  # .dart header for the full re-enable checklist.
+  #
+  # # Local fork of flutter_3d_controller — patches setCameraOrbit so its
+  # # radius argument is passed to model-viewer in **meters** (`10m`) instead
+  # # of the upstream's percentage-of-auto-frame (`10%`). The upstream
+  # # implementation makes it impossible to place the camera at an absolute
+  # # distance from the target, which we need to frame a specific spot in
+  # # our 200m-long arena. See packages/flutter_3d_controller_fork/lib/src/
+  # # data/datasources/flutter_3d_datasource_mobile.dart:137.
+  # flutter_3d_controller:
+  #   path: packages/flutter_3d_controller_fork
   # image_cropper_platform_interface 7.2.0 uses `Color.toARGB32()`, which
   # wasn't added to the Flutter framework until 3.29. We're on 3.27.1, so
   # pin the interface at 7.1.0 (still uses `Color.value`) until we bump
@@ -239,16 +252,23 @@ flutter:
     # 12 runner avatars (bird's-eye view to match the battleground camera).
     # Picked by the user in the avatar picker; stored as battle_avatar_id.
     - assets/images/avatars/
-    # 3D character avatars — four Mixamo-rigged characters, each folder
-    # holds character.glb (idle pose, shown in picker + arena for non-top
-    # players) and Taunt.glb (taunt animation, shown in arena when this
-    # user is #1 on the battle board). See lib/models/character_3d.dart
-    # for the catalog and lib/sheets/character_3d_picker_sheet.dart for
-    # the picker UI.
-    - assets/images/3dAvatars/adam/
-    - assets/images/3dAvatars/amy/
-    - assets/images/3dAvatars/shannon/
-    - assets/images/3dAvatars/jackie/
+    # [3D-DISABLED-2026-08-21] — 3dAvatars asset folders commented out.
+    # The GLB files were deleted from disk to reclaim ~35 MB of AAB
+    # bloat. Feature was never accessible (picker sheet unlinked). See
+    # lib/models/character_3d.dart header for re-enable checklist,
+    # including "git checkout <pre-removal-commit> -- assets/images/3dAvatars/"
+    # to restore the GLBs from history.
+    #
+    # # 3D character avatars — four Mixamo-rigged characters, each folder
+    # # holds character.glb (idle pose, shown in picker + arena for non-top
+    # # players) and Taunt.glb (taunt animation, shown in arena when this
+    # # user is #1 on the battle board). See lib/models/character_3d.dart
+    # # for the catalog and lib/sheets/character_3d_picker_sheet.dart for
+    # # the picker UI.
+    # - assets/images/3dAvatars/adam/
+    # - assets/images/3dAvatars/amy/
+    # - assets/images/3dAvatars/shannon/
+    # - assets/images/3dAvatars/jackie/
     # Welcome-screen carousel illustrations — the current live art the
     # Welcome screen renders. Sized 1080x2340 (9:19.5 aspect) so they
     # fit the phone-frame widget without cropping.

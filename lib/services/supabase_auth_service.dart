@@ -507,30 +507,35 @@ class SupabaseAuthService {
     }
   }
 
-  /// Update the user's selected 3D character (migration 0027). Id is one
-  /// of `Character3D.catalog` — currently 'women' or 'men'. Passing
-  /// `null` clears the column and lets the client fall back to the
-  /// gender-based default.
-  Future<void> updateCharacter3D({
-    required String userId,
-    required String? characterId,
-  }) async {
-    try {
-      await _supabase
-          .from('profiles')
-          .update({'character_3d_id': characterId}).eq('id', userId);
-      AppLogger.auth.i('updateCharacter3D',
-          fields: {'uid': userId, 'id': characterId});
-      // Analytics: only send the character id — user id is threaded via
-      // Sentry/PostHog identify(), not per-event, so we don't double up.
-      ObservabilityService.trackEvent('avatar_pick',
-          properties: {'character_id': characterId ?? 'cleared'});
-    } catch (e, s) {
-      AppLogger.auth.e('updateCharacter3D:failed',
-          fields: {'uid': userId, 'id': characterId}, error: e, stack: s);
-      rethrow;
-    }
-  }
+  // [3D-DISABLED-2026-08-21] — updateCharacter3D commented out. The
+  // profiles.character_3d_id DB column is preserved; the only caller was
+  // the picker sheet in lib/sheets/character_3d_picker_sheet.dart (also
+  // disabled). See lib/models/character_3d.dart header for re-enable.
+  //
+  // /// Update the user's selected 3D character (migration 0027). Id is one
+  // /// of `Character3D.catalog` — currently 'women' or 'men'. Passing
+  // /// `null` clears the column and lets the client fall back to the
+  // /// gender-based default.
+  // Future<void> updateCharacter3D({
+  //   required String userId,
+  //   required String? characterId,
+  // }) async {
+  //   try {
+  //     await _supabase
+  //         .from('profiles')
+  //         .update({'character_3d_id': characterId}).eq('id', userId);
+  //     AppLogger.auth.i('updateCharacter3D',
+  //         fields: {'uid': userId, 'id': characterId});
+  //     // Analytics: only send the character id — user id is threaded via
+  //     // Sentry/PostHog identify(), not per-event, so we don't double up.
+  //     ObservabilityService.trackEvent('avatar_pick',
+  //         properties: {'character_id': characterId ?? 'cleared'});
+  //   } catch (e, s) {
+  //     AppLogger.auth.e('updateCharacter3D:failed',
+  //         fields: {'uid': userId, 'id': characterId}, error: e, stack: s);
+  //     rethrow;
+  //   }
+  // }
 
   /// Legacy — persists the character-avatar spec column from migration
   /// 0026. Kept for API compatibility even though the fluttermoji

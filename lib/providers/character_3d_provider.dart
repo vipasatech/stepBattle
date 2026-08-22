@@ -1,3 +1,7 @@
+// [3D-DISABLED-2026-08-21] — See lib/models/character_3d.dart header for
+// re-enable checklist. Whole file dormant.
+
+/*
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../models/character_3d.dart';
@@ -55,3 +59,4 @@ final character3DForUserIdProvider =
     return Character3D.amy;
   }
 });
+*/

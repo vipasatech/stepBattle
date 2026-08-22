@@ -7,6 +7,13 @@ analyzer:
   exclude:
     - "**/*.g.dart"
     - "**/*.freezed.dart"
+    # [3D-DISABLED-2026-08-21] — vendored flutter_3d_controller fork is
+    # left on disk for a future re-enable of the 3D character system, but
+    # its dep_override in pubspec.yaml is commented out. Analyzer walking
+    # the fork produces 100+ "undefined_class" errors because its imports
+    # can't resolve. Excluding here keeps the fork intact for restoration
+    # without polluting analyze runs. Remove this exclude on re-enable.
+    - "packages/flutter_3d_controller_fork/**"
 
 linter:
   rules:

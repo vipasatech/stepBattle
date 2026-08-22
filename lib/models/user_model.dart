@@ -173,12 +173,18 @@ class UserModel {
   /// [Avatar.byId]. Defaults to 'avatar_01' for legacy rows.
   final String battleAvatarId;
 
-  /// User's chosen 3D character id — `'women'` or `'men'`. Nullable when
-  /// the user has never opened the 3D picker; in that case the client
-  /// falls back to `Character3D.defaultForGender(gender)`. Loaded by
-  /// `flutter_3d_controller` from `assets/images/3dAvatars/<id>/runner.glb`.
-  /// See migration 0027 and `lib/models/character_3d.dart`.
-  final String? character3dId;
+  // [3D-DISABLED-2026-08-21] — character3dId field commented out. The
+  // Supabase profiles.character_3d_id column stays intact; the app just
+  // stops round-tripping the value while the 3D feature is disabled.
+  // See lib/models/character_3d.dart header for the full re-enable
+  // checklist.
+  //
+  // /// User's chosen 3D character id — `'women'` or `'men'`. Nullable when
+  // /// the user has never opened the 3D picker; in that case the client
+  // /// falls back to `Character3D.defaultForGender(gender)`. Loaded by
+  // /// `flutter_3d_controller` from `assets/images/3dAvatars/<id>/runner.glb`.
+  // /// See migration 0027 and `lib/models/character_3d.dart`.
+  // final String? character3dId;
 
   /// Legacy character-avatar JSON spec (migration 0026). No longer
   /// read or written by the app — the fluttermoji customizer was
@@ -270,7 +276,7 @@ class UserModel {
     this.heightCm,
     this.weightKg,
     this.battleAvatarId = 'avatar_01',
-    this.character3dId,
+    // [3D-DISABLED-2026-08-21] this.character3dId,
     this.avatarConfig,
     this.streakRecoveryStartedAt,
     this.streakUsedRecoveryInCurrentRun = false,
@@ -398,7 +404,7 @@ class UserModel {
       weightKg: (data['weight_kg'] as num?)?.toDouble(),
       battleAvatarId:
           (data['battle_avatar_id'] as String?) ?? 'avatar_01',
-      character3dId: data['character_3d_id'] as String?,
+      // [3D-DISABLED-2026-08-21] character3dId: data['character_3d_id'] as String?,
       // JSONB — Supabase returns as Map<String, dynamic> already; the
       // cast keeps the value type honest.
       avatarConfig: (data['avatar_config'] as Map?)?.cast<String, dynamic>(),
@@ -465,7 +471,7 @@ class UserModel {
       'height_cm': heightCm,
       'weight_kg': weightKg,
       'battle_avatar_id': battleAvatarId,
-      'character_3d_id': character3dId,
+      // [3D-DISABLED-2026-08-21] 'character_3d_id': character3dId,
       'avatar_config': avatarConfig,
       'streak_recovery_started_at':
           iso(streakRecoveryStartedAt)?.split('T').first,
@@ -515,7 +521,7 @@ class UserModel {
     int? heightCm,
     double? weightKg,
     String? battleAvatarId,
-    String? character3dId,
+    // [3D-DISABLED-2026-08-21] String? character3dId,
     Map<String, dynamic>? avatarConfig,
     DateTime? streakRecoveryStartedAt,
     bool? streakUsedRecoveryInCurrentRun,
@@ -576,7 +582,7 @@ class UserModel {
       heightCm: heightCm ?? this.heightCm,
       weightKg: weightKg ?? this.weightKg,
       battleAvatarId: battleAvatarId ?? this.battleAvatarId,
-      character3dId: character3dId ?? this.character3dId,
+      // [3D-DISABLED-2026-08-21] character3dId: character3dId ?? this.character3dId,
       avatarConfig: avatarConfig ?? this.avatarConfig,
       // clearStreakRecovery wins over an explicit pass — used by the
       // streak service when recovery is completed or expired.

@@ -1,4 +1,7 @@
-﻿import 'dart:async';
+﻿// [3D-DISABLED-2026-08-21] dart:async import was for `unawaited()` around
+// MediaWarmup.primeWebViewEngine() — both commented out below. Re-add on
+// re-enable.
+// import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -7,7 +10,9 @@ import '../../config/colors.dart';
 import '../../models/battle_model.dart';
 import '../../providers/auth_provider.dart';
 import '../../providers/battle_provider.dart';
-import '../../services/media_warmup.dart';
+// [3D-DISABLED-2026-08-21] media_warmup import was only used for
+// primeWebViewEngine, commented below.
+// import '../../services/media_warmup.dart';
 import '../../sheets/new_battle_selection_sheet.dart';
 import '../../sheets/pending_battle_actions_sheet.dart';
 import '../../widgets/avatar_circle.dart';
@@ -60,12 +65,17 @@ class _BattlesScreenState extends ConsumerState<BattlesScreen> {
         svc.cancelExpiredPendingBattles(uid);
         svc.activateScheduledBattles(uid);
       }
+      // [3D-DISABLED-2026-08-21] — WebView priming skipped. The 3D
+      // character system is disabled, so the WebView never mounts and
+      // priming it wastes ~500-1000 ms of CPU on every Battles tab
+      // open. Re-enable alongside the rest of the 3D stack.
+      //
       // Prime the WebView engine so the first `Flutter3DViewer` mount
       // (avatar customizer / arena) doesn't pay the ~500-1000 ms
       // cold-start. The user is on the Battles tab → arena open is
       // seconds away; this is the right place for this warmup, not
       // during the splash where it competed with first-paint I/O.
-      unawaited(MediaWarmup.primeWebViewEngine());
+      // unawaited(MediaWarmup.primeWebViewEngine());
     });
   }
 

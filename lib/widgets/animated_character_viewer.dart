@@ -1,3 +1,20 @@
+// [3D-DISABLED-2026-08-21] — See lib/models/character_3d.dart header
+// for the full disable rationale and re-enable checklist.
+//
+// This entire file is temporarily disabled. When re-enabling the 3D
+// character system:
+//   1. Uncomment the block below.
+//   2. Restore `flutter_3d_controller` in pubspec.yaml (see marker there).
+//   3. Restore `flutter_inappwebview` in pubspec.yaml.
+//   4. Restore GLB assets under `assets/images/3dAvatars/` from git
+//      history (they were deleted to save AAB size).
+//   5. Uncomment sibling files: character_3d.dart, character_3d_provider
+//      .dart, character_3d_picker_sheet.dart.
+//   6. Uncomment field / method blocks marked [3D-DISABLED-2026-08-21]
+//      in user_model.dart, supabase_auth_service.dart, media_warmup.dart,
+//      battles_screen.dart.
+
+/*
 import 'package:flutter/material.dart';
 import 'package:flutter_3d_controller/flutter_3d_controller.dart';
 
@@ -81,3 +98,4 @@ class _AnimatedCharacterViewerState extends State<AnimatedCharacterViewer> {
     );
   }
 }
+*/
