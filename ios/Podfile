@@ -1,0 +1,114 @@
+# =============================================================================
+# StepBattle iOS Podfile
+# =============================================================================
+#
+# Managed by CocoaPods. Run `pod install` in ios/ after `flutter pub get`.
+#
+# Design decisions in this file:
+#
+#   • iOS 14.0 minimum (`platform :ios, '14.0'`) — matches what most Flutter
+#     packages require (health, flutter_stripe, flutter_local_notifications
+#     all baseline iOS 13-14). Lower would shrink coverage; higher would
+#     lock out too many users. iOS 14 = ~99% of active iPhones in 2026.
+#
+#   • use_frameworks! :linkage => :static — required by Firebase iOS SDK
+#     (they ship XCFrameworks). Static linkage avoids the "flutter run"
+#     Podfile modification warning and gives smaller binaries.
+#
+#   • Modular headers via `use_modular_headers!` — required by Firebase
+#     for its Swift interop.
+#
+#   • post_install hook — fixes common iOS build errors:
+#       - Bumps deployment target on each pod to 14.0 (prevents warnings
+#         from pods that default to iOS 11)
+#       - Disables bitcode (deprecated since Xcode 14; Flutter also
+#         doesn't need it)
+#       - Sets PERMISSION_HEALTHKIT to 1 for permission_handler so its
+#         HealthKit shim compiles
+# =============================================================================
+
+# Uncomment this line to define a global platform for your project.
+platform :ios, '14.0'
+
+# CocoaPods analytics sends network stats synchronously affecting flutter build
+# latency.
+ENV['COCOAPODS_DISABLE_STATS'] = 'true'
+
+project 'Runner', {
+  'Debug' => :debug,
+  'Profile' => :release,
+  'Release' => :release,
+}
+
+def flutter_root
+  generated_xcode_build_settings_path = File.expand_path(File.join('..', 'Flutter', 'Generated.xcconfig'), __dir__)
+  unless File.exist?(generated_xcode_build_settings_path)
+    raise "#{generated_xcode_build_settings_path} must exist. If you're running pod install manually, make sure flutter pub get is executed first"
+  end
+
+  File.foreach(generated_xcode_build_settings_path) do |line|
+    matches = line.match(/FLUTTER_ROOT\=(.*)/)
+    return matches[1].strip if matches
+  end
+  raise "FLUTTER_ROOT not found in #{generated_xcode_build_settings_path}. Try deleting Generated.xcconfig, then run flutter pub get"
+end
+
+require File.expand_path(File.join('packages', 'flutter_tools', 'bin', 'podhelper'), flutter_root)
+
+flutter_ios_podfile_setup
+
+target 'Runner' do
+  # Firebase requires modular headers for Swift interop.
+  use_modular_headers!
+
+  # Static linkage — required for Firebase XCFrameworks + smaller binaries.
+  use_frameworks! :linkage => :static
+
+  flutter_install_all_ios_pods File.dirname(File.realpath(__FILE__))
+
+  target 'RunnerTests' do
+    inherit! :search_paths
+  end
+end
+
+post_install do |installer|
+  installer.pods_project.targets.each do |target|
+    flutter_additional_ios_build_settings(target)
+
+    target.build_configurations.each do |config|
+      # -----------------------------------------------------------------------
+      # Deployment target — force all pods to iOS 14 minimum to match our app.
+      # Pods that default to iOS 11 emit noisy warnings; setting this silences
+      # them AND prevents subtle runtime issues on newer iOS.
+      # -----------------------------------------------------------------------
+      config.build_settings['IPHONEOS_DEPLOYMENT_TARGET'] = '14.0'
+
+      # -----------------------------------------------------------------------
+      # Bitcode — deprecated since Xcode 14; Flutter doesn't need it.
+      # Leaving it enabled slows down builds and inflates archive size.
+      # -----------------------------------------------------------------------
+      config.build_settings['ENABLE_BITCODE'] = 'NO'
+
+      # -----------------------------------------------------------------------
+      # Permission macros for the permission_handler plugin.
+      # See: https://pub.dev/packages/permission_handler#setup
+      # Each define enables the corresponding permission's iOS code path.
+      # Only enable what StepBattle actually requests — extras bloat the
+      # binary AND may trigger App Review scrutiny for unused permissions.
+      # -----------------------------------------------------------------------
+      config.build_settings['GCC_PREPROCESSOR_DEFINITIONS'] ||= [
+        '$(inherited)',
+        # Camera + Photos (image_picker profile-photo flow)
+        'PERMISSION_CAMERA=1',
+        'PERMISSION_PHOTOS=1',
+        # Motion (pedometer)
+        'PERMISSION_SENSORS=1',
+        # Location (Track sessions)
+        'PERMISSION_LOCATION=1',
+        # Notifications (already granted via UNUserNotificationCenter in
+        # AppDelegate, but permission_handler needs this to introspect state)
+        'PERMISSION_NOTIFICATIONS=1',
+      ]
+    end
+  end
+end

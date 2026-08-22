@@ -2,10 +2,25 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+	<!--
+	  StepBattle iOS Info.plist
+	  ==========================
+	  Every user-visible permission on iOS REQUIRES a matching *UsageDescription
+	  key. Missing strings = app CRASHES on the permission prompt AND Apple
+	  App Review REJECTS the build. The strings below are user-facing and are
+	  what appears in the iOS permission dialog — write them like a human,
+	  not like a developer.
+
+	  URL schemes: Google Sign-In and Stripe 3DS callbacks BOTH need
+	  CFBundleURLTypes entries. See placeholders below — replace with real
+	  values from GoogleService-Info.plist (REVERSED_CLIENT_ID) after
+	  Firebase registers the iOS app.
+	-->
+
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
 	<key>CFBundleDisplayName</key>
-	<string>Stepbattle</string>
+	<string>StepBattle</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>
@@ -28,6 +43,8 @@
 	<string>LaunchScreen</string>
 	<key>UIMainStoryboardFile</key>
 	<string>Main</string>
+
+	<!-- Orientation support — mirrors Android (portrait primary, landscape allowed) -->
 	<key>UISupportedInterfaceOrientations</key>
 	<array>
 		<string>UIInterfaceOrientationPortrait</string>
@@ -41,9 +58,146 @@
 		<string>UIInterfaceOrientationLandscapeLeft</string>
 		<string>UIInterfaceOrientationLandscapeRight</string>
 	</array>
+
+	<!-- Display + input -->
 	<key>CADisableMinimumFrameDurationOnPhone</key>
 	<true/>
 	<key>UIApplicationSupportsIndirectInputEvents</key>
 	<true/>
+
+	<!--
+	  ═══════════════════════════════════════════════════════════════════
+	  PERMISSION USAGE DESCRIPTIONS (required for App Review)
+	  ═══════════════════════════════════════════════════════════════════
+	-->
+
+	<!-- HealthKit — read/write step data (parity with Android Health Connect) -->
+	<key>NSHealthShareUsageDescription</key>
+	<string>StepBattle reads your daily step count from Apple Health to score battles and track streaks.</string>
+	<key>NSHealthUpdateUsageDescription</key>
+	<string>StepBattle records completed battles and step goals to Apple Health so your fitness data stays consistent.</string>
+
+	<!-- Motion — CoreMotion pedometer (parity with Android's TYPE_STEP_COUNTER) -->
+	<key>NSMotionUsageDescription</key>
+	<string>StepBattle uses motion data to count your steps automatically throughout the day.</string>
+
+	<!-- Camera — profile photo capture (image_picker package) -->
+	<key>NSCameraUsageDescription</key>
+	<string>StepBattle needs camera access to take a profile picture.</string>
+
+	<!-- Photo library — pick existing profile photo + save battle share cards -->
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>StepBattle needs photo library access to set your profile picture from an existing photo.</string>
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>StepBattle saves battle summary cards to your Photos so you can share them anywhere.</string>
+
+	<!-- Location — Track session GPS mapping (geolocator package) -->
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>StepBattle records your route during a Track session to show where you walked. Location is only accessed while a Track is active.</string>
+
+	<!-- Microphone — reserved for future voice features. Keep the string but the
+	     capability is only requested if a package pulls it in. -->
+	<key>NSMicrophoneUsageDescription</key>
+	<string>StepBattle does not currently use the microphone.</string>
+
+	<!-- Contacts — reserved for future friend-invite lookups. Same as microphone
+	     note above. -->
+	<key>NSContactsUsageDescription</key>
+	<string>StepBattle does not currently read your contacts.</string>
+
+	<!-- App Tracking Transparency — iOS 14.5+ requirement if any SDK does
+	     tracking (analytics via IDFA, ad networks). PostHog/Sentry generally
+	     don't need it in strict mode, but this string is here for review
+	     safety since one of the SDKs may trigger the prompt. -->
+	<key>NSUserTrackingUsageDescription</key>
+	<string>StepBattle uses this to keep your battle history synced across your devices.</string>
+
+	<!--
+	  ═══════════════════════════════════════════════════════════════════
+	  URL SCHEMES — Google Sign-In + Supabase Auth deep-link callbacks
+	  ═══════════════════════════════════════════════════════════════════
+
+	  IMPORTANT: The Google Sign-In scheme placeholder below MUST be replaced
+	  with the REVERSED_CLIENT_ID value from GoogleService-Info.plist AFTER
+	  the iOS app is registered on Firebase console. Format looks like:
+	    com.googleusercontent.apps.123456789-abcdef
+
+	  Stripe URL scheme deliberately omitted — Stripe is dormant (Razorpay
+	  is the sole live provider as of 2026-08-19). When Stripe India lands
+	  and we activate the Stripe path, add:
+	    <dict>
+	      <key>CFBundleTypeRole</key><string>Editor</string>
+	      <key>CFBundleURLName</key><string>stripe.callback</string>
+	      <key>CFBundleURLSchemes</key>
+	      <array><string>com.vipasa.stepbattle.stripe</string></array>
+	    </dict>
+	  ...and add the matching redirect URI to Supabase (Auth → URL
+	  Configuration → Redirect URLs).
+	-->
+	<key>CFBundleURLTypes</key>
+	<array>
+		<!-- Google Sign-In OAuth callback -->
+		<dict>
+			<key>CFBundleTypeRole</key>
+			<string>Editor</string>
+			<key>CFBundleURLName</key>
+			<string>google.sign-in</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<!-- ⚠ PLACEHOLDER: replace with REVERSED_CLIENT_ID from
+				     GoogleService-Info.plist once Firebase iOS app is registered. -->
+				<string>com.googleusercontent.apps.PLACEHOLDER_REVERSED_CLIENT_ID</string>
+			</array>
+		</dict>
+
+		<!-- Supabase Auth deep link callback (magic-link / OAuth return) -->
+		<dict>
+			<key>CFBundleTypeRole</key>
+			<string>Editor</string>
+			<key>CFBundleURLName</key>
+			<string>supabase.callback</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>io.supabase.stepbattle</string>
+			</array>
+		</dict>
+	</array>
+
+	<!--
+	  ═══════════════════════════════════════════════════════════════════
+	  Background Modes — declared here for completeness (also toggled in
+	  Xcode's Signing & Capabilities → Background Modes). Info.plist entry
+	  keeps the two sources in sync so `flutter build ios` from CLI works
+	  even before someone opens Xcode.
+	  ═══════════════════════════════════════════════════════════════════
+	-->
+	<key>UIBackgroundModes</key>
+	<array>
+		<!-- fetch: BGAppRefreshTask — periodic step sync when app is backgrounded -->
+		<string>fetch</string>
+		<!-- remote-notification: silent pushes wake the app for sync + battle wake pings -->
+		<string>remote-notification</string>
+		<!-- processing: BGProcessingTask — heavier background work (rare) -->
+		<string>processing</string>
+	</array>
+
+	<!--
+	  ═══════════════════════════════════════════════════════════════════
+	  Network + connectivity
+	  ═══════════════════════════════════════════════════════════════════
+	-->
+
+	<!-- Allow arbitrary HTTPS calls — Supabase, Razorpay, Stripe, Firebase all
+	     use HTTPS. Not allowing HTTP by default (best practice). -->
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsArbitraryLoads</key>
+		<false/>
+		<!-- Some SDKs bundle their own webviews with mixed content — Razorpay is
+		     the main one. Add exceptions here ONLY if needed after real testing. -->
+	</dict>
+
+	<!-- Queried schemes — for launching Google Fit / other apps. Currently none
+	     needed (Google Fit REST is retired; nothing to open externally). -->
 </dict>
 </plist>

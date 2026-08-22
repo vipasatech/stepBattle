@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!--
+	  RunnerDebug.entitlements — DEBUG build entitlements.
+	  =====================================================
+	  Identical to Runner.entitlements EXCEPT `aps-environment` is set to
+	  `development` so debug builds (Xcode → Run) receive pushes through
+	  APNs's sandbox environment.
+
+	  Xcode's Build Settings → Code Signing Entitlements → Debug should
+	  point at this file (Runner/RunnerDebug.entitlements) while Release
+	  points at Runner.entitlements. This is a one-time setup in Xcode
+	  GUI on the Mac.
+	-->
+
+	<!-- APNs sandbox environment for dev builds. -->
+	<key>aps-environment</key>
+	<string>development</string>
+
+	<key>com.apple.developer.healthkit</key>
+	<true/>
+	<key>com.apple.developer.healthkit.access</key>
+	<array/>
+
+	<key>com.apple.developer.applesignin</key>
+	<array>
+		<string>Default</string>
+	</array>
+
+	<!--
+	<key>com.apple.developer.associated-domains</key>
+	<array>
+		<string>applinks:stepbattle.fit</string>
+	</array>
+	-->
+
+	<key>keychain-access-groups</key>
+	<array>
+		<string>$(AppIdentifierPrefix)com.vipasa.stepbattle</string>
+	</array>
+</dict>
+</plist>

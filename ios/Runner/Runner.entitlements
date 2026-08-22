@@ -1,0 +1,60 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!--
+	  Runner.entitlements — RELEASE build entitlements.
+	  ==================================================
+	  Xcode's "Signing & Capabilities" tab writes to this file when you enable
+	  capabilities via GUI. Pre-populated here so `flutter build ipa` from the
+	  CLI works before anyone opens Xcode.
+
+	  MUST match the App ID's enabled capabilities in Apple Developer portal.
+	  If Xcode signing complains "entitlement not allowed", the App ID
+	  registration is missing that capability — enable it at
+	  https://developer.apple.com/account/resources/identifiers.
+	-->
+
+	<!-- APNs (push) environment. `production` for App Store / TestFlight builds.
+	     Development builds (attached to Xcode via cable) auto-swap to `development`
+	     via RunnerDebug.entitlements. -->
+	<key>aps-environment</key>
+	<string>production</string>
+
+	<!-- HealthKit — read step data. `.access` is the base grant; the specific
+	     data types (HKQuantityTypeIdentifierStepCount) are requested at
+	     runtime via the `health` package's Dart API. -->
+	<key>com.apple.developer.healthkit</key>
+	<true/>
+	<key>com.apple.developer.healthkit.access</key>
+	<array/>
+
+	<!-- Sign in with Apple — REQUIRED by App Review if the app offers any
+	     3rd-party sign-in (Google, Facebook, etc.). StepBattle has Google
+	     Sign-In → must also offer Apple. Package needed: sign_in_with_apple
+	     (add to pubspec.yaml when the Dart integration is wired). -->
+	<key>com.apple.developer.applesignin</key>
+	<array>
+		<string>Default</string>
+	</array>
+
+	<!-- Associated Domains — for Universal Links (opens https://stepbattle.fit/*
+	     links directly in the app instead of Safari). Requires an
+	     apple-app-site-association JSON file hosted at
+	     https://stepbattle.fit/.well-known/apple-app-site-association.
+	     Add the string once you're ready to enable Universal Links. -->
+	<!--
+	<key>com.apple.developer.associated-domains</key>
+	<array>
+		<string>applinks:stepbattle.fit</string>
+	</array>
+	-->
+
+	<!-- Keychain access groups — for Supabase auth session persistence across
+	     Face ID re-auths. Defaults to bundle-ID prefixed; explicit for clarity. -->
+	<key>keychain-access-groups</key>
+	<array>
+		<string>$(AppIdentifierPrefix)com.vipasa.stepbattle</string>
+	</array>
+</dict>
+</plist>
