@@ -72,6 +72,7 @@ class ModelViewer extends StatefulWidget {
     this.exposure,
     this.shadowIntensity,
     this.shadowSoftness,
+    this.toneMapping,
     this.animationName,
     this.animationCrossfadeDuration,
     this.autoPlay,
@@ -463,6 +464,12 @@ class ModelViewer extends StatefulWidget {
   ///
   /// `<model-viewer>` official document: https://modelviewer.dev/docs/#entrydocs-lightingandenv-attributes-shadowSoftness
   final num? shadowSoftness;
+
+  /// Tone-mapping curve applied by model-viewer 3.0+. Accepted values:
+  /// `neutral` (default), `aces`, `agx`, `commerce`. Pass `agx` to
+  /// match a Blender viewport using the AgX view transform (Blender
+  /// 4.x default). See modelviewer.dev docs for tone-mapping.
+  final String? toneMapping;
 
   // Animation Attributes
 

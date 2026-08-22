@@ -55,6 +55,34 @@ class Flutter3DViewer extends StatefulWidget {
   /// obj model initial camera values
   final double? scale, cameraX, cameraY, cameraZ;
 
+  /// model-viewer's `environment-image` attribute. Baked into the HTML
+  /// at first paint (before onLoad fires) so the scene never renders
+  /// with model-viewer's default HDR IBL if we don't want it.
+  ///
+  /// - null (default): model-viewer uses its built-in neutral HDR — the
+  ///   traditional behaviour.
+  /// - `''` (empty string): NO environment lighting; the GLB's own
+  ///   KHR_lights_punctual is the only light source.
+  /// - `'neutral'` / `'legacy'`: model-viewer built-in presets.
+  /// - Any URL: custom .hdr / .exr file.
+  final String? environmentImage;
+
+  /// model-viewer's `tone-mapping` attribute (model-viewer 3.0+).
+  /// Baked into the HTML at first paint. Accepted values:
+  ///   `neutral` (default), `aces`, `agx`, `commerce`.
+  /// Set to `agx` to match a Blender viewport that uses the AgX view
+  /// transform (Blender 4.x default) — the app then renders the GLB
+  /// with the same color-management curve the artist saw at export.
+  final String? toneMapping;
+
+  /// model-viewer's `exposure` attribute. Multiplier on the whole scene
+  /// (and skybox if present). Defaults to 1.0 when not set. Lower
+  /// values (0.5-0.8) darken; higher (1.5-2.0) brighten. Useful when
+  /// baked KHR_lights_punctual intensities in the GLB are hotter than
+  /// the app should render — instead of editing the GLB, compensate
+  /// here. Set null to accept model-viewer's 1.0 default.
+  final num? exposure;
+
   const Flutter3DViewer({
     super.key,
     required this.src,
@@ -65,6 +93,9 @@ class Flutter3DViewer extends StatefulWidget {
     this.onProgress,
     this.onLoad,
     this.onError,
+    this.environmentImage,
+    this.toneMapping,
+    this.exposure,
   })  : isObj = false,
         scale = null,
         cameraX = null,
@@ -85,6 +116,9 @@ class Flutter3DViewer extends StatefulWidget {
         controller = null,
         activeGestureInterceptor = true,
         enableTouch = true,
+        environmentImage = null,
+        toneMapping = null,
+        exposure = null,
         isObj = true;
 
   @override
@@ -138,6 +172,9 @@ class _Flutter3DViewerState extends State<Flutter3DViewer> {
             id: _id,
             src: widget.src,
             progressBarColor: widget.progressBarColor,
+            environmentImage: widget.environmentImage,
+            toneMapping: widget.toneMapping,
+            exposure: widget.exposure,
             relatedJs: _utils.injectedJS(_id, 'flutter-3d-controller'),
             interactionPrompt: InteractionPrompt.none,
             activeGestureInterceptor: widget.activeGestureInterceptor,

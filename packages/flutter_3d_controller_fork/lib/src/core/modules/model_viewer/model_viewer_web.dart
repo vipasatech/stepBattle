@@ -164,6 +164,7 @@ class ModelViewerState extends State<ModelViewer> {
       exposure: widget.exposure,
       shadowIntensity: widget.shadowIntensity,
       shadowSoftness: widget.shadowSoftness,
+      toneMapping: widget.toneMapping,
       // Animation Attributes
       animationName: widget.animationName,
       animationCrossfadeDuration: widget.animationCrossfadeDuration,

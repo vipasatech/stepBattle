@@ -63,3 +63,36 @@ to choose the output file.
 The Dart-side logger short-circuits to a no-op when neither
 `kDebugMode` nor `--dart-define=ENABLE_LOGS=true` is set, so release
 builds incur zero runtime cost even with this script wrapped around them.
+
+## `build-release.ps1` / `build-release.sh`
+
+Produces a release `.aab` or `.ipa` with the size- and
+symbolication-related flags we want on every release build:
+
+- `--tree-shake-icons` strips unused Material/Cupertino glyphs
+- `--split-debug-info=build/symbols/<sha>/` extracts Dart symbol tables
+  so Sentry can symbolicate release traces while the shipped artifact
+  stays lean
+- `--obfuscate` renames Dart identifiers (skip with `-SkipObfuscate`
+  / `--skip-obfuscate` when reproducing a crash locally)
+- `--dart-define=SENTRY_RELEASE=<sha>` tags every crash to a build
+
+```powershell
+# from repo root, Windows
+pwsh tools/build-release.ps1                     # android app bundle
+pwsh tools/build-release.ps1 -Target ios         # ios ipa
+pwsh tools/build-release.ps1 -Flavor prod        # with a flavor
+```
+
+```bash
+# from repo root, mac/linux
+tools/build-release.sh                           # android app bundle
+tools/build-release.sh --target=ios              # ios ipa
+tools/build-release.sh --flavor=prod             # with a flavor
+tools/build-release.sh --skip-obfuscate          # readable dart symbols
+```
+
+Symbols are written to `build/symbols/<sha>/` — once Sentry is set up
+in [ObservabilityService](../lib/services/observability_service.dart),
+upload them with `sentry-cli debug-files upload …` so release stack
+traces show real function names instead of obfuscated hashes.

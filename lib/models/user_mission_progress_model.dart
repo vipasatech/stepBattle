@@ -1,5 +1,3 @@
-import 'package:cloud_firestore/cloud_firestore.dart';
-
 class UserMissionProgress {
   final String id; // document ID: "{userId}_{missionId}_{periodStart}"
   final String userId;
@@ -34,22 +32,6 @@ class UserMissionProgress {
   }
 
   String get percentLabel => '${(progressFraction * 100).round()}%';
-
-  factory UserMissionProgress.fromFirestore(
-      DocumentSnapshot<Map<String, dynamic>> doc) {
-    final d = doc.data()!;
-    return UserMissionProgress(
-      id: doc.id,
-      userId: d['userId'] as String? ?? '',
-      missionId: d['missionId'] as String? ?? '',
-      currentValue: d['currentValue'] as int? ?? 0,
-      targetValue: d['targetValue'] as int? ?? 0,
-      isCompleted: d['isCompleted'] as bool? ?? false,
-      completedAt: (d['completedAt'] as Timestamp?)?.toDate(),
-      periodStart: d['periodStart'] as String? ?? '',
-    );
-  }
-
   /// Build from a Supabase `public.user_mission_progress` row. The composite
   /// primary key (user_id, mission_id, period_start) is mirrored into [id]
   /// using the same "{uid}_{mission}_{period}" convention the Firestore
@@ -70,18 +52,6 @@ class UserMissionProgress {
       periodStart: periodStart,
     );
   }
-
-  Map<String, dynamic> toFirestore() => {
-        'userId': userId,
-        'missionId': missionId,
-        'currentValue': currentValue,
-        'targetValue': targetValue,
-        'isCompleted': isCompleted,
-        'completedAt':
-            completedAt != null ? Timestamp.fromDate(completedAt!) : null,
-        'periodStart': periodStart,
-      };
-
   /// Payload for `public.user_mission_progress` upsert.
   Map<String, dynamic> toSupabaseRow() => {
         'user_id': userId,

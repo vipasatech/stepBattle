@@ -12,16 +12,19 @@ import 'auth_provider.dart';
 final friendServiceProvider =
     Provider<FriendService>((ref) => FriendService());
 
-/// Accepted friend relationships where the signed-in user is on EITHER side
-/// of the relationship.
+/// Base stream: **every** friend_relationships row the current user
+/// is party to — regardless of status. Accepted / pending-incoming /
+/// pending-outgoing views are cheap client-side filters over this.
 ///
-/// Postgres can't OR across two filtered fields in one realtime stream, so
-/// we open two `from('friend_relationships').stream()` subscriptions — one
-/// keyed on `from_user_id == me`, one on `to_user_id == me` — and merge
-/// their latest snapshots client-side. `status == 'accepted'` is filtered
-/// in the `.map` step because the Supabase realtime client doesn't accept
-/// multiple `.eq()` filters on the streaming endpoint.
-final acceptedFriendRelationshipsProvider =
+/// Postgres can't OR across two filtered fields in one realtime
+/// stream, so we open two `from('friend_relationships').stream()`
+/// subscriptions — one keyed on `from_user_id == me`, one on
+/// `to_user_id == me` — and merge their latest snapshots
+/// client-side. This provider fans out into the four legacy views
+/// (accepted, incoming, outgoing, count) as plain Providers, so
+/// we're at **two** realtime channels total instead of the four the
+/// separate stream providers used to open.
+final allFriendRelationshipsProvider =
     StreamProvider<List<FriendRelationship>>((ref) {
   final user = ref.watch(authStateProvider).valueOrNull;
   if (user == null) return Stream.value([]);
@@ -32,18 +35,15 @@ final acceptedFriendRelationshipsProvider =
   List<FriendRelationship> latestAsFrom = const [];
   List<FriendRelationship> latestAsTo = const [];
 
-  List<FriendRelationship> parseAccepted(List<Map<String, dynamic>> rows) =>
-      rows
-          .where((r) => r['status'] == 'accepted')
-          .map(FriendRelationship.fromSupabaseRow)
-          .toList();
+  List<FriendRelationship> parseAll(List<Map<String, dynamic>> rows) =>
+      rows.map(FriendRelationship.fromSupabaseRow).toList();
 
   void emit() {
     final merged = <String, FriendRelationship>{
       for (final r in latestAsFrom) r.relationshipId: r,
       for (final r in latestAsTo) r.relationshipId: r,
     };
-    AppLogger.friend.d('acceptedRels:emit',
+    AppLogger.friend.d('friendRels:emit',
         fields: {'count': merged.length, 'userId': uid});
     controller.add(merged.values.toList());
   }
@@ -54,11 +54,11 @@ final acceptedFriendRelationshipsProvider =
       .eq('from_user_id', uid)
       .listen(
         (rows) {
-          latestAsFrom = parseAccepted(rows);
+          latestAsFrom = parseAll(rows);
           emit();
         },
         onError: (Object e, StackTrace s) {
-          AppLogger.friend.e('acceptedRels:asFrom:streamError',
+          AppLogger.friend.e('friendRels:asFrom:streamError',
               fields: {'userId': uid}, error: e, stack: s);
         },
       );
@@ -69,11 +69,11 @@ final acceptedFriendRelationshipsProvider =
       .eq('to_user_id', uid)
       .listen(
         (rows) {
-          latestAsTo = parseAccepted(rows);
+          latestAsTo = parseAll(rows);
           emit();
         },
         onError: (Object e, StackTrace s) {
-          AppLogger.friend.e('acceptedRels:asTo:streamError',
+          AppLogger.friend.e('friendRels:asTo:streamError',
               fields: {'userId': uid}, error: e, stack: s);
         },
       );
@@ -85,6 +85,17 @@ final acceptedFriendRelationshipsProvider =
   });
 
   return controller.stream;
+});
+
+/// Accepted friend relationships (status == 'accepted'). Derived from
+/// the shared [allFriendRelationshipsProvider] — no additional
+/// realtime channel.
+final acceptedFriendRelationshipsProvider =
+    Provider<AsyncValue<List<FriendRelationship>>>((ref) {
+  final base = ref.watch(allFriendRelationshipsProvider);
+  return base.whenData(
+    (rels) => rels.where((r) => r.status == FriendStatus.accepted).toList(),
+  );
 });
 
 /// Set of user IDs that are accepted friends of the current user — derived
@@ -109,48 +120,44 @@ final friendsListProvider = FutureProvider<List<UserModel>>((ref) {
 });
 
 /// Smart search — handles both username and userCode (#).
+///
+/// `.autoDispose` — every keystroke creates a new provider instance
+/// keyed by the query string. Without autoDispose, each abandoned
+/// search result would be pinned in memory forever.
 final friendSearchProvider =
-    FutureProvider.family<List<UserModel>, String>((ref, query) {
+    FutureProvider.autoDispose.family<List<UserModel>, String>((ref, query) {
   if (query.trim().isEmpty) return Future.value([]);
   return ref.read(friendServiceProvider).search(query);
 });
 
-/// Incoming pending friend requests (people who want to be your friend).
+/// Incoming pending friend requests (people who want to be your
+/// friend). Derived from [allFriendRelationshipsProvider] — status
+/// pending AND the current user is the recipient. No dedicated
+/// realtime channel; the old `watchIncomingRequests` service call is
+/// no longer wired in.
 final incomingRequestsProvider =
-    StreamProvider<List<FriendRelationship>>((ref) {
-  final user = ref.watch(authStateProvider).valueOrNull;
-  if (user == null) return Stream.value([]);
-  return ref
-      .read(friendServiceProvider)
-      .watchIncomingRequests(user.id)
-      .map((list) {
-        AppLogger.friend.d('incomingRequests:emit',
-            fields: {'count': list.length, 'userId': user.id});
-        return list;
-      })
-      .handleError((Object e, StackTrace s) {
-        AppLogger.friend.e('incomingRequests:streamError',
-            fields: {'userId': user.id}, error: e, stack: s);
-      });
+    Provider<AsyncValue<List<FriendRelationship>>>((ref) {
+  final uid = ref.watch(authStateProvider).valueOrNull?.id;
+  final base = ref.watch(allFriendRelationshipsProvider);
+  return base.whenData((rels) => uid == null
+      ? const <FriendRelationship>[]
+      : rels
+          .where((r) => r.status == FriendStatus.pending && r.toUserId == uid)
+          .toList());
 });
 
-/// Outgoing pending friend requests (people you've asked to be friends with).
+/// Outgoing pending friend requests (people you've asked to be
+/// friends with). Derived from [allFriendRelationshipsProvider] —
+/// status pending AND the current user is the sender.
 final outgoingRequestsProvider =
-    StreamProvider<List<FriendRelationship>>((ref) {
-  final user = ref.watch(authStateProvider).valueOrNull;
-  if (user == null) return Stream.value([]);
-  return ref
-      .read(friendServiceProvider)
-      .watchOutgoingRequests(user.id)
-      .map((list) {
-        AppLogger.friend.d('outgoingRequests:emit',
-            fields: {'count': list.length, 'userId': user.id});
-        return list;
-      })
-      .handleError((Object e, StackTrace s) {
-        AppLogger.friend.e('outgoingRequests:streamError',
-            fields: {'userId': user.id}, error: e, stack: s);
-      });
+    Provider<AsyncValue<List<FriendRelationship>>>((ref) {
+  final uid = ref.watch(authStateProvider).valueOrNull?.id;
+  final base = ref.watch(allFriendRelationshipsProvider);
+  return base.whenData((rels) => uid == null
+      ? const <FriendRelationship>[]
+      : rels
+          .where((r) => r.status == FriendStatus.pending && r.fromUserId == uid)
+          .toList());
 });
 
 /// Resolved user profiles for incoming requests (senders).

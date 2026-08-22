@@ -1,4 +1,5 @@
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
     <uses-permission android:name="android.permission.INTERNET"/>
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>
 
@@ -14,14 +15,48 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC"/>
 
+    <!-- Background step-sync wake-ups.
+         android_alarm_manager_plus schedules ~4 wakes/day (early morning,
+         midday, evening, before midnight) that fire headlessStepSync so
+         we get periodic snapshots even when app + FGS + WorkManager have
+         all been suppressed by aggressive OEM battery savers.
+
+         We DELIBERATELY do NOT declare SCHEDULE_EXACT_ALARM or
+         USE_EXACT_ALARM. Google Play's exact-alarm policy restricts
+         USE_EXACT_ALARM to alarm-clock / timer / calendar apps only
+         — fitness-sync doesn't qualify, and declaring it risks app
+         rejection or store removal. Instead we use setAndAllowWhileIdle
+         (via alarm_wake_scheduler.dart passing `exact: false,
+         allowWhileIdle: true`) which:
+           • Fires during Doze mode (allowWhileIdle bypasses Doze deferral)
+           • Doesn't need any special permission
+           • May drift ±10 min from the scheduled time
+         The drift is fine for step sync — the goal is "sync happens
+         every ~6h" not "sync happens at exactly 06:00:00.000".
+         RECEIVE_BOOT_COMPLETED is declared transitively by the
+         flutter_foreground_task plugin; the alarm plugin reuses it to
+         re-register wakes after a reboot. -->
+    <!-- (no exact-alarm permissions declared — see comment above) -->
+
     <!-- Location. Coarse for the original home-district capture; fine +
          background for the Track (run/walk) feature so recording continues
-         when the screen turns off. Background is gated behind an in-app
-         prompt (PermissionService.requestRunPermissions) triggered only by
-         tapping the Track FAB, so users who never use Track never see it. -->
+         when the screen turns off. Background is gated behind the
+         BackgroundLocationDisclosureDialog (lib/sheets/
+         background_location_disclosure_dialog.dart) triggered only by
+         tapping the Track FAB — this is the "prominent disclosure" UI
+         Google requires prior to the runtime permission prompt. Users
+         who never use Track never see it. -->
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION"/>
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION"/>
     <uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION"/>
+    <!-- Location-typed foreground service for Track (run/walk) session
+         GPS recording. run_tracking_service.dart wires geolocator's
+         AndroidSettings.foregroundNotificationConfig so a "Recording
+         your Track" notification stays visible for the whole session
+         and GPS updates keep flowing when the screen is off or the
+         app is backgrounded. Requires a separate Play Console
+         declaration (Foreground service permissions → Location) with
+         a demo video showing the notification. -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION"/>
 
     <!-- Health Connect permissions -->
@@ -64,6 +99,18 @@
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
 
+            <!-- Custom-scheme deep link so the /pricing page on the marketing
+                 site can push users straight into the in-app upgrade flow via
+                 `stepbattle://upgrade?plan=pro` (or `?plan=family`). The app
+                 resolves the path itself; the query string is forwarded to
+                 the UpgradeCTASheet with the plan pre-selected. -->
+            <intent-filter android:autoVerify="false">
+                <action android:name="android.intent.action.VIEW"/>
+                <category android:name="android.intent.category.DEFAULT"/>
+                <category android:name="android.intent.category.BROWSABLE"/>
+                <data android:scheme="stepbattle" android:host="upgrade"/>
+            </intent-filter>
+
             <!-- Required by Health Connect (Play Store version on Android <14):
                  the calling app must expose itself as a handler for the
                  permission-rationale intent, otherwise Health Connect rejects
@@ -84,6 +131,16 @@
             </intent-filter>
         </activity-alias>
 
+        <!-- image_cropper (uCrop) — profile-photo crop step launched from
+             LocalProfilePhotoService.pickCropAndSave. Without this
+             declaration the cropper's Intent target isn't found and the
+             app crashes with ActivityNotFoundException the moment
+             `ImageCropper().cropImage(...)` runs. -->
+        <activity
+            android:name="com.yalantis.ucrop.UCropActivity"
+            android:screenOrientation="portrait"
+            android:theme="@style/UCropTheme"/>
+
         <!-- Background step-sync foreground service (flutter_foreground_task).
              Type is `dataSync` only — even though the Track session uses GPS,
              we deliberately DO NOT add the `location` FGS type here. The
@@ -98,6 +155,38 @@
             android:foregroundServiceType="dataSync"
             android:exported="false" />
 
+        <!-- android_alarm_manager_plus — REQUIRED per the plugin's README.
+             The plugin ships a bare manifest stub, so the host app must
+             declare every component itself. Without these:
+               • `AlarmService` — JobIntentService that runs the callback;
+                  missing → the periodic wake silently no-ops.
+               • `AlarmBroadcastReceiver` — receives the OS alarm intent
+                  and forwards to AlarmService.
+               • `RebootBroadcastReceiver` — re-registers alarms after
+                  device reboot when the plugin call uses
+                  `rescheduleOnReboot: true` (see
+                  `lib/services/alarm_wake_scheduler.dart:105`). Missing
+                  this specific receiver was throwing IllegalArgumentException
+                  on every `AndroidAlarmManager.periodic(...)` call
+                  (verified in Diagnostics 2026-08-10).
+             Grouping with the FGS block above because both are part of
+             the same "keep step sync alive in the background" story. -->
+        <service
+            android:name="dev.fluttercommunity.plus.androidalarmmanager.AlarmService"
+            android:permission="android.permission.BIND_JOB_SERVICE"
+            android:exported="false"/>
+        <receiver
+            android:name="dev.fluttercommunity.plus.androidalarmmanager.AlarmBroadcastReceiver"
+            android:exported="false"/>
+        <receiver
+            android:name="dev.fluttercommunity.plus.androidalarmmanager.RebootBroadcastReceiver"
+            android:enabled="false"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED"/>
+            </intent-filter>
+        </receiver>
+
         <!-- Monochrome status-bar icon for the persistent live-stats
              notification. The key here is referenced from Dart via
              NotificationIcon(metaDataName: 'com.stepbattle.notification.icon')
@@ -105,6 +194,21 @@
         <meta-data
             android:name="com.stepbattle.notification.icon"
             android:resource="@drawable/ic_stat_logo" />
+
+        <!-- Default notification channel used by Firebase Messaging when it
+             auto-displays an incoming FCM `notification` block (i.e. app is
+             backgrounded or terminated). WITHOUT this meta-data, the SDK
+             falls back to a system-created "Miscellaneous" channel that
+             many OEMs (Xiaomi HyperOS, OnePlus, Realme) silently drop or
+             deprioritize — battle-invite pushes weren't landing prior to
+             1.1.6+23 because of this exact miss.
+             The channel `stepbattle_alerts` is registered programmatically
+             at app startup by PersistentNotifications.init() with
+             IMPORTANCE_HIGH so incoming pushes get a heads-up popup on
+             modern Android. -->
+        <meta-data
+            android:name="com.google.firebase.messaging.default_notification_channel_id"
+            android:value="stepbattle_alerts" />
 
         <!-- Home-screen widget. Dart pushes data via HomeWidget.saveWidgetData
              + HomeWidget.updateWidget('StepBattleWidgetProvider'); this

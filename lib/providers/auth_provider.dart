@@ -2,11 +2,18 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../models/user_model.dart';
+import '../repositories/profile_repository.dart';
 import '../services/supabase_auth_service.dart';
 
 /// Singleton Supabase-backed auth service.
 final authServiceProvider = Provider<SupabaseAuthService>((ref) {
   return SupabaseAuthService();
+});
+
+/// Cache-then-network profile repository. Emits the last-known profile
+/// row from Hive on cold boot before Supabase's realtime stream lands.
+final profileRepositoryProvider = Provider<ProfileRepository>((ref) {
+  return ProfileRepository();
 });
 
 /// Stream of the Supabase auth user (or null when signed out).
@@ -52,36 +59,37 @@ final preferredNameAskedThisSessionProvider = StateProvider<bool>((ref) {
 ///   • `display_name` non-empty
 ///   • `date_of_birth`, `gender`, `fitness_level` all present
 ///
-/// `preferred_name` gets a second-chance rule: if it's still NULL AND
-/// we haven't asked in this session, the user is treated as NOT
-/// onboarded so the redirect gate sends them back to the onboarding
-/// screen (which lands on the preferred-name step because everything
-/// else is already answered). Once they submit onboarding
-/// [preferredNameAskedThisSessionProvider] flips to true and this
-/// provider returns true even with a null preferred_name, breaking
-/// the same-session redirect loop. Next login resets the flag and we
-/// ask again.
+/// **`preferred_name` is NOT part of this gate.** Previously we treated
+/// a null preferred_name as "not onboarded" on every fresh session so
+/// we could re-prompt. Testers reported it as a bug: they skipped the
+/// nickname step (it's optional), and every subsequent app open forced
+/// them back through onboarding starting at the preferred-name page.
+/// If the user wants to add / change a nickname later, they do it from
+/// Settings → Preferred name.
 final hasCompletedOnboardingProvider = FutureProvider<bool>((ref) async {
   final user = ref.watch(authStateProvider).valueOrNull;
   if (user == null) return false;
-  final profile = await ref.read(authServiceProvider).getProfile(user.id);
+  // Consume the shared realtime stream instead of issuing a fresh
+  // `select().eq().maybeSingle()` — that fetch was firing on every auth
+  // tick + every router `refreshListenable` cycle, duplicating work
+  // [currentUserProvider] already does. `.future` blocks until the
+  // stream produces its first non-null (or null) row, so onboarding
+  // status still resolves before the redirect gate runs.
+  final profile = await ref.watch(currentUserProvider.future);
   if (profile == null) return false;
-  final coreDone = profile.displayName.isNotEmpty &&
+  return profile.displayName.isNotEmpty &&
       profile.dateOfBirth != null &&
       profile.gender != null &&
       profile.fitnessLevel != null;
-  if (!coreDone) return false;
-  if (profile.preferredName != null) return true;
-  // Core survey is done, preferred_name is NULL. Escape hatch: if
-  // we've asked this session (user tapped Continue on the preferred-
-  // name step and moved on), treat them as onboarded so the redirect
-  // doesn't loop. Otherwise mark as unonboarded so we ask.
-  return ref.watch(preferredNameAskedThisSessionProvider);
 });
 
-/// Stream of the current user's profile row from Supabase.
+/// Stream of the current user's profile row.
+///
+/// Backed by [ProfileRepository] so the UI paints the Hive-cached row
+/// on frame 1 (cold boot) and updates to the live Supabase row as soon
+/// as it arrives. See [profileRepositoryProvider].
 final currentUserProvider = StreamProvider<UserModel?>((ref) {
   final user = ref.watch(authStateProvider).valueOrNull;
   if (user == null) return Stream.value(null);
-  return ref.read(authServiceProvider).watchProfile(user.id);
+  return ref.read(profileRepositoryProvider).watch(user.id);
 });

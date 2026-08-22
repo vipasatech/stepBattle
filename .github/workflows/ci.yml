@@ -1,0 +1,76 @@
+name: CI
+
+# Runs analyze + tests on every push to main and every PR.
+# Keeps the bar honest — analyze catches type / import / unused-var
+# regressions; tests catch behavioral regressions in the layers pinned
+# by test/unit/ + test/widget/.
+#
+# Not on this runner (yet):
+#   - Android / iOS release build — takes ~15 min and needs signing
+#     secrets. Add once the pipeline promotes to shipping automation.
+#   - Coverage upload — turn on once we've committed to a service
+#     (codecov / coveralls / self-host).
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  # Cancel superseded runs on the same ref — a fresh commit
+  # invalidates whatever's in-flight for the previous SHA.
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  analyze-and-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Full history isn't needed for analyze+test — shallow keeps
+          # the checkout under 5 s on a repo this size.
+          fetch-depth: 1
+
+      - name: Set up Java (needed by Flutter for Android tooling init)
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          # Pinned to the same channel + version the local dev
+          # environment uses (see README → Getting started for how to
+          # bump). Avoids drift where CI is green but a fresh clone
+          # fails against a newer stable's analyzer rules.
+          flutter-version: '3.27.1'
+          channel: stable
+          cache: true
+
+      - name: Verify Flutter install
+        run: flutter --version
+
+      - name: Stamp .env for build
+        # The app's boot path reads .env via flutter_dotenv. Real
+        # secrets are `changeme` in CI — the placeholder-safe boot in
+        # observability_service.dart drops into no-op mode, so
+        # analyze+test never hit real Sentry / PostHog / Supabase.
+        run: cp .env.example .env
+
+      - name: Get dependencies
+        run: flutter pub get
+
+      - name: Analyze
+        # `--no-fatal-infos` — infos are style hints, not failures.
+        # Warnings and errors both fail the job.
+        run: flutter analyze --no-fatal-infos
+
+      - name: Test
+        # `--reporter compact` — one line per test, so the log is
+        # easy to skim on a failed run without expanding the step.
+        run: flutter test --reporter compact

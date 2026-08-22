@@ -43,6 +43,16 @@ final runSessionHistoryProvider = FutureProvider<List<RunSession>>((ref) async {
   return ref.read(runTrackingServiceProvider).getHistory(userId: user.id);
 });
 
+/// Lean "just today's most-recent session (or null)" — drives the
+/// Home-tab peek card without pinning the full history provider open.
+/// `.autoDispose` so it releases when the Home tab is off-screen.
+final todaysRunSessionProvider =
+    FutureProvider.autoDispose<RunSession?>((ref) async {
+  final user = ref.watch(authStateProvider).valueOrNull;
+  if (user == null) return null;
+  return ref.read(runTrackingServiceProvider).getTodaysSession(userId: user.id);
+});
+
 /// One saved session by id (drives the detail screen). autoDispose so it
 /// re-fetches whenever the user navigates into a session; explicit
 /// `ref.invalidate(trackSessionByIdProvider(id))` after a rename/delete on

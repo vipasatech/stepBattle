@@ -26,6 +26,15 @@ class PersistentNotifications {
   static const String _battleChannelId = 'stepbattle_battle_status';
   static const String _trackChannelId = 'stepbattle_track_status';
 
+  /// FCM incoming-push channel — the "default" channel Firebase Messaging
+  /// looks up via the `default_notification_channel_id` meta-data in
+  /// AndroidManifest.xml. Without a real channel with IMPORTANCE_HIGH,
+  /// the SDK falls back to a system "Miscellaneous" channel that some
+  /// OEMs (Xiaomi/OnePlus/Realme) silently drop or deprioritize —
+  /// which is why battle-invite pushes weren't landing pre-1.1.6+23.
+  /// HIGH importance ensures heads-up popup on modern Android.
+  static const String _fcmAlertsChannelId = 'stepbattle_alerts';
+
   /// Stable notification ids — the same id from `show()` always replaces
   /// the previous post for that channel.
   static const int _battleNotifId = 7301;
@@ -40,6 +49,17 @@ class PersistentNotifications {
 
   int _lastBattleHash = 0;
   int _lastTrackHash = 0;
+
+  /// Whether the battle notification is currently posted. The
+  /// last-hash field doubles as this signal — a non-zero value means
+  /// a show() call went through without a subsequent cancel().
+  /// Read from the FGS isolate to decide whether polling for
+  /// battle/track updates is worth it right now.
+  bool get isBattlePosted => _lastBattleHash != 0;
+
+  /// Whether the track notification is currently posted. Same
+  /// contract as [isBattlePosted].
+  bool get isTrackPosted => _lastTrackHash != 0;
 
   Future<void> init({
     required void Function(String? payload) onTap,
@@ -75,6 +95,21 @@ class PersistentNotifications {
             'Run / walk tracking',
             description:
                 'Live distance, steps, and calories while a Track session is recording.',
+            importance: Importance.high,
+          ),
+        );
+        // FCM incoming-alert channel — battle invites, battle results,
+        // friend requests, etc. Referenced by
+        // `default_notification_channel_id` meta-data in
+        // AndroidManifest.xml. IMPORTANCE_HIGH so incoming pushes
+        // display as heads-up popup on modern Android and aren't
+        // silently dropped by OEM battery-savers.
+        await android.createNotificationChannel(
+          const AndroidNotificationChannel(
+            _fcmAlertsChannelId,
+            'Alerts',
+            description:
+                'Battle invites, battle results, friend requests, and other real-time app alerts.',
             importance: Importance.high,
           ),
         );

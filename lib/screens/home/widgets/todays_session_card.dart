@@ -25,12 +25,16 @@ class TodaysSessionCard extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final historyAsync = ref.watch(runSessionHistoryProvider);
-    final session = historyAsync.maybeWhen(
-      data: _pickTodaysSession,
-      orElse: () => null,
-    );
-    if (session == null) return const SizedBox.shrink();
+    // Lean single-row fetch — was pulling the full ~20-row history
+    // via `runSessionHistoryProvider` and client-side picking today's
+    // row, which pinned the history provider open for the whole
+    // session (further pinned by `last28DaysMetricsProvider` watching
+    // its future). The lean autoDispose version releases as soon as
+    // the Home tab is off screen.
+    final session = ref.watch(todaysRunSessionProvider).valueOrNull;
+    if (session == null || !_qualifiesForHome(session)) {
+      return const SizedBox.shrink();
+    }
 
     // Pull surface colour from Theme so this widget registers a
     // dependency on the InheritedTheme — without that dependency, the
@@ -67,22 +71,14 @@ class TodaysSessionCard extends ConsumerWidget {
     );
   }
 
-  /// Pick today's most-recent qualifying session from [history].
-  /// Returns `null` if none matches — history is ordered
-  /// newest-first, so the first match wins.
-  static RunSession? _pickTodaysSession(List<RunSession> history) {
-    final now = DateTime.now();
-    for (final s in history) {
-      if (s.steps <= 50) continue;
-      if (s.durationSeconds <= 300) continue;
-      final started = s.startedAt.toLocal();
-      if (started.year != now.year ||
-          started.month != now.month ||
-          started.day != now.day) {
-        continue;
-      }
-      return s;
-    }
-    return null;
+  /// Whether the fetched session is meaningful enough to surface as
+  /// the Home peek card. `todaysRunSessionProvider` already scoped to
+  /// today's date server-side; this predicate carries the "not too
+  /// short / not too few steps" gate the old client-side picker
+  /// enforced.
+  static bool _qualifiesForHome(RunSession s) {
+    if (s.steps <= 50) return false;
+    if (s.durationSeconds <= 300) return false;
+    return true;
   }
 }

@@ -100,7 +100,7 @@ class ClanService {
 
         // 5. Captain name for the notification body.
         final captainProfile = await _supabase
-            .from('profiles')
+            .from('profiles_public')
             .select('display_name')
             .eq('id', captainId)
             .maybeSingle();
@@ -162,7 +162,7 @@ class ClanService {
         .toList());
 
     final captain = await _supabase
-        .from('profiles')
+        .from('profiles_public')
         .select('display_name')
         .eq('id', captainId)
         .maybeSingle();
@@ -237,7 +237,7 @@ class ClanService {
 
     // Notify the captain.
     final user = await _supabase
-        .from('profiles')
+        .from('profiles_public')
         .select('display_name')
         .eq('id', userId)
         .maybeSingle();
@@ -637,7 +637,7 @@ class ClanService {
           final userIds =
               rows.map((r) => r['user_id'] as String).toList();
           final profilesRaw = await _supabase
-              .from('profiles')
+              .from('profiles_public')
               .select('id, display_name, preferred_name, avatar_url')
               .inFilter('id', userIds);
           final byId = <String, Map<String, dynamic>>{

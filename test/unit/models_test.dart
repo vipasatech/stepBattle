@@ -5,45 +5,10 @@ import 'package:stepbattle/models/mission_model.dart';
 import 'package:stepbattle/models/user_mission_progress_model.dart';
 import 'package:stepbattle/models/clan_model.dart';
 import 'package:stepbattle/models/clan_battle_model.dart';
-import 'package:stepbattle/models/leaderboard_entry_model.dart';
-import 'package:stepbattle/models/friend_relationship_model.dart';
 import 'package:stepbattle/models/step_log_model.dart';
 
 void main() {
   group('UserModel', () {
-    test('toFirestore produces all required fields', () {
-      final user = UserModel(
-        userId: 'u1',
-        userCode: '#TEST1',
-        displayName: 'TestUser',
-        email: 'test@test.com',
-        level: 5,
-        totalXP: 3000,
-        currentStreak: 7,
-        bestStreak: 14,
-        rank: 42,
-        dailyStepGoal: 10000,
-        totalStepsAllTime: 100000,
-        friends: ['f1', 'f2'],
-        clanId: 'c1',
-        createdAt: DateTime(2025, 1, 1),
-        lastActiveAt: DateTime(2025, 4, 5),
-      );
-
-      final map = user.toFirestore();
-      expect(map['displayName'], 'TestUser');
-      expect(map['email'], 'test@test.com');
-      expect(map['level'], 5);
-      expect(map['totalXP'], 3000);
-      expect(map['currentStreak'], 7);
-      expect(map['bestStreak'], 14);
-      expect(map['rank'], 42);
-      expect(map['dailyStepGoal'], 10000);
-      expect(map['totalStepsAllTime'], 100000);
-      expect(map['friends'], ['f1', 'f2']);
-      expect(map['clanId'], 'c1');
-    });
-
     test('copyWith preserves unchanged fields', () {
       final user = UserModel(
         userId: 'u1',
@@ -60,54 +25,6 @@ void main() {
       expect(updated.email, 'test@test.com'); // unchanged
       expect(updated.userId, 'u1'); // immutable
     });
-
-    test('toFirestore includes geo fields when set', () {
-      final user = UserModel(
-        userId: 'u1',
-        userCode: '#GEO1',
-        displayName: 'Geo',
-        email: 'geo@test.com',
-        createdAt: DateTime(2026, 1, 1),
-        lastActiveAt: DateTime(2026, 4, 28),
-        countryCode: 'IN',
-        countryName: 'India',
-        stateName: 'Telangana',
-        districtName: 'Hyderabad',
-        homeLat: 17.385,
-        homeLng: 78.486,
-        homeSetAt: DateTime(2026, 4, 28),
-      );
-
-      final map = user.toFirestore();
-      expect(map['countryCode'], 'IN');
-      expect(map['countryName'], 'India');
-      expect(map['stateName'], 'Telangana');
-      expect(map['districtName'], 'Hyderabad');
-      expect(map['homeLat'], 17.385);
-      expect(map['homeLng'], 78.486);
-      // homeSetAt is serialized as a Timestamp instance — just verify it
-      // is non-null without depending on Firestore types in this unit test.
-      expect(map['homeSetAt'], isNotNull);
-    });
-
-    test('toFirestore writes nulls for unset geo fields', () {
-      final user = UserModel(
-        userId: 'u1',
-        userCode: '#GEO2',
-        displayName: 'NoHome',
-        email: 'nohome@test.com',
-        createdAt: DateTime(2026, 1, 1),
-        lastActiveAt: DateTime(2026, 4, 28),
-      );
-
-      final map = user.toFirestore();
-      expect(map['countryCode'], isNull);
-      expect(map['stateName'], isNull);
-      expect(map['districtName'], isNull);
-      expect(map['homeLat'], isNull);
-      expect(map['homeSetAt'], isNull);
-    });
-
     test('hasHome is true only when countryCode is set', () {
       final unset = UserModel(
         userId: 'u1',
@@ -156,33 +73,6 @@ void main() {
   });
 
   group('BattleModel', () {
-    test('toFirestore serializes all fields', () {
-      final battle = BattleModel(
-        battleId: 'b1',
-        type: BattleType.oneVsOne,
-        status: BattleStatus.active,
-        participants: [
-          BattleParticipant(userId: 'u1', displayName: 'Player1', currentSteps: 5000),
-          BattleParticipant(userId: 'u2', displayName: 'Player2', currentSteps: 3000),
-        ],
-        startTime: DateTime(2025, 4, 1),
-        endTime: DateTime(2025, 4, 2),
-        durationDays: 1,
-        xpReward: 200,
-        winnerId: null,
-        createdBy: 'u1',
-        createdAt: DateTime(2025, 1, 1),
-      );
-
-      final map = battle.toFirestore();
-      expect(map['type'], '1v1');
-      expect(map['status'], 'active');
-      expect((map['participants'] as List).length, 2);
-      expect(map['durationDays'], 1);
-      expect(map['xpReward'], 200);
-      expect(map['createdBy'], 'u1');
-    });
-
     test('opponentFor returns correct participant', () {
       final battle = BattleModel(
         battleId: 'b1',
@@ -281,37 +171,23 @@ void main() {
   });
 
   group('MissionModel', () {
-    test('default daily missions has 3 entries', () {
-      expect(MissionModel.defaultDaily.length, 3);
+    // v2 economy — the client-seed catalog is now the single
+    // "daily_streak" system mission; every other mission is
+    // published by the admin from the website. Weekly seeds are
+    // empty on the client.
+    test('default daily missions has 1 entry (daily_streak)', () {
+      expect(MissionModel.defaultDaily.length, 1);
+      expect(MissionModel.defaultDaily.first.missionId, 'daily_streak');
     });
 
-    test('default weekly missions has 3 entries', () {
-      expect(MissionModel.defaultWeekly.length, 3);
+    test('default weekly missions is empty (admin-managed)', () {
+      expect(MissionModel.defaultWeekly, isEmpty);
     });
 
-    test('default daily missions cover steps, battle, streak', () {
-      final categories =
-          MissionModel.defaultDaily.map((m) => m.category).toSet();
-      expect(categories, contains(MissionCategory.steps));
-      expect(categories, contains(MissionCategory.battle));
-      expect(categories, contains(MissionCategory.streak));
-    });
-
-    test('toFirestore serializes type correctly', () {
-      const mission = MissionModel(
-        missionId: 'm1',
-        type: MissionType.weekly,
-        title: 'Test',
-        description: 'Desc',
-        category: MissionCategory.steps,
-        targetValue: 50000,
-        xpReward: 500,
-        difficulty: 'hard',
-      );
-
-      final map = mission.toFirestore();
-      expect(map['type'], 'weekly');
-      expect(map['category'], 'steps');
+    test('daily_streak seed pays 50 XP for the streak category', () {
+      final streak = MissionModel.defaultDaily.first;
+      expect(streak.category, MissionCategory.streak);
+      expect(streak.xpReward, 50);
     });
   });
 
@@ -457,25 +333,6 @@ void main() {
   });
 
   group('StepLogModel', () {
-    test('toFirestore serializes all fields', () {
-      final log = StepLogModel(
-        logId: 'l1',
-        userId: 'u1',
-        date: '2025-04-05',
-        stepCount: 8500,
-        calories: 340,
-        source: 'healthkit',
-        syncedAt: DateTime(2025, 4, 5, 12, 0),
-      );
-
-      final map = log.toFirestore();
-      expect(map['userId'], 'u1');
-      expect(map['date'], '2025-04-05');
-      expect(map['stepCount'], 8500);
-      expect(map['calories'], 340);
-      expect(map['source'], 'healthkit');
-    });
-
     test('copyWith updates selected fields', () {
       final log = StepLogModel(
         logId: 'l1',
@@ -494,37 +351,7 @@ void main() {
     });
   });
 
-  group('LeaderboardEntry', () {
-    test('toFirestore produces correct structure', () {
-      final entry = LeaderboardEntry(
-        userId: 'u1',
-        displayName: 'Champ',
-        totalXP: 150000,
-        rank: 1,
-        updatedAt: DateTime(2025, 4, 5),
-      );
+  group('LeaderboardEntry', () {  });
 
-      final map = entry.toFirestore();
-      expect(map['displayName'], 'Champ');
-      expect(map['totalXP'], 150000);
-      expect(map['rank'], 1);
-    });
-  });
-
-  group('FriendRelationship', () {
-    test('toFirestore serializes status', () {
-      final rel = FriendRelationship(
-        relationshipId: 'r1',
-        fromUserId: 'u1',
-        toUserId: 'u2',
-        status: FriendStatus.pending,
-        createdAt: DateTime(2025, 4, 5),
-      );
-
-      final map = rel.toFirestore();
-      expect(map['status'], 'pending');
-      expect(map['fromUserId'], 'u1');
-      expect(map['toUserId'], 'u2');
-    });
-  });
+  group('FriendRelationship', () {  });
 }

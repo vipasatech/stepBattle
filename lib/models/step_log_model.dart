@@ -1,5 +1,3 @@
-import 'package:cloud_firestore/cloud_firestore.dart';
-
 class StepLogModel {
   final String logId;
   final String userId;
@@ -18,20 +16,6 @@ class StepLogModel {
     required this.source,
     required this.syncedAt,
   });
-
-  factory StepLogModel.fromFirestore(DocumentSnapshot<Map<String, dynamic>> doc) {
-    final data = doc.data()!;
-    return StepLogModel(
-      logId: doc.id,
-      userId: data['userId'] as String? ?? '',
-      date: data['date'] as String? ?? '',
-      stepCount: data['stepCount'] as int? ?? 0,
-      calories: data['calories'] as int? ?? 0,
-      source: data['source'] as String? ?? '',
-      syncedAt: (data['syncedAt'] as Timestamp?)?.toDate() ?? DateTime.now(),
-    );
-  }
-
   /// Build from a Supabase `public.step_logs` row.
   factory StepLogModel.fromSupabaseRow(Map<String, dynamic> data) {
     return StepLogModel(
@@ -56,18 +40,6 @@ class StepLogModel {
         'source': source,
         'synced_at': syncedAt.toUtc().toIso8601String(),
       };
-
-  Map<String, dynamic> toFirestore() {
-    return {
-      'userId': userId,
-      'date': date,
-      'stepCount': stepCount,
-      'calories': calories,
-      'source': source,
-      'syncedAt': Timestamp.fromDate(syncedAt),
-    };
-  }
-
   StepLogModel copyWith({
     int? stepCount,
     int? calories,

@@ -6,12 +6,17 @@ import '../models/battle_model.dart';
 import '../models/user_model.dart';
 import '../providers/auth_provider.dart';
 import '../providers/battle_provider.dart';
+import '../providers/user_provider.dart';
 import '../services/battle_service.dart';
 import '../widgets/avatar_circle.dart';
 import '../widgets/battle_duration_picker.dart';
+import '../widgets/battle_stake_picker.dart';
 import '../widgets/battle_visibility_toggle.dart';
 import '../widgets/bottom_sheet_handle.dart';
+import '../widgets/insufficient_xp_dialog.dart';
+import '../providers/subscription_provider.dart';
 import 'add_friends_sheet.dart';
+import 'upgrade_cta_sheet.dart';
 
 /// 1v1 battle setup.
 ///
@@ -23,7 +28,13 @@ import 'add_friends_sheet.dart';
 ///     [BattleDurationPicker])
 ///   • CTA: "Send Battle Invite"
 class Battle1v1SetupSheet extends ConsumerStatefulWidget {
-  const Battle1v1SetupSheet({super.key});
+  /// Pre-selects this user as the opponent, skipping the empty state
+  /// where "+ Select Opponent" opens the [AddFriendsSheet]. Used when
+  /// the sheet is opened from another user's profile — the "who am I
+  /// challenging" decision is already made, don't ask again.
+  final UserModel? initialOpponent;
+
+  const Battle1v1SetupSheet({super.key, this.initialOpponent});
 
   @override
   ConsumerState<Battle1v1SetupSheet> createState() =>
@@ -32,7 +43,19 @@ class Battle1v1SetupSheet extends ConsumerStatefulWidget {
 
 class _Battle1v1SetupSheetState extends ConsumerState<Battle1v1SetupSheet> {
   UserModel? _selectedOpponent;
+
+  @override
+  void initState() {
+    super.initState();
+    _selectedOpponent = widget.initialOpponent;
+  }
   bool _creating = false;
+  /// In-sheet error banner text. Shown ABOVE the primary button so it
+  /// isn't swallowed by the bottom sheet's z-order (a ScaffoldMessenger
+  /// snackbar renders behind the sheet and can't be dismissed without
+  /// closing the sheet first). Cleared on any successful submit or on
+  /// picker value change.
+  String? _submitError;
   BattleWindow? _window;
 
   /// When true, the battle goes into the public Discover feed and anyone with
@@ -61,10 +84,16 @@ class _Battle1v1SetupSheetState extends ConsumerState<Battle1v1SetupSheet> {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
+            // Explicit "waiting" copy so the creator doesn't expect to
+            // enter the arena immediately. Tester feedback: previously
+            // read as though the battle had started already, but 1v1
+            // battles only activate once the OPPONENT accepts.
             Text(
               _isPublic
                   ? 'Listed in Discover. Anyone can also paste this code:'
-                  : 'Share this code to let anyone you invited join directly:',
+                  : 'Waiting for the opponent to accept. Once they do, the '
+                      'battle appears in your Active list and step tracking '
+                      'begins. Share the code below to speed things up:',
               style: TextStyle(color: AppColors.onSurfaceVariant),
             ),
             const SizedBox(height: 16),
@@ -130,6 +159,70 @@ class _Battle1v1SetupSheetState extends ConsumerState<Battle1v1SetupSheet> {
     );
   }
 
+  /// Shown when the user taps a disabled control (opponent picker while
+  /// public toggle is ON, or vice versa). Explains the mutual-exclusion
+  /// so the disabled state doesn't read as a dead pixel.
+  ///
+  /// Uses [showDialog] rather than a snackbar because the setup sheet
+  /// covers ~90% of the screen — a scaffold-anchored snackbar renders
+  /// at the bottom of the outer screen, INSIDE the sheet's bounds,
+  /// where the user can't see it. Dialogs stack on the root navigator
+  /// above the sheet, so they always surface.
+  /// Public-battle toggle handler. Turning ON prompts a confirmation
+  /// dialog explaining the 1-hour advance rule — Cancel reverts the
+  /// toggle to off; Continue keeps it on and the duration picker's
+  /// minStart snaps to now+1h on the next rebuild. Turning OFF is
+  /// instant (no dialog).
+  Future<void> _onPublicToggleChanged(bool value) async {
+    if (!value) {
+      setState(() => _isPublic = false);
+      return;
+    }
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: AppColors.surfaceContainerHigh,
+        title: const Text('Public battle'),
+        content: const Text(
+          'Public battles are scheduled at least 1 hour in advance, '
+          'giving other players enough time to discover and join before '
+          'the battle begins.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('Continue'),
+          ),
+        ],
+      ),
+    );
+    if (!mounted) return;
+    if (confirmed == true) {
+      setState(() => _isPublic = true);
+    }
+  }
+
+  Future<void> _showMutexHint(String message) async {
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: AppColors.surfaceContainerHigh,
+        title: const Text('Can\'t do both'),
+        content: Text(message),
+        actions: [
+          FilledButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('Got it'),
+          ),
+        ],
+      ),
+    );
+  }
+
   Future<void> _createBattle() async {
     // For PUBLIC battles, no specific opponent is required — anyone with
     // the join code or via Discover can drop in. For PRIVATE battles
@@ -137,11 +230,46 @@ class _Battle1v1SetupSheetState extends ConsumerState<Battle1v1SetupSheet> {
     if (!_isPublic && _selectedOpponent == null) return;
     final window = _window;
     if (window == null || !window.isValid) return;
-    setState(() => _creating = true);
+    // Submit-time defense in depth: even though the picker enforces a
+    // now+1h floor when public is on, the sheet can sit open for a
+    // while before submit — re-check here so an about-to-elapse window
+    // doesn't sneak through. Tolerance of 5 min matches the picker's
+    // snap buffer (+5 min above the strict floor), so a normal submit
+    // never trips this check.
+    if (_isPublic) {
+      final floorWithTolerance =
+          DateTime.now().add(const Duration(minutes: 55));
+      if (window.start.isBefore(floorWithTolerance)) {
+        setState(() => _submitError =
+            'Public battles need to start at least 1 hour from now. '
+            'Re-open the start time and pick a later slot.');
+        return;
+      }
+    }
+    // Insufficient-XP pre-check. Previously the battle was created
+    // and the stake charge failed downstream with a generic error;
+    // testers wanted the "buy XP" path surfaced before we mutate any
+    // server state. If the user can't afford the stake, show the
+    // dialog + offer to open BuyXpSheet, and return WITHOUT calling
+    // createBattle.
+    final me = ref.read(currentUserProvider).valueOrNull;
+    if (me == null) return;
+    if (_stakeXp > 0 && me.totalXP < _stakeXp) {
+      await showInsufficientXpDialog(
+        context,
+        required: _stakeXp,
+        balance: me.totalXP,
+        action: 'create this battle',
+      );
+      return;
+    }
+
+    setState(() {
+      _creating = true;
+      _submitError = null;
+    });
 
     try {
-      final me = ref.read(currentUserProvider).valueOrNull;
-      if (me == null) throw StateError('Not signed in');
       final participants = <BattleParticipant>[
         BattleParticipant(
           userId: me.userId,
@@ -170,6 +298,7 @@ class _Battle1v1SetupSheetState extends ConsumerState<Battle1v1SetupSheet> {
               endTime: window.end,
               createdBy: me.userId,
               visibility: visibility,
+              stakeXp: _stakeXp,
             )
           : await service.createBattle(
               type: BattleType.oneVsOne,
@@ -249,15 +378,28 @@ class _Battle1v1SetupSheetState extends ConsumerState<Battle1v1SetupSheet> {
                   const SizedBox(height: 20),
 
                   // YOU vs OPPONENT card. Right side is tappable to open
-                  // the friend picker sheet.
+                  // the friend picker sheet. Left side shows the current
+                  // user's own avatar + friendly name so the sheet
+                  // mirrors how the opponent side reads once picked —
+                  // no more anonymous "YOU / You" placeholder.
                   Row(
                     children: [
                       Expanded(
-                        child: _PlayerCard(
-                          initials: 'YOU',
-                          name: 'You',
-                          isReady: true,
-                        ),
+                        child: Builder(builder: (_) {
+                          final me = ref.watch(userProfileProvider).valueOrNull;
+                          final myName = (me?.friendlyName.trim().isNotEmpty ?? false)
+                              ? me!.friendlyName
+                              : 'You';
+                          final myInitials = myName.isNotEmpty
+                              ? myName[0].toUpperCase()
+                              : 'Y';
+                          return _PlayerCard(
+                            initials: myInitials,
+                            imageUrl: me?.avatarURL,
+                            name: myName,
+                            isReady: true,
+                          );
+                        }),
                       ),
                       Padding(
                         padding: const EdgeInsets.symmetric(horizontal: 12),
@@ -268,20 +410,38 @@ class _Battle1v1SetupSheetState extends ConsumerState<Battle1v1SetupSheet> {
                               fontStyle: FontStyle.italic,
                             )),
                       ),
+                      // Opponent picker — disabled when the battle is
+                      // Public (an open lobby anyone can join; the
+                      // "opponent" is whoever picks up the code first).
+                      // Tap on the disabled state surfaces a snackbar
+                      // explaining why so users aren't just clicking
+                      // dead pixels.
                       Expanded(
                         child: GestureDetector(
-                          onTap: _pickOpponent,
-                          child: _PlayerCard(
-                            initials: _selectedOpponent == null
-                                ? null
-                                : (_selectedOpponent!.friendlyName.isNotEmpty
-                                    ? _selectedOpponent!.friendlyName[0]
-                                        .toUpperCase()
-                                    : '?'),
-                            imageUrl: _selectedOpponent?.avatarURL,
-                            name: _selectedOpponent?.friendlyName ??
-                                '+ Select Opponent',
-                            isPlaceholder: _selectedOpponent == null,
+                          // opaque so taps land on the transparent
+                          // areas of the placeholder card too — without
+                          // this, taps on empty space between the
+                          // avatar and label can miss and no popup
+                          // fires.
+                          behavior: HitTestBehavior.opaque,
+                          onTap: _isPublic
+                              ? () => _showMutexHint(
+                                  'Turn off Public Battle to select a specific opponent.')
+                              : _pickOpponent,
+                          child: Opacity(
+                            opacity: _isPublic ? 0.4 : 1.0,
+                            child: _PlayerCard(
+                              initials: _selectedOpponent == null
+                                  ? null
+                                  : (_selectedOpponent!.friendlyName.isNotEmpty
+                                      ? _selectedOpponent!.friendlyName[0]
+                                          .toUpperCase()
+                                      : '?'),
+                              imageUrl: _selectedOpponent?.avatarURL,
+                              name: _selectedOpponent?.friendlyName ??
+                                  '+ Select Opponent',
+                              isPlaceholder: _selectedOpponent == null,
+                            ),
                           ),
                         ),
                       ),
@@ -289,28 +449,63 @@ class _Battle1v1SetupSheetState extends ConsumerState<Battle1v1SetupSheet> {
                   ),
                   const SizedBox(height: 24),
 
-                  // Start + end time + duration chips.
-                  BattleDurationPicker(
-                    onChanged: (window) {
-                      // Avoid rebuild loops; just cache the value.
-                      _window = window;
-                    },
+                  // Public-battle toggle — mutually exclusive with the
+                  // opponent picker. When an opponent is selected the
+                  // toggle is greyed out and tapping it surfaces a
+                  // snackbar (users aren't just clicking dead pixels).
+                  //
+                  // Placement: above the duration picker so the
+                  // "public → +1h floor" dialog fires BEFORE users pick
+                  // a start time — otherwise a picked earlier time
+                  // would silently snap forward on toggle-on.
+                  Opacity(
+                    opacity: _selectedOpponent == null ? 1.0 : 0.4,
+                    child: IgnorePointer(
+                      ignoring: _selectedOpponent != null,
+                      child: BattleVisibilityToggle(
+                        isPublic: _isPublic,
+                        onChanged: _onPublicToggleChanged,
+                      ),
+                    ),
                   ),
+                  if (_selectedOpponent != null)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 6, left: 4),
+                      child: GestureDetector(
+                        onTap: () => _showMutexHint(
+                            'Remove the selected opponent to make this battle Public.'),
+                        child: Text(
+                          'Tap to learn why this is disabled',
+                          style: theme.textTheme.labelSmall?.copyWith(
+                            color: AppColors.primary,
+                            decoration: TextDecoration.underline,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ),
+                    ),
 
                   const SizedBox(height: 16),
 
-                  BattleVisibilityToggle(
-                    isPublic: _isPublic,
-                    onChanged: (v) => setState(() => _isPublic = v),
+                  // Start + end time + duration chips. When public is
+                  // on, minStart forces start >= now+1h so joiners have
+                  // time to discover the battle.
+                  BattleDurationPicker(
+                    minStart: _isPublic
+                        ? DateTime.now().add(const Duration(hours: 1))
+                        : null,
+                    onChanged: (window) {
+                      _window = window;
+                    },
                   ),
 
                   const SizedBox(height: 20),
 
                   // Stake picker — both sides commit this many XP; winner
-                  // takes the whole pot. Min 100, no max (XP economy
-                  // rules from migration 0016).
-                  _StakePicker(
+                  // takes the whole pot. Min 100, no max (v2 economy).
+                  BattleStakePicker(
                     value: _stakeXp,
+                    participantsCount: 2,
                     onChanged: (v) => setState(() => _stakeXp = v),
                   ),
 
@@ -334,34 +529,117 @@ class _Battle1v1SetupSheetState extends ConsumerState<Battle1v1SetupSheet> {
               ),
               child: Column(
                 children: [
-                  SizedBox(
-                    width: double.infinity,
-                    height: 56,
-                    child: FilledButton(
-                      // Enabled when:
-                      //   • Not already submitting
-                      //   • EITHER an opponent has been picked (private)
-                      //     OR the public-battle toggle is on (no opp needed)
-                      onPressed: !_creating &&
-                              (_selectedOpponent != null || _isPublic)
-                          ? _createBattle
-                          : null,
-                      child: _creating
-                          ? const SizedBox(
-                              width: 20,
-                              height: 20,
-                              child: CircularProgressIndicator(
-                                  strokeWidth: 2, color: Colors.white))
-                          : const Text('Send Battle Invite'),
+                  // In-sheet error banner — replaces the old
+                  // ScaffoldMessenger snackbar, which rendered behind
+                  // the sheet and users could only see by dismissing
+                  // the whole sheet.
+                  if (_submitError != null) ...[
+                    Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 14, vertical: 10),
+                      decoration: BoxDecoration(
+                        color: AppColors.error.withValues(alpha: 0.12),
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(
+                          color: AppColors.error.withValues(alpha: 0.35),
+                        ),
+                      ),
+                      child: Row(
+                        children: [
+                          Icon(Icons.error_outline,
+                              color: AppColors.error, size: 18),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: Text(
+                              _submitError!,
+                              style: theme.textTheme.bodySmall?.copyWith(
+                                color: AppColors.error,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                          ),
+                          IconButton(
+                            visualDensity: VisualDensity.compact,
+                            padding: EdgeInsets.zero,
+                            constraints: const BoxConstraints(),
+                            icon: Icon(Icons.close,
+                                color: AppColors.error, size: 18),
+                            onPressed: () =>
+                                setState(() => _submitError = null),
+                          ),
+                        ],
+                      ),
                     ),
+                    const SizedBox(height: 10),
+                  ],
+                  Consumer(
+                    builder: (context, ref, _) {
+                      final decision =
+                          ref.watch(canCreateBattleProvider);
+                      final oppReady =
+                          _selectedOpponent != null || _isPublic;
+                      final buttonEnabled =
+                          !_creating && oppReady && decision.allowed;
+
+                      // When the ONLY blocker is the subscription cap,
+                      // keep the button visually tappable so its onTap
+                      // opens the upgrade sheet (rather than being
+                      // a dead-null onPressed).
+                      final blockedBySubOnly =
+                          !_creating && oppReady && !decision.allowed;
+
+                      return SizedBox(
+                        width: double.infinity,
+                        height: 56,
+                        child: FilledButton(
+                          onPressed: buttonEnabled
+                              ? _createBattle
+                              : blockedBySubOnly
+                                  ? () => showUpgradeCtaSheet(
+                                        context,
+                                        focusTier: decision.upgradeTo,
+                                      )
+                                  : null,
+                          style: blockedBySubOnly
+                              ? FilledButton.styleFrom(
+                                  backgroundColor: AppColors.amber
+                                      .withValues(alpha: 0.85),
+                                  foregroundColor: Colors.black,
+                                )
+                              : null,
+                          child: _creating
+                              ? const SizedBox(
+                                  width: 20,
+                                  height: 20,
+                                  child: CircularProgressIndicator(
+                                      strokeWidth: 2,
+                                      color: Colors.white))
+                              : Text(blockedBySubOnly
+                                  ? 'Upgrade to create'
+                                  : 'Send Battle Invite'),
+                        ),
+                      );
+                    },
                   ),
                   const SizedBox(height: 6),
-                  Text(
-                    'Battle starts at the chosen Start Time once opponent accepts',
-                    style: theme.textTheme.labelSmall?.copyWith(
-                      color: AppColors.onSurfaceVariant,
-                    ),
-                    textAlign: TextAlign.center,
+                  Consumer(
+                    builder: (context, ref, _) {
+                      final decision =
+                          ref.watch(canCreateBattleProvider);
+                      return Text(
+                        decision.allowed
+                            ? 'Battle starts at the chosen Start Time once opponent accepts'
+                            : (decision.reason ??
+                                'Monthly cap reached'),
+                        style: theme.textTheme.labelSmall?.copyWith(
+                          color: decision.allowed
+                              ? AppColors.onSurfaceVariant
+                              : AppColors.amber,
+                        ),
+                        textAlign: TextAlign.center,
+                      );
+                    },
                   ),
                 ],
               ),
@@ -394,7 +672,19 @@ class _PlayerCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    return Container(
+
+    // The card body — identical shape/height whether the user is the
+    // creator or the opponent, so both cards in a Row line up pixel-for-
+    // pixel. The creator-vs-opponent distinction is signalled via a
+    // subtle border tint + a Stack-overlay corner ribbon (see below),
+    // NEITHER of which changes the card's height.
+    //
+    // Previous version (before 1.1.6+31): appended a "Ready" pill below
+    // the name inside this Column when isReady=true. That extra pill +
+    // gap added ~24 px of height to the creator card only, so the
+    // opponent card looked truncated by comparison. User feedback:
+    // "the opponent and the creator card should be of same size."
+    final card = Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
         color: isPlaceholder
@@ -402,10 +692,13 @@ class _PlayerCard extends StatelessWidget {
             : AppColors.glassBackground,
         borderRadius: BorderRadius.circular(20),
         border: Border.all(
+          // Creator card gets a stronger primary tint on the border
+          // (0.55 vs. 0.20) — subtle "who owns this battle" hint that
+          // adds ZERO layout height.
           color: isPlaceholder
               ? AppColors.outlineVariant.withValues(alpha: 0.3)
-              : AppColors.primary.withValues(alpha: 0.2),
-          width: isPlaceholder ? 2 : 1,
+              : AppColors.primary.withValues(alpha: isReady ? 0.55 : 0.2),
+          width: isPlaceholder ? 2 : (isReady ? 1.5 : 1),
           strokeAlign: BorderSide.strokeAlignInside,
         ),
       ),
@@ -446,136 +739,42 @@ class _PlayerCard extends StatelessWidget {
             overflow: TextOverflow.ellipsis,
             maxLines: 1,
           ),
-          if (isReady) ...[
-            const SizedBox(height: 4),
-            Container(
-              padding:
-                  const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-              decoration: BoxDecoration(
-                color: AppColors.primary,
-                borderRadius: BorderRadius.circular(10),
-              ),
-              child: Text('Ready',
-                  style: theme.textTheme.labelSmall?.copyWith(
-                    color: AppColors.onPrimary,
-                    fontWeight: FontWeight.w800,
-                    fontSize: 9,
-                  )),
-            ),
-          ],
         ],
       ),
     );
-  }
-}
 
-/// Stake picker — presets + Â±50 stepper. Floor 100 (post-0016 minimum),
-/// no upper bound. The chosen amount is deducted from BOTH the creator
-/// (at create time) and each invitee (at accept time); the winner takes
-/// the full pot.
-class _StakePicker extends StatelessWidget {
-  final int value;
-  final ValueChanged<int> onChanged;
-  const _StakePicker({required this.value, required this.onChanged});
-
-  static const _presets = [100, 250, 500, 1000];
-  static const _floor = 100;
-  static const _step = 50;
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final pot = value * 2;
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
+    // Non-creator / placeholder cards render the plain card. Creator's
+    // gets a Stack overlay with the "CREATOR" corner ribbon absolutely
+    // positioned in the top-right so it doesn't push the body down.
+    if (!isReady) return card;
+    return Stack(
+      clipBehavior: Clip.none,
       children: [
-        Row(
-          children: [
-            Text('STAKE',
-                style: theme.textTheme.labelSmall?.copyWith(
-                  color: AppColors.onSurfaceVariant,
-                  letterSpacing: 2,
-                  fontWeight: FontWeight.w800,
-                )),
-            const Spacer(),
-            Text('Pot ${_fmt(pot)} XP',
-                style: theme.textTheme.labelSmall?.copyWith(
-                  color: AppColors.primary,
-                  fontWeight: FontWeight.w800,
-                )),
-          ],
-        ),
-        const SizedBox(height: 8),
-        Row(
-          children: [
-            for (final p in _presets) ...[
-              Expanded(
-                child: GestureDetector(
-                  onTap: () => onChanged(p),
-                  child: AnimatedContainer(
-                    duration: const Duration(milliseconds: 150),
-                    padding: const EdgeInsets.symmetric(vertical: 12),
-                    decoration: BoxDecoration(
-                      color: p == value
-                          ? AppColors.primary.withValues(alpha: 0.18)
-                          : AppColors.surfaceContainerLow,
-                      borderRadius: BorderRadius.circular(12),
-                      border: Border.all(
-                        color: p == value
-                            ? AppColors.primary
-                            : AppColors.outlineVariant,
-                      ),
-                    ),
-                    child: Center(
-                      child: Text(_fmt(p),
-                          style: theme.textTheme.labelMedium?.copyWith(
-                            fontWeight: FontWeight.w800,
-                            color: p == value
-                                ? AppColors.primary
-                                : AppColors.onSurface,
-                          )),
-                    ),
-                  ),
-                ),
+        card,
+        Positioned(
+          top: 6,
+          right: 6,
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+            decoration: BoxDecoration(
+              color: AppColors.primary,
+              borderRadius: BorderRadius.circular(6),
+            ),
+            child: Text(
+              'CREATOR',
+              style: theme.textTheme.labelSmall?.copyWith(
+                color: AppColors.onPrimary,
+                fontWeight: FontWeight.w900,
+                fontSize: 8,
+                letterSpacing: 0.4,
               ),
-              if (p != _presets.last) const SizedBox(width: 6),
-            ],
-          ],
-        ),
-        const SizedBox(height: 10),
-        Row(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            IconButton.outlined(
-              onPressed: value > _floor
-                  ? () => onChanged((value - _step).clamp(_floor, 1 << 30))
-                  : null,
-              icon: const Icon(Icons.remove),
             ),
-            const SizedBox(width: 16),
-            Text(
-              '${_fmt(value)} XP',
-              style: theme.textTheme.titleMedium
-                  ?.copyWith(fontWeight: FontWeight.w800),
-            ),
-            const SizedBox(width: 16),
-            IconButton.outlined(
-              onPressed: () => onChanged(value + _step),
-              icon: const Icon(Icons.add),
-            ),
-          ],
+          ),
         ),
       ],
     );
   }
-
-  static String _fmt(int n) {
-    final s = n.toString();
-    final buf = StringBuffer();
-    for (var i = 0; i < s.length; i++) {
-      if (i > 0 && (s.length - i) % 3 == 0) buf.write(',');
-      buf.write(s[i]);
-    }
-    return buf.toString();
-  }
 }
+
+// Stake picker moved to lib/widgets/battle_stake_picker.dart —
+// shared with the group-battle setup sheet.

@@ -4,6 +4,7 @@ import 'package:go_router/go_router.dart';
 import '../../config/colors.dart';
 import '../../providers/clan_provider.dart';
 import '../../widgets/friends_app_bar_button.dart';
+import '../../widgets/shimmer_loader.dart';
 import 'clan_entry_view.dart';
 import 'clan_dashboard_view.dart';
 
@@ -82,8 +83,15 @@ class ClanScreen extends ConsumerWidget {
         ],
       ),
       body: switch (hasClan) {
-        null => Center(
-            child: CircularProgressIndicator(color: AppColors.primary),
+        null => ListView(
+            padding: const EdgeInsets.fromLTRB(20, 16, 20, 32),
+            children: const [
+              ShimmerLoader(height: 96, borderRadius: 20),
+              SizedBox(height: 12),
+              ShimmerCard(),
+              SizedBox(height: 12),
+              ShimmerCard(),
+            ],
           ),
         true => const ClanDashboardView(),
         false => const ClanEntryView(),

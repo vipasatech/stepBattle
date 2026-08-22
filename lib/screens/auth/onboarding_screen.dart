@@ -6,9 +6,11 @@ import 'package:permission_handler/permission_handler.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../config/colors.dart';
+import '../../models/avatar.dart';
 import '../../models/user_model.dart';
 import '../../providers/auth_provider.dart';
 import '../../services/goal_formula.dart';
+import '../../services/observability_service.dart';
 
 /// 8-step onboarding — auto-skips steps whose answers are already on
 /// file or whose permissions are already granted, so returning users
@@ -420,6 +422,14 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
       // (char_length BETWEEN 1 AND 40) is skipped when the value is
       // NULL, so this passes.
       final String? preferredName = preferredInput.isEmpty ? null : preferredInput;
+      // Seed the user's battle-ground runner avatar from their
+      // demographics + fitness level. Runs once at onboarding; the
+      // user can override any time via the avatar-picker sheet.
+      final defaultAvatar = Avatar.defaultForUser(
+        gender: _gender,
+        fitnessLevel: _fitnessLevel,
+        ageYears: _ageFromDob(_dateOfBirth!),
+      );
       await ref.read(authServiceProvider).completeOnboarding(
             userId: user.id,
             displayName: displayName,
@@ -429,7 +439,19 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
             gender: _gender!.wire,
             fitnessLevel: _fitnessLevel!.wire,
             avatarUrl: user.userMetadata?['avatar_url'] as String?,
+            battleAvatarId: defaultAvatar.id,
           );
+      // Onboarding-complete funnel event — properties intentionally
+      // omit anything user-identifying. Gender + fitness level are
+      // low-cardinality demographic cohorts we already store server-side
+      // via [completeOnboarding]; sending them here lets us slice
+      // retention by cohort in the PostHog dashboard.
+      ObservabilityService.trackEvent('onboarding_complete', properties: {
+        'gender': _gender!.wire,
+        'fitness_level': _fitnessLevel!.wire,
+        'daily_step_goal': _dailyGoal!,
+        'age_years': _ageFromDob(_dateOfBirth!),
+      });
       if (mounted) {
         // Flip the session flag so the redirect gate stops
         // considering this user "unonboarded" over a null
@@ -471,6 +493,66 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
       body: SafeArea(
         child: Column(
           children: [
+            // Top-left back button — goes to the previous step (or, on
+            // the first step, treats back as "abandon onboarding": sign
+            // out and land on /welcome. Plain `context.go('/welcome')`
+            // isn't enough because the router redirect gate sees the
+            // still-authenticated session and immediately bounces the
+            // user back to /onboarding — so signing out first is what
+            // actually clears the guard.
+            Align(
+              alignment: Alignment.centerLeft,
+              child: IconButton(
+                icon: const Icon(Icons.arrow_back),
+                tooltip: 'Back',
+                onPressed: () async {
+                  if (_currentPage > 0) {
+                    _pageController?.animateToPage(
+                      _currentPage - 1,
+                      duration: const Duration(milliseconds: 260),
+                      curve: Curves.easeOutCubic,
+                    );
+                    return;
+                  }
+                  if (context.canPop()) {
+                    context.pop();
+                    return;
+                  }
+                  // First step, nothing to pop — abandon the onboarding
+                  // altogether. Sign out then route to /welcome.
+                  try {
+                    await ref.read(authServiceProvider).signOut();
+                  } catch (_) {
+                    // Best-effort — if signOut fails we still try to
+                    // navigate; the router's redirect gate will send us
+                    // wherever the resulting auth state warrants.
+                  }
+                  // Wait for authStateProvider to reflect the signed-
+                  // out state so the redirect gate doesn't bounce us
+                  // straight back to /onboarding on stale auth.
+                  //
+                  // Guard the poll on `mounted` FIRST every iteration
+                  // — the signOut() above triggers the router redirect
+                  // which may unmount THIS widget before the auth
+                  // state fully drains, at which point `ref.read` on
+                  // a disposed ConsumerStatefulElement throws
+                  // "Cannot use ref after the widget was disposed."
+                  // Bail out cleanly instead — the redirect gate has
+                  // already taken over routing.
+                  final deadline =
+                      DateTime.now().add(const Duration(seconds: 2));
+                  while (DateTime.now().isBefore(deadline)) {
+                    if (!mounted) return;
+                    if (ref.read(authStateProvider).valueOrNull == null) {
+                      break;
+                    }
+                    await Future.delayed(const Duration(milliseconds: 25));
+                  }
+                  if (!context.mounted) return;
+                  context.go('/welcome');
+                },
+              ),
+            ),
             Expanded(
               child: PageView(
                 controller: _pageController!,
@@ -581,10 +663,10 @@ class _StepName extends StatelessWidget {
           // `labelText`, but with no border to anchor to it floated
           // right on top of the typed text, causing the "Display
           // name" caption and the actual name to overlap.
-          const Text(
+          Text(
             'Display name',
             style: TextStyle(
-              color: Colors.white,
+              color: AppColors.onSurface,
               fontWeight: FontWeight.w800,
               fontSize: 15,
             ),
@@ -595,10 +677,10 @@ class _StepName extends StatelessWidget {
             textCapitalization: TextCapitalization.words,
             maxLength: 20,
             cursorColor: AppColors.primary,
-            style: const TextStyle(
+            style: TextStyle(
               fontSize: 18,
               fontWeight: FontWeight.w700,
-              color: Colors.white,
+              color: AppColors.onSurface,
             ),
             decoration: InputDecoration(
               hintText: 'e.g. Prashanth',
@@ -664,10 +746,10 @@ class _StepPreferredName extends StatelessWidget {
           // Label ABOVE the field — same fix as the display-name and
           // DOB steps. `labelText` inside a borderless InputDecoration
           // ends up floating on top of the typed value.
-          const Text(
+          Text(
             'Preferred name (optional)',
             style: TextStyle(
-              color: Colors.white,
+              color: AppColors.onSurface,
               fontWeight: FontWeight.w800,
               fontSize: 15,
             ),
@@ -679,10 +761,10 @@ class _StepPreferredName extends StatelessWidget {
             maxLength: 40,
             cursorColor: AppColors.primary,
             onChanged: (_) => onChanged(),
-            style: const TextStyle(
+            style: TextStyle(
               fontSize: 18,
               fontWeight: FontWeight.w700,
-              color: Colors.white,
+              color: AppColors.onSurface,
             ),
             decoration: InputDecoration(
               hintText: 'e.g. Prash',
@@ -743,11 +825,11 @@ class _StepDob extends StatelessWidget {
       body: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // Field label — bold white, matches the Strava reference.
-          const Text(
+          // Field label.
+          Text(
             'Birthday',
             style: TextStyle(
-              color: Colors.white,
+              color: AppColors.onSurface,
               fontWeight: FontWeight.w800,
               fontSize: 15,
             ),
@@ -774,10 +856,10 @@ class _StepDob extends StatelessWidget {
               ),
               child: Text(
                 formatted,
-                style: const TextStyle(
+                style: TextStyle(
                   fontSize: 18,
                   fontWeight: FontWeight.w700,
-                  color: Colors.white,
+                  color: AppColors.onSurface,
                 ),
               ),
             ),
@@ -815,10 +897,10 @@ class _StepDob extends StatelessWidget {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              const Text(
+              Text(
                 'Choose Date of Birth',
                 style: TextStyle(
-                  color: Colors.white,
+                  color: AppColors.onSurface,
                   fontSize: 18,
                   fontWeight: FontWeight.w800,
                 ),
@@ -831,11 +913,13 @@ class _StepDob extends StatelessWidget {
                 // clearly centred and the outer rows fading out.
                 height: 240,
                 child: CupertinoTheme(
-                  data: const CupertinoThemeData(
-                    brightness: Brightness.dark,
+                  data: CupertinoThemeData(
+                    brightness: AppColors.isDark
+                        ? Brightness.dark
+                        : Brightness.light,
                     textTheme: CupertinoTextThemeData(
                       dateTimePickerTextStyle: TextStyle(
-                        color: Colors.white,
+                        color: AppColors.onSurface,
                         fontSize: 21,
                         fontWeight: FontWeight.w600,
                       ),
@@ -860,13 +944,13 @@ class _StepDob extends StatelessWidget {
                     Expanded(
                       child: InkWell(
                         onTap: () => Navigator.of(ctx).pop(),
-                        child: const SizedBox(
+                        child: SizedBox(
                           height: 52,
                           child: Center(
                             child: Text(
                               'Cancel',
                               style: TextStyle(
-                                color: Colors.white,
+                                color: AppColors.onSurface,
                                 fontSize: 16,
                                 fontWeight: FontWeight.w700,
                               ),
@@ -1070,8 +1154,8 @@ class _StepPermission extends StatelessWidget {
           const SizedBox(height: 32),
           Text(
             title,
-            style: const TextStyle(
-              color: Colors.white,
+            style: TextStyle(
+              color: AppColors.onSurface,
               fontSize: 28,
               fontWeight: FontWeight.w900,
               height: 1.15,
@@ -1185,8 +1269,8 @@ class _SourceRow extends StatelessWidget {
             children: [
               Text(
                 label,
-                style: const TextStyle(
-                  color: Colors.white,
+                style: TextStyle(
+                  color: AppColors.onSurface,
                   fontWeight: FontWeight.w800,
                   fontSize: 15,
                 ),
@@ -1357,8 +1441,8 @@ class _StepShell extends StatelessWidget {
         children: [
           Text(
             title,
-            style: const TextStyle(
-              color: Colors.white,
+            style: TextStyle(
+              color: AppColors.onSurface,
               fontSize: 30,
               fontWeight: FontWeight.w900,
               height: 1.15,
@@ -1398,14 +1482,21 @@ class _OptionCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // Selected card inverts the palette: solid white fill with dark
-    // text (matches the Strava reference the user shared). Unselected
-    // cards stay dark grey with white text. No visible border on
-    // either state — the fill contrast alone signals selection.
-    final Color titleColor = selected ? Colors.black : Colors.white;
+    // Selected card inverts the palette. In dark mode the selected
+    // fill is white with black text; in light mode it flips — the
+    // selected fill is the app's near-black onSurface with white text.
+    // Unselected cards use the theme's card fill with the theme's
+    // onSurface text. No visible border either state — the fill
+    // contrast alone signals selection.
+    final Color selectedFill =
+        AppColors.isDark ? Colors.white : AppColors.onSurface;
+    final Color selectedText =
+        AppColors.isDark ? Colors.black : Colors.white;
+    final Color unselectedText = AppColors.onSurface;
+    final Color titleColor = selected ? selectedText : unselectedText;
     final Color descriptionColor = selected
-        ? Colors.black.withValues(alpha: 0.75)
-        : Colors.white.withValues(alpha: 0.85);
+        ? selectedText.withValues(alpha: 0.75)
+        : unselectedText.withValues(alpha: 0.75);
     return GestureDetector(
       onTap: onTap,
       child: AnimatedContainer(
@@ -1418,7 +1509,7 @@ class _OptionCard extends StatelessWidget {
         width: double.infinity,
         padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 18),
         decoration: BoxDecoration(
-          color: selected ? Colors.white : _OnboardingTokens.cardFill,
+          color: selected ? selectedFill : _OnboardingTokens.cardFill,
           borderRadius: BorderRadius.circular(14),
         ),
         child: Column(

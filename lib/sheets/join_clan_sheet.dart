@@ -5,6 +5,7 @@ import '../config/colors.dart';
 import '../models/clan_model.dart';
 import '../providers/clan_provider.dart';
 import '../widgets/bottom_sheet_handle.dart';
+import '../widgets/shimmer_loader.dart';
 
 class JoinClanSheet extends ConsumerStatefulWidget {
   const JoinClanSheet({super.key});
@@ -127,9 +128,10 @@ class _JoinClanSheetState extends ConsumerState<JoinClanSheet> {
           // Results
           Flexible(
             child: _searching
-                ? Center(
-                    child:
-                        CircularProgressIndicator(color: AppColors.primary))
+                ? ListView(
+                    padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 8),
+                    children: const [ShimmerRow(), ShimmerRow(), ShimmerRow()],
+                  )
                 : _results.isEmpty
                     ? Padding(
                         padding: const EdgeInsets.all(40),

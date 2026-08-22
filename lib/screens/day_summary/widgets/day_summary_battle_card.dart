@@ -203,7 +203,7 @@ class DaySummaryBattleCard extends StatelessWidget {
                 ),
               ),
               Text(
-                '+${battle.xpReward} XP on win',
+                '+${battle.stakeXp} XP on win',
                 style: theme.textTheme.bodySmall?.copyWith(
                   color: _accentOpponent,
                   fontWeight: FontWeight.w800,

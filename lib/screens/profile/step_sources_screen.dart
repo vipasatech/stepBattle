@@ -6,6 +6,7 @@ import '../../config/colors.dart';
 import '../../providers/step_provider.dart';
 import '../../services/step_source_aggregator.dart';
 import '../../widgets/glass_card.dart';
+import '../../widgets/shimmer_loader.dart';
 
 /// Diagnostic screen for the step ingestion pipeline.
 ///
@@ -74,9 +75,16 @@ class _StepSourcesScreenState extends ConsumerState<StepSourcesScreen> {
         ],
       ),
       body: reading == null
-          ? Center(
-              child:
-                  CircularProgressIndicator(color: AppColors.primary))
+          ? ListView(
+              padding: const EdgeInsets.fromLTRB(20, 12, 20, 32),
+              children: const [
+                ShimmerLoader(height: 96, borderRadius: 20),
+                SizedBox(height: 12),
+                ShimmerCard(),
+                SizedBox(height: 12),
+                ShimmerCard(),
+              ],
+            )
           : ListView(
               padding: const EdgeInsets.fromLTRB(20, 12, 20, 32),
               children: [
@@ -337,21 +345,12 @@ class _GoogleFitCard extends ConsumerStatefulWidget {
 }
 
 class _GoogleFitCardState extends ConsumerState<_GoogleFitCard> {
-  bool _busy = false;
-
-  Future<void> _toggle(bool value) async {
-    setState(() => _busy = true);
-    final svc = ref.read(googleFitServiceProvider);
-    final ok = await svc.setEnabled(value);
-    if (!mounted) return;
-    if (!ok && value) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(svc.lastError ?? 'Failed to enable Fit')),
-      );
-    }
-    setState(() => _busy = false);
-    widget.onToggleChanged();
-  }
+  // Toggle handler + _busy state were retired in 1.1.6+28 when the
+  // Fit REST API deprecation forced the switch to a permanently-off
+  // state (see build() below — Switch.onChanged is null). No path
+  // enables Fit anymore, so no async work is needed. If Google ever
+  // revives the REST API OR we add a client-library alternative,
+  // restore _toggle + _busy here.
 
   @override
   Widget build(BuildContext context) {
@@ -359,6 +358,7 @@ class _GoogleFitCardState extends ConsumerState<_GoogleFitCard> {
     final fit = ref.watch(googleFitServiceProvider);
     final reading = widget.reading;
     final enabled = fit.isEnabled;
+    final wasAutoDisabled = fit.wasAutoDisabledDueToDeprecation;
     final fitSteps = reading.googleFitSteps;
     final isWinner = enabled &&
         fitSteps != null &&
@@ -386,26 +386,78 @@ class _GoogleFitCardState extends ConsumerState<_GoogleFitCard> {
                     style: theme.textTheme.titleSmall
                         ?.copyWith(fontWeight: FontWeight.w700)),
               ),
-              if (_busy)
-                SizedBox(
-                    width: 18,
-                    height: 18,
-                    child: CircularProgressIndicator(
-                        strokeWidth: 2, color: AppColors.primary))
-              else
-                Switch(
-                  value: enabled,
-                  onChanged: _toggle,
-                  activeColor: AppColors.primary,
-                ),
+              // Toggle is disabled unconditionally in 1.1.6+28 because
+              // Google retired the Fit REST API on 2026-06-30 — every
+              // call now 403s. The service auto-disables on 403 to
+              // stop hammering the dead endpoint; disabling the switch
+              // in the UI too prevents users from pointlessly re-
+              // enabling it. When Google re-opens or an alternative
+              // client library comes along, we'll remove this gate
+              // and restore the previous _toggle handler.
+              Switch(
+                value: enabled,
+                onChanged: null,
+                activeColor: AppColors.primary,
+              ),
             ],
           ),
           Text(
-            'Last-resort fallback for OEMs with no Health Connect feeder. '
-            'Enabling adds an extra Google scope (fitness.activity.read).',
+            'Retired by Google on 30 Jun 2026. Use Health Connect '
+            '(the app up top) as your step source instead.',
             style: theme.textTheme.labelSmall?.copyWith(
                 color: AppColors.onSurfaceVariant, height: 1.4),
           ),
+          if (wasAutoDisabled) ...[
+            const SizedBox(height: 10),
+            Container(
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+              decoration: BoxDecoration(
+                color: AppColors.amber.withValues(alpha: 0.10),
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(
+                    color: AppColors.amber.withValues(alpha: 0.35)),
+              ),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Icon(Icons.info_outline,
+                      size: 16, color: AppColors.amber),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      "We turned this off automatically because Google "
+                      "Fit's API stopped responding (403). Health "
+                      "Connect (up top) is now the recommended source.",
+                      style: theme.textTheme.labelSmall?.copyWith(
+                        color: AppColors.onSurface,
+                        height: 1.4,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  GestureDetector(
+                    onTap: () async {
+                      await ref
+                          .read(googleFitServiceProvider)
+                          .acknowledgeDeprecationBanner();
+                      if (mounted) setState(() {});
+                    },
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 2),
+                      child: Text(
+                        'Got it',
+                        style: theme.textTheme.labelSmall?.copyWith(
+                          color: AppColors.primary,
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
           if (enabled) ...[
             const SizedBox(height: 12),
             Row(

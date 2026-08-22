@@ -1,5 +1,3 @@
-import 'package:cloud_firestore/cloud_firestore.dart';
-
 class ClanMember {
   final String userId;
   final String displayName;
@@ -189,36 +187,4 @@ class ClanModel {
       createdAt: parseTs(d['created_at']),
       maxMembers: (d['max_members'] as num?)?.toInt() ?? 10,
     );
-  }
-
-  factory ClanModel.fromFirestore(DocumentSnapshot<Map<String, dynamic>> doc) {
-    final d = doc.data()!;
-    return ClanModel(
-      clanId: doc.id,
-      name: d['name'] as String? ?? '',
-      clanIdCode: d['clanIdCode'] as String? ?? '',
-      captainId: d['captainId'] as String? ?? '',
-      adminIds: List<String>.from(d['adminIds'] as List? ?? []),
-      memberIds: List<String>.from(d['memberIds'] as List? ?? []),
-      pendingInviteIds:
-          List<String>.from(d['pendingInviteIds'] as List? ?? []),
-      totalClanXP: d['totalClanXP'] as int? ?? 0,
-      activeBattleId: d['activeBattleId'] as String?,
-      createdAt: (d['createdAt'] as Timestamp?)?.toDate() ?? DateTime.now(),
-      maxMembers: d['maxMembers'] as int? ?? 10,
-    );
-  }
-
-  Map<String, dynamic> toFirestore() => {
-        'name': name,
-        'clanIdCode': clanIdCode,
-        'captainId': captainId,
-        'adminIds': adminIds,
-        'memberIds': memberIds,
-        'pendingInviteIds': pendingInviteIds,
-        'totalClanXP': totalClanXP,
-        'activeBattleId': activeBattleId,
-        'createdAt': Timestamp.fromDate(createdAt),
-        'maxMembers': maxMembers,
-      };
-}
+  }}

@@ -4,6 +4,7 @@ import 'package:go_router/go_router.dart';
 
 import '../../config/colors.dart';
 import '../../providers/auth_provider.dart';
+import '../../utils/cross_isolate_kv.dart';
 import '../../utils/network_errors.dart';
 import '../../widgets/glass_card.dart';
 import '../../widgets/no_network_sheet.dart';
@@ -91,6 +92,24 @@ class _EmailOtpVerifyScreenState
       // Session tick propagates via authStateProvider — the redirect
       // gate routes to /home or /onboarding depending on profile
       // completeness. No explicit navigation needed here.
+      // Clear the pending-OTP restore so a later cold-start doesn't
+      // resurrect this screen after the user is already signed in.
+      await CrossIsolateKV.clearPendingOtp();
+      // DELIBERATELY don't reset _loading here — the redirect gate
+      // will navigate us away within a beat. Resetting the button to
+      // enabled tempts the user to tap Verify again while the nav
+      // is in flight, which burns a second call against Supabase (the
+      // OTP is invalidated after the first use → the second call
+      // returns `otp_expired` and the user sees an error banner for
+      // a verify that ACTUALLY succeeded). This is the exact "verified
+      // but got expired error" trap reproduced 2026-08-10.
+      //
+      // The button stays visually loading until the widget is
+      // disposed via the auth-state navigation. If for any reason
+      // navigation doesn't fire (a router bug or a stalled provider),
+      // the user is stranded on a spinner — but that's a REAL bug
+      // signal, not the silent double-tap trap the earlier design had.
+      return;
     } catch (e) {
       if (await _handleNetworkError(e, 'verify the code')) {
         if (mounted) setState(() => _loading = false);
@@ -161,6 +180,25 @@ class _EmailOtpVerifyScreenState
       body: SafeArea(
         child: Stack(
           children: [
+            Positioned(
+              top: 4,
+              left: 4,
+              child: IconButton(
+                icon: const Icon(Icons.arrow_back),
+                tooltip: 'Back',
+                onPressed: () {
+                  // Explicit back / X → user is abandoning the OTP
+                  // flow. Clear the pending-restore so we don't yank
+                  // them back here on next cold-start.
+                  CrossIsolateKV.clearPendingOtp();
+                  if (context.canPop()) {
+                    context.pop();
+                  } else {
+                    context.go('/welcome');
+                  }
+                },
+              ),
+            ),
             SingleChildScrollView(
               padding: const EdgeInsets.fromLTRB(24, 80, 24, 24),
               physics: const ClampingScrollPhysics(),
@@ -278,7 +316,13 @@ class _EmailOtpVerifyScreenState
                   const SizedBox(height: 24),
                   Center(
                     child: TextButton(
-                      onPressed: () => context.go('/welcome'),
+                      onPressed: () {
+                    // Abandoning the OTP flow — clear the pending
+                    // restore so a subsequent cold-start doesn't
+                    // resurrect this screen.
+                    CrossIsolateKV.clearPendingOtp();
+                    context.go('/welcome');
+                  },
                       child: Text(
                         'Use a different email',
                         style: theme.textTheme.bodyMedium?.copyWith(
@@ -301,7 +345,13 @@ class _EmailOtpVerifyScreenState
                     color: theme.colorScheme.onSurface,
                     size: 28,
                   ),
-                  onPressed: () => context.go('/welcome'),
+                  onPressed: () {
+                    // Abandoning the OTP flow — clear the pending
+                    // restore so a subsequent cold-start doesn't
+                    // resurrect this screen.
+                    CrossIsolateKV.clearPendingOtp();
+                    context.go('/welcome');
+                  },
                 ),
               ),
             ),

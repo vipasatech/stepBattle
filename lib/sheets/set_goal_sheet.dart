@@ -75,12 +75,19 @@ class _SetGoalSheetState extends ConsumerState<SetGoalSheet> {
         ? GoalFormula.fallback
         : (GoalFormula.forUser(user) ?? GoalFormula.fallback);
     final range = _range!;
-    // Clamp any out-of-range value the caller passed in. Defensive — should
-    // never trip in practice unless the user's fitness level just changed.
-    if (_goal < range.min || _goal > range.max) {
-      _goal = range.clamp(_goal);
-    }
+    // Only pull the goal UP to the personalized floor — going below the
+    // healthy min lies about cardiovascular benefit and we don't want to
+    // suggest it. But an ambitious user may have set a value ABOVE
+    // range.max via the custom stepper (which now allows up to
+    // AppConstants.maxStepGoal); don't yank that back down every time
+    // the sheet reopens.
+    if (_goal < range.min) _goal = range.min;
+    if (_goal > AppConstants.maxStepGoal) _goal = AppConstants.maxStepGoal;
     final presets = _presetsFor(range);
+    // Custom stepper ceiling — formula's max for the healthy chip range,
+    // but users can push past it via the +/- to an absolute app-wide cap.
+    final customMax = AppConstants.maxStepGoal;
+    final aboveRecommended = _goal > range.max;
 
     return DraggableScrollableSheet(
       initialChildSize: 0.8,
@@ -264,12 +271,9 @@ class _SetGoalSheetState extends ConsumerState<SetGoalSheet> {
               children: [
                 _StepperBtn(
                   icon: Icons.remove,
-                  // Clamp to the formula's [min, max] — the user can't
-                  // dial below their personalized floor (e.g., 2,500 for
-                  // a sedentary elderly user, 5,000 for an advanced
-                  // young adult). Going below would lie about health
-                  // benefit; going above would invent a target out of
-                  // their fitness band.
+                  // Floor at the formula's personalized min — dialing
+                  // below it would lie about cardiovascular benefit for
+                  // that user's fitness profile.
                   onTap: _goal > range.min
                       ? () => setState(() {
                             final next = _goal - AppConstants.stepGoalIncrement;
@@ -279,24 +283,54 @@ class _SetGoalSheetState extends ConsumerState<SetGoalSheet> {
                 ),
                 const SizedBox(width: 24),
                 SizedBox(
-                  width: 100,
+                  // Widened for 5-digit values (e.g. 30,000).
+                  width: 130,
                   child: Text(_fmt(_goal),
                       textAlign: TextAlign.center,
-                      style: theme.textTheme.headlineMedium
-                          ?.copyWith(fontWeight: FontWeight.w700)),
+                      style: theme.textTheme.headlineMedium?.copyWith(
+                        fontWeight: FontWeight.w700,
+                        // Amber when the user has pushed past the
+                        // formula's recommended max — a light "you're
+                        // going above the healthy band we suggest"
+                        // cue without blocking the choice.
+                        color: aboveRecommended
+                            ? AppColors.lightAmber
+                            : null,
+                      )),
                 ),
                 const SizedBox(width: 24),
                 _StepperBtn(
                   icon: Icons.add,
-                  onTap: _goal < range.max
+                  // Ceiling now sits at the app-wide hard cap, not the
+                  // formula's recommended max. Ambitious users can dial
+                  // above their recommended band; visual cue below
+                  // signals when they've crossed it.
+                  onTap: _goal < customMax
                       ? () => setState(() {
                             final next = _goal + AppConstants.stepGoalIncrement;
-                            _goal = next > range.max ? range.max : next;
+                            _goal = next > customMax ? customMax : next;
                           })
                       : null,
                 ),
               ],
             ),
+
+            // Soft warning strip — only when the goal sits above the
+            // personalized recommended max. Doesn't block save; just
+            // flags that they've stepped outside the healthy band.
+            if (aboveRecommended) ...[
+              const SizedBox(height: 12),
+              Center(
+                child: Text(
+                  'Above your recommended range',
+                  style: theme.textTheme.labelSmall?.copyWith(
+                    color: AppColors.lightAmber,
+                    fontWeight: FontWeight.w700,
+                    letterSpacing: 0.3,
+                  ),
+                ),
+              ),
+            ],
 
             const SizedBox(height: 24),
 

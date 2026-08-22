@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import '../config/colors.dart';
 
-enum StatusType { live, pending, won, lost, inProgress, completed, locked, full }
+enum StatusType { live, ending, pending, won, lost, inProgress, completed, locked, full }
 
 /// Compact status indicator pill used on battle cards, mission rows, etc.
 class StatusPill extends StatelessWidget {
@@ -13,6 +13,14 @@ class StatusPill extends StatelessWidget {
   Widget build(BuildContext context) {
     final (label, bgColor, textColor, showDot) = switch (type) {
       StatusType.live => ('Live', AppColors.success.withValues(alpha: 0.1), AppColors.success, true),
+      // 'Ending…' — battle end_time has passed, waiting for the server
+      // cron (process_battle_lifecycle → settle_stake_battle) to credit
+      // the pot and flip status to completed. Typically resolves within
+      // ~60 s. Amber-with-dot so users read it as "in transition, not
+      // stuck." Replaces the client-side auto-complete that used to
+      // race the cron and lose pot payouts (see battle_service.dart —
+      // completeExpiredBattles was removed in 1.1.6+29).
+      StatusType.ending => ('Ending…', AppColors.amber.withValues(alpha: 0.1), AppColors.amber, true),
       StatusType.pending => ('Pending', AppColors.amber.withValues(alpha: 0.1), AppColors.amber, false),
       StatusType.won => ('Won', AppColors.success.withValues(alpha: 0.1), AppColors.success, false),
       StatusType.lost => ('Lost', AppColors.error.withValues(alpha: 0.1), AppColors.error, false),

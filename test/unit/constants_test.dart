@@ -88,25 +88,38 @@ void main() {
     });
   });
 
-  group('XP reward constants', () {
-    test('step XP rate is 10 per 1000', () {
-      expect(AppConstants.xpPer1000Steps, 10);
+  group('XP reward constants (v2 economy)', () {
+    test('sign-up bonus is 500', () {
+      expect(AppConstants.xpSignUpBonus, 500);
     });
 
-    test('1v1 win reward is 200', () {
-      expect(AppConstants.xpWin1v1, 200);
+    test('first 7-day streak bonus is 50', () {
+      expect(AppConstants.xpFirst7DayStreak, 50);
     });
 
-    test('group win reward is 300', () {
-      expect(AppConstants.xpWinGroup, 300);
+    test('every 30-day streak milestone is 100', () {
+      expect(AppConstants.xp30DayStreakMilestone, 100);
     });
 
-    test('daily goal reached is 75', () {
-      expect(AppConstants.xpDailyGoalReached, 75);
+    test('daily streak mission is 50', () {
+      expect(AppConstants.xpDailyStreakMission, 50);
     });
 
-    test('7-day streak bonus is 100', () {
-      expect(AppConstants.xp7DayStreak, 100);
+    test('minimum battle stake is 100', () {
+      expect(AppConstants.minBattleStakeXp, 100);
+    });
+  });
+
+  group('XP recharge (real money → XP)', () {
+    test('1 rupee = 5 XP', () {
+      expect(AppConstants.xpPerRupee, 5);
+      expect(AppConstants.rupeesToXp(1), 5);
+      expect(AppConstants.rupeesToXp(50), 250);
+    });
+
+    test('minimum recharge is 50 rupees', () {
+      expect(AppConstants.minRechargeRupees, 50);
+      expect(AppConstants.minRechargeXp(), 250);
     });
   });
 

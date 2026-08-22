@@ -17,7 +17,7 @@ class UpgradeBannerCard extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final sub = ref.watch(subscriptionProvider);
-    if (sub.tier != SubscriptionTier.free) return const SizedBox.shrink();
+    if (sub.tier != SubscriptionTier.basic) return const SizedBox.shrink();
 
     final theme = Theme.of(context);
     return Padding(

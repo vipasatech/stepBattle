@@ -25,7 +25,7 @@ class WeeklyChallengeCard extends StatelessWidget {
 
     final accentColor = _accentFor(mission.category);
 
-    return GestureDetector(
+    return RepaintBoundary(child: GestureDetector(
       onTap: onTap,
       child: Container(
         padding: const EdgeInsets.all(20),
@@ -126,7 +126,7 @@ class WeeklyChallengeCard extends StatelessWidget {
           ],
         ),
       ),
-    );
+    ));
   }
 
   Color _accentFor(MissionCategory cat) => switch (cat) {

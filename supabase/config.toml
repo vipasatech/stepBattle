@@ -1,0 +1,20 @@
+# Supabase project configuration.
+#
+# The primary use here is per-function overrides for Edge Function
+# defaults (JWT verification, region, timeouts). Add sections when you
+# need to override for a specific function; unlisted functions inherit
+# Supabase's defaults (verify_jwt = true).
+
+# razorpay_webhook — called by Razorpay's servers, which have no Supabase
+# JWT. Authenticity is enforced by HMAC-SHA256 of the raw body against
+# RAZORPAY_WEBHOOK_SECRET (see functions/razorpay_webhook/index.ts).
+# If verify_jwt were left on, every legitimate webhook delivery would be
+# rejected at the platform layer with 401 before our handler ever ran.
+[functions.razorpay_webhook]
+verify_jwt = false
+
+# stripe_webhook — same rationale as razorpay_webhook. Called by
+# Stripe's servers with the Stripe-Signature header; the function
+# HMAC-verifies the raw body against STRIPE_WEBHOOK_SECRET.
+[functions.stripe_webhook]
+verify_jwt = false

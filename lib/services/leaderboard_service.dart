@@ -3,6 +3,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../config/constants.dart';
 import '../models/leaderboard_entry_model.dart';
 import '../utils/app_logger.dart';
+import 'supabase_api_client.dart';
 
 /// Leaderboard reads on Supabase.
 ///
@@ -49,13 +50,25 @@ class LeaderboardService {
     // subsequent pages.
     try {
       final offset = startAfterRank ?? 0;
-      final rows = await _supabase
-          .from('profile_earned_xp')
-          .select()
-          .order('earned_xp', ascending: false)
-          .range(offset, offset + limit - 1);
-      AppLogger.leaderboard.d('getGlobalRanks',
-          fields: {'count': rows.length, 'limit': limit, 'offset': offset});
+      final rows = await SupabaseApiClient.instance.run<List<dynamic>>(
+        () async {
+          final data = await _supabase
+              .from('profile_earned_xp')
+              .select()
+              .order('earned_xp', ascending: false)
+              // Deterministic tie-breaker on `id` — required so this
+              // list's positional ranks agree with getMyRank's rank
+              // formula (see comment in getMyRank). Without it, tied
+              // users appear at planner-arbitrary positions and the
+              // "You" pill's rank number highlights the wrong row.
+              .order('id', ascending: true)
+              .range(offset, offset + limit - 1);
+          return data;
+        },
+        category: LogCategory.leaderboard,
+        name: 'leaderboard.getGlobalRanks',
+        fields: {'limit': limit, 'offset': offset},
+      );
       // _entriesFromProfiles stamps 1-based ranks; for page 2+, shift
       // the base rank by the offset so positions stay correct across
       // pages.
@@ -99,7 +112,13 @@ class LeaderboardService {
     final entries = rows
         .map<LeaderboardEntry>(LeaderboardEntry.fromSupabaseRow)
         .toList()
-      ..sort((a, b) => b.totalXP.compareTo(a.totalXP));
+      ..sort((a, b) {
+        // Match the server-side ORDER BY used for the global/geo lists:
+        // earned XP DESC, then userId ASC as a stable tie-breaker.
+        final xpCmp = b.totalXP.compareTo(a.totalXP);
+        if (xpCmp != 0) return xpCmp;
+        return a.userId.compareTo(b.userId);
+      });
 
     // Stamp positional ranks (1-based) so the UI shows 1/2/3 by position
     // within the friend group — independent of any global rank that might
@@ -122,13 +141,21 @@ class LeaderboardService {
   // ---------------------------------------------------------------------------
 
   Future<LeaderboardEntry?> getMyRank(String userId) async {
-    // Two-step computation against the earned_xp view:
-    //   1. Read the user's row from `profile_earned_xp` → grab
-    //      `earned_xp`.
-    //   2. Count how many rows in the view have strictly higher
-    //      `earned_xp` → that count + 1 = the user's global rank.
-    // Ranks must match the ranking metric used in the boards, so both
-    // steps read the view (never the raw profiles table).
+    // Rank must match the *positional* rank in the boards' list view
+    // (getGlobalRanks etc.), which orders by `earned_xp DESC, id ASC`
+    // and stamps 1-based positions. So the rank formula here is:
+    //
+    //   rank = 1
+    //        + count(users with STRICTLY higher earned_xp)
+    //        + count(users TIED at earned_xp but with smaller id)
+    //
+    // Before this three-part formula, we used a shared-rank scheme
+    // (count(>) + 1) which said "everyone tied at 0 XP is rank 17".
+    // But the list's positional ranks were 17, 18, 19, … for those
+    // same tied users, so the "You" pill highlighted the wrong row
+    // (whichever id happened to sort first among the ties). The
+    // fix: use the same tie-breaker the list uses, so pill rank
+    // and list position always agree.
     try {
       final profile = await _supabase
           .from('profile_earned_xp')
@@ -138,13 +165,17 @@ class LeaderboardService {
       if (profile == null) return null;
 
       final myXp = (profile['earned_xp'] as num?)?.toInt() ?? 0;
-      // Strict greater-than so ties resolve favourably — you share
-      // rank with anyone tied at your earned XP.
       final higher = await _supabase
           .from('profile_earned_xp')
           .select('id')
           .gt('earned_xp', myXp);
-      final rank = (higher as List).length + 1;
+      final tiedEarlier = await _supabase
+          .from('profile_earned_xp')
+          .select('id')
+          .eq('earned_xp', myXp)
+          .lt('id', userId);
+      final rank =
+          (higher as List).length + (tiedEarlier as List).length + 1;
 
       return LeaderboardEntry.fromSupabaseRow(
         profile,
@@ -170,14 +201,21 @@ class LeaderboardService {
     int limit = 50,
   }) async {
     try {
-      final rows = await _supabase
-          .from('profile_earned_xp')
-          .select()
-          .eq('district_name', districtName)
-          .order('earned_xp', ascending: false)
-          .limit(limit);
-      AppLogger.leaderboard.d('getDistrictRanks',
-          fields: {'districtName': districtName, 'count': rows.length});
+      final rows = await SupabaseApiClient.instance.run<List<dynamic>>(
+        () async {
+          final data = await _supabase
+              .from('profile_earned_xp')
+              .select()
+              .eq('district_name', districtName)
+              .order('earned_xp', ascending: false)
+              .order('id', ascending: true)  // stable tie-breaker (see getGlobalRanks)
+              .limit(limit);
+          return data;
+        },
+        category: LogCategory.leaderboard,
+        name: 'leaderboard.getDistrictRanks',
+        fields: {'districtName': districtName, 'limit': limit},
+      );
       return _entriesFromProfiles(rows);
     } catch (e, s) {
       AppLogger.leaderboard.e('getDistrictRanks:failed',
@@ -191,14 +229,21 @@ class LeaderboardService {
     int limit = 100,
   }) async {
     try {
-      final rows = await _supabase
-          .from('profile_earned_xp')
-          .select()
-          .eq('state_name', stateName)
-          .order('earned_xp', ascending: false)
-          .limit(limit);
-      AppLogger.leaderboard.d('getStateRanks',
-          fields: {'stateName': stateName, 'count': rows.length});
+      final rows = await SupabaseApiClient.instance.run<List<dynamic>>(
+        () async {
+          final data = await _supabase
+              .from('profile_earned_xp')
+              .select()
+              .eq('state_name', stateName)
+              .order('earned_xp', ascending: false)
+              .order('id', ascending: true)  // stable tie-breaker (see getGlobalRanks)
+              .limit(limit);
+          return data;
+        },
+        category: LogCategory.leaderboard,
+        name: 'leaderboard.getStateRanks',
+        fields: {'stateName': stateName, 'limit': limit},
+      );
       return _entriesFromProfiles(rows);
     } catch (e, s) {
       AppLogger.leaderboard.e('getStateRanks:failed',
@@ -212,14 +257,21 @@ class LeaderboardService {
     int limit = 100,
   }) async {
     try {
-      final rows = await _supabase
-          .from('profile_earned_xp')
-          .select()
-          .eq('country_code', countryCode.toUpperCase())
-          .order('earned_xp', ascending: false)
-          .limit(limit);
-      AppLogger.leaderboard.d('getCountryRanks',
-          fields: {'countryCode': countryCode, 'count': rows.length});
+      final rows = await SupabaseApiClient.instance.run<List<dynamic>>(
+        () async {
+          final data = await _supabase
+              .from('profile_earned_xp')
+              .select()
+              .eq('country_code', countryCode.toUpperCase())
+              .order('earned_xp', ascending: false)
+              .order('id', ascending: true)  // stable tie-breaker (see getGlobalRanks)
+              .limit(limit);
+          return data;
+        },
+        category: LogCategory.leaderboard,
+        name: 'leaderboard.getCountryRanks',
+        fields: {'countryCode': countryCode, 'limit': limit},
+      );
       return _entriesFromProfiles(rows);
     } catch (e, s) {
       AppLogger.leaderboard.e('getCountryRanks:failed',

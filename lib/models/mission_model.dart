@@ -1,5 +1,3 @@
-import 'package:cloud_firestore/cloud_firestore.dart';
-
 enum MissionType { daily, weekly }
 
 enum MissionCategory { steps, battle, streak, calories }
@@ -14,6 +12,23 @@ class MissionModel {
   final int xpReward;
   final String difficulty; // "easy" | "medium" | "hard"
 
+  /// When true, admin has asked us to feature this mission on the
+  /// Home tab as a big card (alongside the active-battle card).
+  /// Otherwise the mission lives only in the Missions tab.
+  final bool shouldShowInHome;
+
+  /// Optional admin-uploaded poster (PNG/JPG in the `mission-posters`
+  /// Supabase Storage bucket). When set, the client shows a full-
+  /// screen popup on next app open / foreground until the user
+  /// dismisses it via the [X]. Dismissal is device-local and
+  /// permanent per mission id.
+  final String? posterUrl;
+
+  /// Tiebreaker when multiple missions compete for the same slot
+  /// (highest wins). Applies to both featured Home cards (ordering)
+  /// and poster popups (only one poster per app open, highest wins).
+  final int displayOrder;
+
   const MissionModel({
     required this.missionId,
     required this.type,
@@ -23,6 +38,9 @@ class MissionModel {
     required this.targetValue,
     required this.xpReward,
     required this.difficulty,
+    this.shouldShowInHome = false,
+    this.posterUrl,
+    this.displayOrder = 100,
   });
 
   /// Build a MissionModel from a Supabase `public.missions` row. Note that
@@ -38,34 +56,13 @@ class MissionModel {
       targetValue: (d['target_value'] as num?)?.toInt() ?? 0,
       xpReward: (d['xp_reward'] as num?)?.toInt() ?? 0,
       difficulty: d['difficulty'] as String? ?? 'easy',
+      shouldShowInHome: d['should_show_in_home'] as bool? ?? false,
+      posterUrl: (d['poster_url'] as String?)?.trim().isEmpty ?? true
+          ? null
+          : d['poster_url'] as String?,
+      displayOrder: (d['display_order'] as num?)?.toInt() ?? 100,
     );
   }
-
-  factory MissionModel.fromFirestore(
-      DocumentSnapshot<Map<String, dynamic>> doc) {
-    final d = doc.data()!;
-    return MissionModel(
-      missionId: doc.id,
-      type: d['type'] == 'weekly' ? MissionType.weekly : MissionType.daily,
-      title: d['title'] as String? ?? '',
-      description: d['description'] as String? ?? '',
-      category: _parseCategory(d['category'] as String? ?? 'steps'),
-      targetValue: d['targetValue'] as int? ?? 0,
-      xpReward: d['xpReward'] as int? ?? 0,
-      difficulty: d['difficulty'] as String? ?? 'easy',
-    );
-  }
-
-  Map<String, dynamic> toFirestore() => {
-        'type': type == MissionType.weekly ? 'weekly' : 'daily',
-        'title': title,
-        'description': description,
-        'category': category.name,
-        'targetValue': targetValue,
-        'xpReward': xpReward,
-        'difficulty': difficulty,
-      };
-
   static MissionCategory _parseCategory(String s) => switch (s) {
         'battle' => MissionCategory.battle,
         'streak' => MissionCategory.streak,
@@ -73,28 +70,15 @@ class MissionModel {
         _ => MissionCategory.steps,
       };
 
-  /// Default daily missions (used when Firestore has none seeded yet).
+  /// Client-side seed missions used when the admin-managed `missions`
+  /// table hasn't yet supplied a catalog (fresh install, offline, or
+  /// pre-launch). In v2 the entire catalog is admin-driven from the
+  /// website — the ONE mission we keep on the client is
+  /// `daily_streak`, which is baked into the app's XP model as a
+  /// system reward and shouldn't be removable via the admin panel.
+  /// Everything else (step goals, battle wins, weekly challenges) is
+  /// now the admin's responsibility to publish.
   static const List<MissionModel> defaultDaily = [
-    MissionModel(
-      missionId: 'daily_steps',
-      type: MissionType.daily,
-      title: 'Walk 5,000 Steps',
-      description: 'Hit your daily step target',
-      category: MissionCategory.steps,
-      targetValue: 5000,
-      xpReward: 100,
-      difficulty: 'easy',
-    ),
-    MissionModel(
-      missionId: 'daily_battle',
-      type: MissionType.daily,
-      title: 'Win a Battle',
-      description: 'Defeat an opponent in a step battle',
-      category: MissionCategory.battle,
-      targetValue: 1,
-      xpReward: 150,
-      difficulty: 'medium',
-    ),
     MissionModel(
       missionId: 'daily_streak',
       type: MissionType.daily,
@@ -107,37 +91,8 @@ class MissionModel {
     ),
   ];
 
-  /// Default weekly challenges.
-  static const List<MissionModel> defaultWeekly = [
-    MissionModel(
-      missionId: 'weekly_steps',
-      type: MissionType.weekly,
-      title: 'Walk 50,000 Steps',
-      description: 'Accumulate steps across the week',
-      category: MissionCategory.steps,
-      targetValue: 50000,
-      xpReward: 500,
-      difficulty: 'hard',
-    ),
-    MissionModel(
-      missionId: 'weekly_battles',
-      type: MissionType.weekly,
-      title: 'Win 3 Battles',
-      description: 'Defeat 3 opponents this week',
-      category: MissionCategory.battle,
-      targetValue: 3,
-      xpReward: 400,
-      difficulty: 'medium',
-    ),
-    MissionModel(
-      missionId: 'weekly_alldays',
-      type: MissionType.weekly,
-      title: 'Complete All Daily Missions 5 Days',
-      description: 'Finish every daily mission 5 days in a row',
-      category: MissionCategory.streak,
-      targetValue: 5,
-      xpReward: 300,
-      difficulty: 'hard',
-    ),
-  ];
+  /// No default weekly challenges ship on the client — the admin
+  /// publishes them via the website. If none exist yet, the missions
+  /// tab renders an empty state for the "Weekly" section.
+  static const List<MissionModel> defaultWeekly = <MissionModel>[];
 }

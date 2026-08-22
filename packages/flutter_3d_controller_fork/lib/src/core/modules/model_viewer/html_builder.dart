@@ -51,6 +51,15 @@ abstract class HTMLBuilder {
     final num? exposure,
     final num? shadowIntensity,
     final num? shadowSoftness,
+    /// model-viewer 3.0+ tone-map curve. Accepted values:
+    ///   `neutral` (default)  — Khronos neutral, a gentle sRGB
+    ///   `aces`               — punchy film-look
+    ///   `agx`                — Blender 4.x AgX view transform
+    ///   `commerce`           — product photography
+    /// Set to `agx` to match a Blender viewport that uses the AgX view
+    /// transform (Blender 4.x default). Baked at HTML build time so it
+    /// takes effect on the very first paint.
+    final String? toneMapping,
     // Animation Attributes
     final String? animationName,
     final num? animationCrossfadeDuration,
@@ -300,14 +309,20 @@ abstract class HTMLBuilder {
       if (shadowIntensity < 0 || shadowIntensity > 1) {
         throw RangeError('shadow-intensity must be between 0 and 1');
       }
-      modelViewerHtml.write(' shadow-intensity="$shadowIntensity}"');
+      modelViewerHtml.write(' shadow-intensity="$shadowIntensity"');
+    }
+    // tone-mapping (model-viewer 3.0+)
+    if (toneMapping != null) {
+      modelViewerHtml.write(
+        ' tone-mapping="${htmlEscape.convert(toneMapping)}"',
+      );
     }
     // shadow-softness
     if (shadowSoftness != null) {
       if (shadowSoftness < 0 || shadowSoftness > 1) {
         throw RangeError('shadow-softness must be between 0 and 1');
       }
-      modelViewerHtml.write(' shadow-softness="$shadowSoftness}"');
+      modelViewerHtml.write(' shadow-softness="$shadowSoftness"');
     }
 
     // Animation Attributes

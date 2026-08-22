@@ -2,8 +2,15 @@ import 'package:google_sign_in/google_sign_in.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../models/user_model.dart';
+import '../repositories/battle_repository.dart';
+import '../repositories/leaderboard_repository.dart';
+import '../repositories/mission_repository.dart';
+import '../repositories/profile_repository.dart';
 import '../utils/app_logger.dart';
+import 'alarm_wake_scheduler.dart';
 import 'background_sync.dart';
+import 'notification_service.dart';
+import 'observability_service.dart';
 
 /// Auth service backed by Supabase.
 ///
@@ -78,10 +85,40 @@ class SupabaseAuthService {
         accessToken: accessToken,
       );
 
+      // Ensure a profile row exists for the returning user. Testers
+      // reported: delete account → re-sign in with the same Google
+      // account → signup bonus (500 XP) didn't land. Root cause is
+      // the `on_auth_user_created` trigger only fires on auth.users
+      // INSERT. If the server-side delete removed the profile row
+      // but the auth.users row was already re-used (or an admin
+      // wipe left it in place), the trigger doesn't refire on the
+      // subsequent sign-in, so no profile → no `profiles_signup_grant`
+      // trigger → no bonus. Reconciling here fixes both the missing-
+      // profile crash on Home AND the missing signup bonus (INSERT
+      // fires the trigger, which credits the 500 XP idempotently).
+      final signedInUid = res.user?.id;
+      if (signedInUid != null && signedInUid.isNotEmpty) {
+        await _ensureProfileRow(
+          userId: signedInUid,
+          email: res.user?.email,
+          userMetadata: res.user?.userMetadata,
+        );
+      }
+
       AppLogger.auth.i('signInWithGoogle:done', fields: {
         'uid': res.user?.id,
         'email': res.user?.email,
       });
+      // Identify + funnel event. `identify` attributes every subsequent
+      // event/error to this uid on Sentry and PostHog. `sign_in` fires
+      // for both first-time and returning users; `signup` is fired
+      // elsewhere when the mandatory-onboarding survey is submitted.
+      final uid = res.user?.id;
+      if (uid != null && uid.isNotEmpty) {
+        await ObservabilityService.identify(uid);
+        ObservabilityService.trackEvent('sign_in',
+            properties: {'provider': 'google'});
+      }
       return res;
     } catch (e, s) {
       if (e is! _AuthCancelled) {
@@ -161,6 +198,58 @@ class SupabaseAuthService {
   // add a "change email" flow, `signInWithOtp` on the new address is
   // the replacement.
 
+  /// Reconciles a missing `profiles` row after sign-in. No-op when the
+  /// row already exists. When we DO insert (returning-user-with-deleted-
+  /// profile case), the `profiles_signup_grant` trigger fires and
+  /// idempotently credits the signup bonus (500 XP per migration 0049).
+  ///
+  /// Safe to call unconditionally on every sign-in — the SELECT is
+  /// cheap and the INSERT path only ever runs for the rare re-signup-
+  /// after-delete edge case. Failures are non-fatal: the caller still
+  /// gets a valid session; the app will retry on the next sign-in.
+  Future<void> _ensureProfileRow({
+    required String userId,
+    String? email,
+    Map<String, dynamic>? userMetadata,
+  }) async {
+    try {
+      final existing = await _supabase
+          .from('profiles')
+          .select('id')
+          .eq('id', userId)
+          .maybeSingle();
+      if (existing != null) return;
+
+      // Profile is missing — recreate it. Values match the shape the
+      // `handle_new_user` DB trigger uses so downstream code sees a
+      // row indistinguishable from a first-time signup. `on conflict
+      // do nothing` in case a concurrent path (auth trigger racing our
+      // check) already inserted between the SELECT and this INSERT.
+      final displayName = (userMetadata?['name'] ??
+              userMetadata?['full_name'] ??
+              '') as String?;
+      final avatarUrl = userMetadata?['avatar_url'] as String?;
+      await _supabase.from('profiles').upsert(
+        {
+          'id': userId,
+          'display_name': displayName ?? '',
+          'email': email ?? '',
+          if (avatarUrl != null) 'avatar_url': avatarUrl,
+        },
+        onConflict: 'id',
+        ignoreDuplicates: true,
+      );
+      AppLogger.auth.i('ensureProfileRow:reconciled',
+          fields: {'uid': userId});
+    } catch (e) {
+      // Non-fatal: sign-in already succeeded. If the reconciliation
+      // fails (transient network, RLS blip), the user will just see
+      // Home render empty until the next sign-in retries.
+      AppLogger.auth.w('ensureProfileRow:failed',
+          fields: {'uid': userId, 'err': e.toString()});
+    }
+  }
+
   Future<void> signOut() async {
     final uid = _supabase.auth.currentUser?.id;
     AppLogger.auth.i('signOut', fields: {'uid': uid});
@@ -168,12 +257,36 @@ class SupabaseAuthService {
     // — that fires on any shell unmount, including transient root-route
     // navigations, and would stop the service while the user is still active).
     await BackgroundSync.stopService();
+    // Cancel the exact-time alarm wake schedule too — otherwise the
+    // signed-out isolate would keep firing headlessStepSync every few
+    // hours against a null user session.
+    await AlarmWakeScheduler.cancelAll();
+    // Cancel the FCM token-refresh listener so it doesn't attempt to
+    // write the outgoing user's fcm_token if FCM rotates during the
+    // signed-out window. The listener re-arms on the next sign-in.
+    await NotificationService().disposeTokenRefreshListener();
     try {
       await _googleSignIn.signOut();
     } catch (_) {
       // Google sign-out is best-effort; never block Supabase sign-out.
     }
     await _supabase.auth.signOut();
+    // Wipe every repository's local cache so the next sign-in on this
+    // device (possibly a different account) doesn't briefly paint the
+    // previous user's rows before the new ones land.
+    await Future.wait([
+      ProfileRepository.clearAllCached(),
+      MissionRepository.clearAllCached(),
+      BattleRepository.clearAllCached(),
+      LeaderboardRepository.clearAllCached(),
+    ]);
+    // Fire sign_out FIRST while identity is still set, so PostHog
+    // attributes the event to the user who's actually leaving. Then
+    // reset — subsequent events belong to no one (crucial when a device
+    // is shared). Swapping the order dropped attribution on the churn
+    // event which is exactly the one funnel dashboards want.
+    ObservabilityService.trackEvent('sign_out');
+    await ObservabilityService.resetIdentity();
   }
 
   // ---------------------------------------------------------------------------
@@ -186,8 +299,14 @@ class SupabaseAuthService {
   /// small race we tolerate).
   Future<UserModel?> getProfile(String userId) async {
     try {
+      // Read from profiles_public — RLS on the underlying profiles
+      // table is self-only (Migration 0036 / H3 lockdown), so any
+      // cross-user read via `.from('profiles')` returns empty. The
+      // public view exposes safe columns (no email/phone/DOB/home
+      // coords/fcm_token) and is definer-mode so all rows are visible
+      // to any authenticated caller.
       final data = await _supabase
-          .from('profiles')
+          .from('profiles_public')
           .select()
           .eq('id', userId)
           .maybeSingle();
@@ -241,6 +360,13 @@ class SupabaseAuthService {
     /// is NULL.
     String? preferredName,
     String? avatarUrl,
+
+    /// Seeded battle-ground runner id — computed by the caller from
+    /// `Avatar.defaultForUser(gender, fitnessLevel, ageYears)`. Only
+    /// written when non-null so an existing user who re-enters
+    /// onboarding without a mapped default doesn't wipe out a manual
+    /// pick they made from the avatar-picker sheet.
+    String? battleAvatarId,
   }) async {
     AppLogger.auth.i('completeOnboarding:start', fields: {
       'uid': userId,
@@ -252,6 +378,31 @@ class SupabaseAuthService {
     try {
       // Generate a unique user code (retry up to 5 times on collision).
       final userCode = await _generateUniqueUserCode();
+      // Fetch existing total_xp AND avatar_url:
+      //   • total_xp — so we can detect whether the sign-up bonus has
+      //     already been paid (re-onboarding must not pay it twice).
+      //   • avatar_url — so we can skip writing the Google OAuth
+      //     avatar over a photo the user explicitly uploaded via
+      //     LocalProfilePhotoService. Testers reported the Google
+      //     picture overriding their saved photo on re-login; the
+      //     fix is "OAuth avatar is only allowed to LAND on first
+      //     setup — never overwrite a value that's already there."
+      final existing = await _supabase
+          .from('profiles')
+          .select('total_xp, avatar_url')
+          .eq('id', userId)
+          .maybeSingle();
+      final currentTotalXp =
+          (existing?['total_xp'] as num?)?.toInt() ?? 0;
+      final shouldAwardSignUpBonus = currentTotalXp == 0;
+      final existingAvatarUrl = existing?['avatar_url'] as String?;
+      // Only accept the passed OAuth avatar when the profile has no
+      // photo yet. Any prior value (uploaded photo, previously-set
+      // Google URL) wins over a fresh onboarding pass.
+      final shouldWriteAvatar =
+          avatarUrl != null &&
+              (existingAvatarUrl == null || existingAvatarUrl.isEmpty);
+
       await _supabase.from('profiles').update({
         'display_name': displayName,
         // `preferred_name` may be null — pass it through verbatim so
@@ -263,8 +414,69 @@ class SupabaseAuthService {
         'date_of_birth': dateOfBirth.toIso8601String().split('T').first,
         'gender': gender,
         'fitness_level': fitnessLevel,
-        if (avatarUrl != null) 'avatar_url': avatarUrl,
+        if (shouldWriteAvatar) 'avatar_url': avatarUrl,
+        if (battleAvatarId != null) 'battle_avatar_id': battleAvatarId,
       }).eq('id', userId);
+
+      if (avatarUrl != null && !shouldWriteAvatar) {
+        AppLogger.auth.i('completeOnboarding:avatarPreserved',
+            fields: {'uid': userId, 'kept': existingAvatarUrl});
+      }
+
+      // Sign-up bonus — call the server RPC (migration 0055). Prior to
+      // 0055 the grant relied solely on the `grant_signup_xp` trigger
+      // on `profiles` INSERT (migration 0020), which:
+      //   • hard-coded 100 XP (client constant is 500), and
+      //   • didn't fire when the profile row pre-existed migration
+      //     0020, leaving those users at 0 XP forever with no retry.
+      // `award_signup_bonus_v2()` is idempotent (guards on
+      // xp_ledger.reason='signup_grant') and returns the amount
+      // ACTUALLY credited: 500 on first call for this user, 0 if the
+      // bonus was already granted. We log what the server tells us —
+      // the previous log line asserted "granted" based on nothing but
+      // a client-side pre-read of total_xp==0, which meant the log
+      // was cheerfully lying every time the trigger silently skipped.
+      //
+      // Failure is non-fatal: onboarding must still complete even if
+      // the bonus call errors (network / RLS glitch). The next foreground
+      // open re-reads the profile via realtime; the bonus can be
+      // re-attempted from a settings entry or the next mission flow.
+      if (shouldAwardSignUpBonus) {
+        try {
+          final credited = await _supabase.rpc('award_signup_bonus_v2');
+          final creditedInt = (credited as num?)?.toInt() ?? 0;
+          // Routed to AppLogger.xp (was auth) so signup bonus credits
+          // show up under the Diagnostics "xp" filter — the same tab
+          // testers use to watch battle-win / mission / streak XP land.
+          if (creditedInt > 0) {
+            AppLogger.xp.i('signupBonus:credited',
+                fields: {'uid': userId, 'xp': creditedInt});
+          } else {
+            AppLogger.xp.i('signupBonus:alreadyGranted',
+                fields: {'uid': userId});
+          }
+          // Re-read total_xp so the log tells us the true post-credit
+          // balance — if credited=500 but total_xp still shows 0, we've
+          // caught a silent RLS / trigger failure that would otherwise
+          // hide behind the RPC's optimistic return value.
+          final verify = await _supabase
+              .from('profiles')
+              .select('total_xp')
+              .eq('id', userId)
+              .maybeSingle();
+          final postXp = (verify?['total_xp'] as num?)?.toInt() ?? 0;
+          AppLogger.xp.i('signupBonus:xpVerified',
+              fields: {'uid': userId, 'totalXp': postXp});
+        } catch (e, s) {
+          AppLogger.xp.w('signupBonus:rpcFailed',
+              fields: {'uid': userId, 'err': e.toString()});
+          // Suppress the stack in fields to keep the log line small,
+          // but attach via error/stack so DevTools + Sentry keep it.
+          AppLogger.xp.e('signupBonus:rpcFailed_stack',
+              fields: {'uid': userId}, error: e, stack: s);
+        }
+      }
+
       AppLogger.auth.i('completeOnboarding:done',
           fields: {'uid': userId, 'userCode': userCode});
     } catch (e, s) {
@@ -309,6 +521,10 @@ class SupabaseAuthService {
           .update({'character_3d_id': characterId}).eq('id', userId);
       AppLogger.auth.i('updateCharacter3D',
           fields: {'uid': userId, 'id': characterId});
+      // Analytics: only send the character id — user id is threaded via
+      // Sentry/PostHog identify(), not per-event, so we don't double up.
+      ObservabilityService.trackEvent('avatar_pick',
+          properties: {'character_id': characterId ?? 'cleared'});
     } catch (e, s) {
       AppLogger.auth.e('updateCharacter3D:failed',
           fields: {'uid': userId, 'id': characterId}, error: e, stack: s);
@@ -316,10 +532,10 @@ class SupabaseAuthService {
     }
   }
 
-  /// Persist the fluttermoji character-avatar spec (see migration 0026
-  /// and [UserModel.avatarConfig]). Passing `null` clears the column,
-  /// which reverts the client to the URL-based [UserModel.avatarURL]
-  /// fallback.
+  /// Legacy — persists the character-avatar spec column from migration
+  /// 0026. Kept for API compatibility even though the fluttermoji
+  /// customizer was removed from the app. Nothing in the current UI
+  /// calls this.
   Future<void> updateAvatarConfig({
     required String userId,
     required Map<String, dynamic>? config,

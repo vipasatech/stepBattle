@@ -1,5 +1,6 @@
 ﻿import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:geolocator/geolocator.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../config/colors.dart';
 import '../providers/user_provider.dart';
@@ -27,18 +28,49 @@ class SetHomeSheet extends ConsumerStatefulWidget {
 
 enum _Step { picker, fetchingGps, pincodeInput, resolvingPin, success, error }
 
-class _SetHomeSheetState extends ConsumerState<SetHomeSheet> {
+class _SetHomeSheetState extends ConsumerState<SetHomeSheet>
+    with WidgetsBindingObserver {
   _Step _step = _Step.picker;
   final _pincodeCtrl = TextEditingController();
   final _countryCtrl = TextEditingController(text: 'IN');
   HomeLocation? _resolved;
   String? _error;
+  // Non-null when the error was a location-permission / services failure —
+  // tells the error step to show the right recovery CTA (grant / open
+  // settings / turn on location) instead of a bare "Try again".
+  LocationFailureReason? _locationFailure;
+  // Set when we launched the user out to system settings (location
+  // toggle or app permissions page). On resume we auto-retry so the
+  // sheet reflects the new state without the user having to tap
+  // anything.
+  bool _awaitingSettingsReturn = false;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+  }
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _pincodeCtrl.dispose();
     _countryCtrl.dispose();
     super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    // The user is coming back from the OS settings page they were
+    // deep-linked into via "Turn on location" / "Open app settings".
+    // Re-run the fetch so the sheet reflects the new state rather than
+    // stubbornly showing the pre-toggle error.
+    if (state == AppLifecycleState.resumed && _awaitingSettingsReturn) {
+      _awaitingSettingsReturn = false;
+      if (mounted && _step == _Step.error) {
+        _useLocation();
+      }
+    }
   }
 
   // --- Action handlers ---------------------------------------------------
@@ -47,25 +79,38 @@ class _SetHomeSheetState extends ConsumerState<SetHomeSheet> {
     setState(() {
       _step = _Step.fetchingGps;
       _error = null;
+      _locationFailure = null;
     });
 
     final svc = ref.read(geoServiceProvider);
-    final pos = await svc.getCurrentLocation();
+    final result = await svc.getCurrentLocation();
     if (!mounted) return;
-    if (pos == null) {
+    if (result.position == null) {
+      final reason = result.failure ?? LocationFailureReason.timeout;
       setState(() {
         _step = _Step.error;
-        _error =
-            'Could not get your location. Make sure location is on, or use a postal code.';
+        _locationFailure = reason;
+        _error = switch (reason) {
+          LocationFailureReason.servicesOff =>
+            'Location is turned off for this device. Turn it on in system settings, or use a postal code instead.',
+          LocationFailureReason.permissionDenied =>
+            'StepBattle needs location permission to detect your district. Grant permission to continue, or use a postal code instead.',
+          LocationFailureReason.permissionDeniedForever =>
+            'Location permission is blocked in Settings. Open app settings to allow it, or use a postal code instead.',
+          LocationFailureReason.timeout =>
+            'Couldn\'t get a location fix — signal may be weak. Try again or use a postal code.',
+        };
       });
       return;
     }
 
+    final pos = result.position!;
     final home = await svc.reverseGeocode(pos.latitude, pos.longitude);
     if (!mounted) return;
     if (home == null) {
       setState(() {
         _step = _Step.error;
+        _locationFailure = null;
         _error =
             'Got your location but could not resolve a district. Try a postal code.';
       });
@@ -75,6 +120,32 @@ class _SetHomeSheetState extends ConsumerState<SetHomeSheet> {
     setState(() {
       _resolved = home;
       _step = _Step.success;
+    });
+  }
+
+  /// Open OS-level location services page. User returns via back button.
+  /// Set the "awaiting return" flag so [didChangeAppLifecycleState] auto-
+  /// retries the location fetch once the app resumes.
+  Future<void> _openLocationSettings() async {
+    _awaitingSettingsReturn = true;
+    await Geolocator.openLocationSettings();
+  }
+
+  /// Open the app's OS settings page so the user can flip the location
+  /// permission back on after having selected "Don't allow again". Same
+  /// auto-retry-on-resume pattern as [_openLocationSettings].
+  Future<void> _openAppSettings() async {
+    _awaitingSettingsReturn = true;
+    await Geolocator.openAppSettings();
+  }
+
+  /// Switch straight into the postal-code entry step — offered as an
+  /// escape hatch on every error variant.
+  void _switchToPincode() {
+    setState(() {
+      _step = _Step.pincodeInput;
+      _error = null;
+      _locationFailure = null;
     });
   }
 
@@ -142,6 +213,7 @@ class _SetHomeSheetState extends ConsumerState<SetHomeSheet> {
     setState(() {
       _step = _Step.picker;
       _error = null;
+      _locationFailure = null;
     });
   }
 
@@ -149,6 +221,11 @@ class _SetHomeSheetState extends ConsumerState<SetHomeSheet> {
 
   @override
   Widget build(BuildContext context) {
+    // Combine keyboard inset (viewInsets) with the gesture / nav-bar inset
+    // (viewPadding.bottom) so the primary action never slips behind the
+    // system UI on gesture-nav phones or when the keyboard is open.
+    final mq = MediaQuery.of(context);
+    final bottomInset = mq.viewInsets.bottom + mq.viewPadding.bottom;
     return PopScope(
       canPop: !widget.requireChoice,
       child: Container(
@@ -157,9 +234,7 @@ class _SetHomeSheetState extends ConsumerState<SetHomeSheet> {
           borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
         ),
         child: Padding(
-          padding: EdgeInsets.only(
-            bottom: MediaQuery.of(context).viewInsets.bottom,
-          ),
+          padding: EdgeInsets.only(bottom: bottomInset),
           child: SingleChildScrollView(
             child: Column(
               mainAxisSize: MainAxisSize.min,
@@ -195,6 +270,11 @@ class _SetHomeSheetState extends ConsumerState<SetHomeSheet> {
                       ),
                     _Step.error => _ErrorStep(
                         message: _error ?? 'Something went wrong',
+                        locationFailure: _locationFailure,
+                        onGrantPermission: _useLocation,
+                        onOpenLocationSettings: _openLocationSettings,
+                        onOpenAppSettings: _openAppSettings,
+                        onUsePincode: _switchToPincode,
                         onRetry: _retry,
                       ),
                   },
@@ -516,12 +596,67 @@ class _SuccessStep extends StatelessWidget {
 
 class _ErrorStep extends StatelessWidget {
   final String message;
+  final LocationFailureReason? locationFailure;
+  final VoidCallback onGrantPermission;
+  final VoidCallback onOpenLocationSettings;
+  final VoidCallback onOpenAppSettings;
+  final VoidCallback onUsePincode;
   final VoidCallback onRetry;
-  const _ErrorStep({required this.message, required this.onRetry});
+
+  const _ErrorStep({
+    required this.message,
+    required this.locationFailure,
+    required this.onGrantPermission,
+    required this.onOpenLocationSettings,
+    required this.onOpenAppSettings,
+    required this.onUsePincode,
+    required this.onRetry,
+  });
+
+  ({String label, IconData icon, VoidCallback onPressed}) get _primary {
+    switch (locationFailure) {
+      case LocationFailureReason.servicesOff:
+        return (
+          label: 'Turn on location',
+          icon: Icons.location_on_outlined,
+          onPressed: onOpenLocationSettings,
+        );
+      case LocationFailureReason.permissionDenied:
+        return (
+          label: 'Grant permission',
+          icon: Icons.location_on_outlined,
+          onPressed: onGrantPermission,
+        );
+      case LocationFailureReason.permissionDeniedForever:
+        return (
+          label: 'Open app settings',
+          icon: Icons.settings_outlined,
+          onPressed: onOpenAppSettings,
+        );
+      case LocationFailureReason.timeout:
+      case null:
+        return (
+          label: 'Try again',
+          icon: Icons.refresh,
+          onPressed: onRetry,
+        );
+    }
+  }
+
+  String get _title => locationFailure == null
+      ? 'Something went wrong'
+      : switch (locationFailure!) {
+          LocationFailureReason.servicesOff => 'Location is off',
+          LocationFailureReason.permissionDenied => 'Location permission needed',
+          LocationFailureReason.permissionDeniedForever =>
+            'Permission blocked',
+          LocationFailureReason.timeout => 'Couldn\'t get a fix',
+        };
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final action = _primary;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -529,9 +664,13 @@ class _ErrorStep extends StatelessWidget {
           children: [
             Icon(Icons.error_outline, color: AppColors.error),
             const SizedBox(width: 8),
-            Text('Something went wrong',
+            Expanded(
+              child: Text(
+                _title,
                 style: theme.textTheme.titleMedium
-                    ?.copyWith(fontWeight: FontWeight.w800)),
+                    ?.copyWith(fontWeight: FontWeight.w800),
+              ),
+            ),
           ],
         ),
         const SizedBox(height: 8),
@@ -541,10 +680,16 @@ class _ErrorStep extends StatelessWidget {
         const SizedBox(height: 18),
         SizedBox(
           height: 52,
-          child: FilledButton(
-            onPressed: onRetry,
-            child: const Text('Try again'),
+          child: FilledButton.icon(
+            onPressed: action.onPressed,
+            icon: Icon(action.icon, size: 20),
+            label: Text(action.label),
           ),
+        ),
+        const SizedBox(height: 8),
+        TextButton(
+          onPressed: onUsePincode,
+          child: const Text('Use a postal code instead'),
         ),
       ],
     );

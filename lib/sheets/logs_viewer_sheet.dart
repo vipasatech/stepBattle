@@ -44,6 +44,13 @@ class _LogsViewerSheet extends StatefulWidget {
 class _LogsViewerSheetState extends State<_LogsViewerSheet> {
   /// `null` = All categories.
   LogCategory? _filter;
+
+  /// When true, the category filter is ignored and only entries at
+  /// `warn` level or above (warn + error) surface — the "Errors" chip
+  /// for the "show me what's broken" workflow. Mutually exclusive with
+  /// [_filter]: picking a category flips this back to false, and
+  /// picking Errors clears the category.
+  bool _errorsOnly = false;
   StreamSubscription<LogEntry>? _sub;
 
   /// We render from a local snapshot so list items don't shift around
@@ -78,7 +85,15 @@ class _LogsViewerSheetState extends State<_LogsViewerSheet> {
 
   void _refresh() {
     setState(() {
-      _entries = AppLogger.recent(category: _filter);
+      final base = _errorsOnly
+          ? AppLogger.recent() // full buffer, filtered by level below
+          : AppLogger.recent(category: _filter);
+      _entries = _errorsOnly
+          ? base
+              .where((e) =>
+                  e.level == LogLevel.warn || e.level == LogLevel.error)
+              .toList(growable: false)
+          : base;
     });
   }
 
@@ -136,8 +151,16 @@ class _LogsViewerSheetState extends State<_LogsViewerSheet> {
             ),
             _FilterChips(
               current: _filter,
+              errorsOnly: _errorsOnly,
               onChange: (c) {
                 _filter = c;
+                _errorsOnly = false;
+                _refresh();
+                _scrollToBottom();
+              },
+              onErrorsToggle: () {
+                _errorsOnly = !_errorsOnly;
+                if (_errorsOnly) _filter = null;
                 _refresh();
                 _scrollToBottom();
               },
@@ -209,8 +232,15 @@ class _Header extends StatelessWidget {
 
 class _FilterChips extends StatelessWidget {
   final LogCategory? current;
+  final bool errorsOnly;
   final ValueChanged<LogCategory?> onChange;
-  const _FilterChips({required this.current, required this.onChange});
+  final VoidCallback onErrorsToggle;
+  const _FilterChips({
+    required this.current,
+    required this.errorsOnly,
+    required this.onChange,
+    required this.onErrorsToggle,
+  });
 
   // Frequently-needed categories first; the rest stay accessible via
   // horizontal scrolling but don't crowd the default view.
@@ -236,16 +266,41 @@ class _FilterChips extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // "Errors" occupies chip index -1 (pinned at the front) so it's the
+    // first thing a tester sees when they open Diagnostics to find
+    // something broken.
+    final itemCount = _featured.length + 1;
     return SizedBox(
       height: 38,
       child: ListView.separated(
         scrollDirection: Axis.horizontal,
         padding: const EdgeInsets.symmetric(horizontal: 16),
-        itemCount: _featured.length,
+        itemCount: itemCount,
         separatorBuilder: (_, __) => const SizedBox(width: 6),
         itemBuilder: (_, i) {
-          final c = _featured[i];
-          final selected = c == current;
+          if (i == 0) {
+            return ChoiceChip(
+              label: const Text('Errors'),
+              selected: errorsOnly,
+              onSelected: (_) => onErrorsToggle(),
+              visualDensity: VisualDensity.compact,
+              labelStyle: TextStyle(
+                fontSize: 11,
+                fontWeight: FontWeight.w700,
+                color: errorsOnly
+                    ? Colors.white
+                    : AppColors.error,
+              ),
+              // Distinct color so this chip reads as "trouble filter",
+              // not just another category. Selected state stays red.
+              selectedColor: AppColors.error,
+              backgroundColor:
+                  AppColors.error.withValues(alpha: 0.12),
+              side: BorderSide.none,
+            );
+          }
+          final c = _featured[i - 1];
+          final selected = c == current && !errorsOnly;
           return ChoiceChip(
             label: Text(c?.name ?? 'All'),
             selected: selected,

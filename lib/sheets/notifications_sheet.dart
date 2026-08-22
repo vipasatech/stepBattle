@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../config/colors.dart';
@@ -8,6 +9,7 @@ import '../providers/battle_provider.dart';
 import '../providers/clan_provider.dart';
 import '../providers/friend_provider.dart';
 import '../providers/notification_provider.dart';
+import '../services/battle_service.dart' show AcceptInviteOutcome;
 import '../widgets/bottom_sheet_handle.dart';
 
 /// Full-screen notifications surface. Reached from the bell icon in
@@ -280,10 +282,14 @@ extension _FilterX on _Filter {
 
   bool matches(NotificationType t) => switch (this) {
         _Filter.all => true,
+        // Daily-series lifecycle notifications bucket under Battles so
+        // users looking there for "why did my daily stop?" find them.
         _Filter.battles => t == NotificationType.battleInvite ||
             t == NotificationType.battleStarted ||
             t == NotificationType.battleRejected ||
-            t == NotificationType.battleResult,
+            t == NotificationType.battleResult ||
+            t == NotificationType.dailySeriesDropped ||
+            t == NotificationType.dailySeriesEnded,
         _Filter.friends => t == NotificationType.friendRequest ||
             t == NotificationType.friendAccepted,
         _Filter.clan => t == NotificationType.clanInvite,
@@ -636,6 +642,13 @@ class _NotificationCard extends ConsumerWidget {
           (Icons.close_rounded, AppColors.error),
         NotificationType.battleResult =>
           (Icons.emoji_events_outlined, AppColors.tertiary),
+        // Series lifecycle: distinct icons so users immediately see the
+        // difference between "you got dropped" (calendar-strike) and
+        // "series ended for everyone" (stop-circle).
+        NotificationType.dailySeriesDropped =>
+          (Icons.event_busy_outlined, AppColors.error),
+        NotificationType.dailySeriesEnded =>
+          (Icons.stop_circle_outlined, AppColors.onSurfaceVariant),
         NotificationType.clanInvite =>
           (Icons.shield_outlined, AppColors.primary),
         NotificationType.levelUp =>
@@ -701,9 +714,40 @@ class _InviteActionsState extends ConsumerState<_InviteActions> {
           final battleId =
               (n.data['battle_id'] ?? n.data['battleId']) as String?;
           if (battleId != null) {
-            await ref
+            final isTeam = n.data.containsKey('team_label');
+            final outcome = await ref
                 .read(battleServiceProvider)
                 .acceptInvite(battleId: battleId, userId: uid);
+            // Daily-series invitees now compete from the moment of accept
+            // (Migration 0057, superseding 0056's "skip day 1" pattern).
+            // Their Home battle list will show the battle immediately as
+            // Live. The SnackBar is a light celebratory confirmation so
+            // the accept action has a visible acknowledgement — the
+            // Home update itself is realtime-driven and near-instant.
+            if (outcome == AcceptInviteOutcome.dailySeriesFirstJoin &&
+                mounted) {
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(
+                  content: Text("You're in! Battle is live now."),
+                  duration: Duration(seconds: 4),
+                ),
+              );
+            }
+            // Nav after accept — mirrors TeamLobbyInviteToastHost /
+            // BattleInviteToastHost behavior so the accept path is the
+            // same regardless of where the user tapped Accept. Close
+            // the notifications sheet first so the destination is what
+            // the user sees, not the sheet on top of it.
+            if (mounted) {
+              Navigator.of(context).maybePop();
+            }
+            if (mounted) {
+              if (isTeam) {
+                context.push('/team-lobby/$battleId');
+              } else {
+                context.go('/battles');
+              }
+            }
           }
         } else if (n.type == NotificationType.clanInvite) {
           final clanId =
@@ -762,6 +806,16 @@ class _InviteActionsState extends ConsumerState<_InviteActions> {
         ),
       );
     }
+    // The button label text was invisible because the app's global
+    // `filledButtonTheme` / `outlinedButtonTheme` sets vertical
+    // padding to 16 dp; combined with a 14 dp font that's a 46 dp
+    // intrinsic content height. Constraining the surrounding
+    // SizedBox to 38 dp squeezed the text off-screen. Explicit
+    // per-button padding + `tapTargetSize: shrinkWrap` locks the
+    // button to a size the SizedBox can actually contain, and the
+    // explicit `foregroundColor` on the text style guarantees the
+    // label paints in the right ink even if a downstream ambient
+    // DefaultTextStyle changes.
     return Row(
       children: [
         Expanded(
@@ -771,6 +825,9 @@ class _InviteActionsState extends ConsumerState<_InviteActions> {
               style: FilledButton.styleFrom(
                 backgroundColor: AppColors.primary,
                 foregroundColor: Colors.white,
+                padding: const EdgeInsets.symmetric(horizontal: 14),
+                minimumSize: const Size.fromHeight(38),
+                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                 shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(999),
                 ),
@@ -778,7 +835,10 @@ class _InviteActionsState extends ConsumerState<_InviteActions> {
               onPressed: _accept,
               child: const Text(
                 'Accept',
-                style: TextStyle(fontWeight: FontWeight.w800),
+                style: TextStyle(
+                  fontWeight: FontWeight.w800,
+                  color: Colors.white,
+                ),
               ),
             ),
           ),
@@ -793,14 +853,20 @@ class _InviteActionsState extends ConsumerState<_InviteActions> {
                 side: BorderSide(
                   color: AppColors.onSurface.withValues(alpha: 0.15),
                 ),
+                padding: const EdgeInsets.symmetric(horizontal: 14),
+                minimumSize: const Size.fromHeight(38),
+                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                 shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(999),
                 ),
               ),
               onPressed: _decline,
-              child: const Text(
+              child: Text(
                 'Decline',
-                style: TextStyle(fontWeight: FontWeight.w800),
+                style: TextStyle(
+                  fontWeight: FontWeight.w800,
+                  color: AppColors.onSurface,
+                ),
               ),
             ),
           ),

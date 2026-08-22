@@ -89,7 +89,9 @@ class HealthSetupAdvice {
       'xiaomi' || 'redmi' || 'poco' => HealthSetupAdvice(
           oemName: 'Xiaomi',
           oemAppName: 'Mi Fitness',
-          recommendGoogleFitFallback: api < 34,
+          // Same note as above — the Fit REST fallback is retired. Field
+  // kept as false to hide the CTA everywhere.
+  recommendGoogleFitFallback: false,
           needsHealthConnectInstall: needsHcInstall,
           quality: HealthSourceQuality.manualToggle,
           headline: 'Enable Mi Fitness to feed Health Connect on your '
@@ -98,9 +100,10 @@ class HealthSetupAdvice {
             'Make sure Mi Fitness is installed (search Play Store).',
             'Open Mi Fitness, then go to Profile → Settings.',
             'Tap "Health Connect" and enable Steps sharing.',
-            "If you don't see this option, your MIUI/HyperOS version "
-                "doesn't support Health Connect — turn on Google Fit "
-                "fallback in StepBattle settings.",
+            "If you don't see this option, install Google Fit from "
+                "the Play Store, sign in, and let it push data to "
+                "Health Connect (Fit's Settings → Manage connected "
+                "apps → Health Connect).",
           ],
           oemAppPlayStoreUrl:
               'https://play.google.com/store/apps/details?id=com.mi.health',
@@ -108,7 +111,12 @@ class HealthSetupAdvice {
       'realme' || 'oppo' => HealthSetupAdvice(
           oemName: fp.manufacturer == 'realme' ? 'Realme' : 'OPPO',
           oemAppName: 'OPPO/Realme Health',
-          recommendGoogleFitFallback: true,
+          // Historically recommended enabling the built-in Google Fit REST
+  // fallback. Google retired the Fit REST API on 2026-06-30 → the
+  // in-app toggle is now dead and the toggle is disabled UI-side
+  // (see step_sources_screen.dart). Kept the field for schema
+  // stability but forced to false so nothing surfaces the CTA.
+  recommendGoogleFitFallback: false,
           needsHealthConnectInstall: needsHcInstall,
           quality: api >= 34
               ? HealthSourceQuality.manualToggle
@@ -118,26 +126,39 @@ class HealthSetupAdvice {
           steps: [
             if (api >= 34)
               'Open OPPO/Realme Health (or Google Fit) and enable "Health Connect" sharing for Steps.',
-            'Recommended: turn on Google Fit fallback in '
-                'Profile → How my steps are tracked → Google Fit. '
-                'Realme/OPPO devices often skip the Health Connect bridge.',
+            'If OPPO/Realme Health doesn\'t offer Health Connect '
+                'sharing, install Google Fit and enable Fit → '
+                'Settings → Manage connected apps → Health Connect. '
+                'That bridges into StepBattle.',
             'Make sure StepBattle has Steps permission in Health Connect.',
           ],
         ),
       'motorola' => const HealthSetupAdvice(
           oemName: 'Motorola',
           oemAppName: 'Google Fit',
-          recommendGoogleFitFallback: true,
+          // Historically recommended enabling the built-in Google Fit REST
+  // fallback. Google retired the Fit REST API on 2026-06-30 → the
+  // in-app toggle is now dead and the toggle is disabled UI-side
+  // (see step_sources_screen.dart). Kept the field for schema
+  // stability but forced to false so nothing surfaces the CTA.
+  recommendGoogleFitFallback: false,
           needsHealthConnectInstall: false,
           quality: HealthSourceQuality.needsThirdParty,
+          // Motorola phones DO have a hardware pedometer — we can read
+          // TYPE_STEP_COUNTER directly. What they lack is a preinstalled
+          // step-tracking APP (like Samsung Health or Mi Fitness) that
+          // pushes into Health Connect. So Google Fit as the feeder is
+          // the shortest path to steady data.
           headline:
-              'Motorola phones don\'t ship with a step source. Use Google Fit.',
+              'Motorola phones don\'t ship with a step-tracking app. '
+              'Google Fit is the easiest source to add.',
           steps: [
             'Install Google Fit from the Play Store if not already.',
             'Open Google Fit, sign in, walk for a minute so it has data.',
             'In Fit: Profile → Settings → Manage connected apps → '
                 'Connect to Health Connect.',
-            'OR: turn on Google Fit fallback in StepBattle (faster path).',
+            'StepBattle then reads your steps via Health Connect '
+                'automatically — no toggle needed.',
           ],
           oemAppPlayStoreUrl:
               'https://play.google.com/store/apps/details?id=com.google.android.apps.fitness',
@@ -145,7 +166,9 @@ class HealthSetupAdvice {
       'oneplus' => HealthSetupAdvice(
           oemName: 'OnePlus',
           oemAppName: 'OnePlus Health',
-          recommendGoogleFitFallback: api < 34,
+          // Same note as above — the Fit REST fallback is retired. Field
+  // kept as false to hide the CTA everywhere.
+  recommendGoogleFitFallback: false,
           needsHealthConnectInstall: needsHcInstall,
           quality: api >= 34
               ? HealthSourceQuality.manualToggle
@@ -154,14 +177,18 @@ class HealthSetupAdvice {
           steps: [
             'Open OnePlus Health.',
             'Settings → Health Connect → enable Steps sharing.',
-            'On older OxygenOS versions this option may not exist; turn '
-                'on Google Fit fallback in StepBattle instead.',
+            'On older OxygenOS versions this option may not exist; '
+                'install Google Fit and enable Health Connect sharing '
+                'from inside Fit\'s settings — that\'s the reliable '
+                'bridge.',
           ],
         ),
       'vivo' || 'iqoo' => HealthSetupAdvice(
           oemName: fp.manufacturer == 'vivo' ? 'Vivo' : 'iQOO',
           oemAppName: 'Vivo Health',
-          recommendGoogleFitFallback: api < 34,
+          // Same note as above — the Fit REST fallback is retired. Field
+  // kept as false to hide the CTA everywhere.
+  recommendGoogleFitFallback: false,
           needsHealthConnectInstall: needsHcInstall,
           quality: api >= 34
               ? HealthSourceQuality.manualToggle
@@ -170,7 +197,9 @@ class HealthSetupAdvice {
           steps: [
             'Open Vivo/iQOO Health.',
             'Settings → Data sharing → Health Connect → enable Steps.',
-            'Older OriginOS versions skip this — use Google Fit fallback.',
+            'Older OriginOS versions skip this — install Google Fit '
+                'and enable Health Connect sharing inside Fit\'s '
+                'settings as the bridge.',
           ],
         ),
       'google' || 'pixel' => const HealthSetupAdvice(
@@ -189,7 +218,12 @@ class HealthSetupAdvice {
       'nothing' => const HealthSetupAdvice(
           oemName: 'Nothing',
           oemAppName: 'Google Fit',
-          recommendGoogleFitFallback: true,
+          // Historically recommended enabling the built-in Google Fit REST
+  // fallback. Google retired the Fit REST API on 2026-06-30 → the
+  // in-app toggle is now dead and the toggle is disabled UI-side
+  // (see step_sources_screen.dart). Kept the field for schema
+  // stability but forced to false so nothing surfaces the CTA.
+  recommendGoogleFitFallback: false,
           needsHealthConnectInstall: false,
           quality: HealthSourceQuality.needsThirdParty,
           headline:
@@ -197,7 +231,9 @@ class HealthSetupAdvice {
           steps: [
             'Install Google Fit from the Play Store.',
             'Sign in and walk so Fit captures step data.',
-            'Turn on Google Fit fallback in StepBattle for the smoothest setup.',
+            "In Fit: Profile → Settings → Manage connected apps → "
+                "Connect to Health Connect. StepBattle picks up your "
+                "steps from there.",
           ],
           oemAppPlayStoreUrl:
               'https://play.google.com/store/apps/details?id=com.google.android.apps.fitness',
@@ -205,7 +241,12 @@ class HealthSetupAdvice {
       _ => HealthSetupAdvice(
           oemName: fp.manufacturer.isEmpty ? 'your phone' : fp.manufacturer,
           oemAppName: 'a step-source app',
-          recommendGoogleFitFallback: true,
+          // Historically recommended enabling the built-in Google Fit REST
+  // fallback. Google retired the Fit REST API on 2026-06-30 → the
+  // in-app toggle is now dead and the toggle is disabled UI-side
+  // (see step_sources_screen.dart). Kept the field for schema
+  // stability but forced to false so nothing surfaces the CTA.
+  recommendGoogleFitFallback: false,
           needsHealthConnectInstall: needsHcInstall,
           quality: HealthSourceQuality.unknown,
           headline:
@@ -214,7 +255,9 @@ class HealthSetupAdvice {
             "Most Android phones ship with a built-in fitness app — "
                 "open yours and look for a 'Health Connect' setting.",
             'If yours doesn\'t support Health Connect, install Google Fit.',
-            'Turn on Google Fit fallback in StepBattle if steps still don\'t appear.',
+            "Inside Fit: Profile → Settings → Manage connected apps → "
+                "Connect to Health Connect. StepBattle then reads "
+                "steps via Health Connect automatically.",
           ],
         ),
     };

@@ -7,6 +7,7 @@ import '../../config/colors.dart';
 import '../../models/run_session_model.dart';
 import '../../providers/run_session_provider.dart';
 import '../../widgets/empty_state.dart';
+import '../../widgets/shimmer_loader.dart';
 
 /// Full history of the user's saved Track sessions.
 ///
@@ -31,7 +32,18 @@ class AllTrackSessionsScreen extends ConsumerWidget {
       ),
       backgroundColor: AppColors.background,
       body: historyAsync.when(
-        loading: () => const Center(child: CircularProgressIndicator()),
+        loading: () => ListView(
+          padding: const EdgeInsets.fromLTRB(16, 12, 16, 32),
+          children: const [
+            ShimmerCard(),
+            SizedBox(height: 12),
+            ShimmerCard(),
+            SizedBox(height: 12),
+            ShimmerCard(),
+            SizedBox(height: 12),
+            ShimmerCard(),
+          ],
+        ),
         error: (_, __) => const EmptyState(
           icon: Icons.error_outline,
           title: 'Could not load history',

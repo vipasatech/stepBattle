@@ -41,9 +41,15 @@ Character3D character3DForUser(UserModel? user) {
 /// through the same order as [currentCharacter3DProvider] on lookup miss /
 /// fetch failure — you always get a valid character, never a spinner.
 final character3DForUserIdProvider =
-    FutureProvider.family<Character3D, String>((ref, userId) async {
+    FutureProvider.autoDispose.family<Character3D, String>((ref, userId) async {
   try {
-    final profile = await ref.read(authServiceProvider).getProfile(userId);
+    final repo = ref.read(profileRepositoryProvider);
+    // Try cache first — if we've ever fetched this opponent's profile
+    // (they're in one of our recent battles) the arena chip renders on
+    // the very next frame instead of after a round-trip.
+    final cached = repo.readCached(userId);
+    if (cached != null) return character3DForUser(cached);
+    final profile = await repo.fetch(userId);
     return character3DForUser(profile);
   } catch (_) {
     return Character3D.amy;

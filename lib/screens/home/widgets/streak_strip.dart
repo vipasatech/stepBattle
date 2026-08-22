@@ -1,12 +1,19 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
 
 import '../../../config/colors.dart';
+import '../../../config/motion.dart';
 import '../../../models/step_log_model.dart';
+import '../../../providers/step_provider.dart';
 import '../../../providers/streak_provider.dart';
 import '../../../providers/user_provider.dart';
+import '../../../services/streak_celebration_bus.dart';
+import '../../../widgets/fire_particles.dart';
+import '../../../widgets/streak_grey_tooltip.dart';
 
 /// Streak strip — pinned just under the Home AppBar.
 ///
@@ -46,27 +53,80 @@ class StreakStrip extends ConsumerStatefulWidget {
   ConsumerState<StreakStrip> createState() => _StreakStripState();
 }
 
-class _StreakStripState extends ConsumerState<StreakStrip> {
+class _StreakStripState extends ConsumerState<StreakStrip>
+    with SingleTickerProviderStateMixin {
   /// 4 weeks loaded: index 0 = 3 weeks back; index 3 = current week.
   static const _weekCount = 4;
 
-  /// Deep orange — the streak signal colour. Kept theme-invariant per
-  /// user request so the flame reads the same on both dark and light
-  /// surfaces. Matches `AppColors.lightAmber` (#D97706).
-  static const _streakOrange = Color(0xFFD97706);
   late final PageController _pageController;
   int _page = _weekCount - 1;
+
+  /// After 3 s of no page changes on a non-current week, we slide
+  /// the view back to the current week so the user doesn't get
+  /// stranded on a past week and confused when reopening the app.
+  static const _idleReturn = Duration(seconds: 3);
+  Timer? _returnTimer;
+
+  // ---------------------------------------------------------------------------
+  // Real-time tick-up animation (Case A/B/C from the streak spec).
+  //
+  // When advance_daily_progress lands, StreakCelebrationBus emits a
+  // (before, after) pair. We drive a 900 ms scale + count-up so the
+  // flame throbs and the "N Days" caption walks from before → after.
+  // ---------------------------------------------------------------------------
+  late final AnimationController _tickController;
+  StreamSubscription<StreakCelebration>? _celebrationSub;
+  int? _fromStreak;
+  int? _toStreak;
 
   @override
   void initState() {
     super.initState();
     _pageController = PageController(initialPage: _page);
+    _tickController = AnimationController(
+      vsync: this,
+      // xslow (620ms) gives the elastic wobble in Motion.springBounce
+      // room to settle without dragging out the celebration.
+      duration: Motion.d.xslow,
+    );
+    // subscribe() replays the last event if it happened within the
+    // bus's replay window — covers the "user switched tabs while the
+    // RPC was in-flight, celebration fires on remount" case.
+    _celebrationSub = StreakCelebrationBus.instance.subscribe((event) {
+      if (!mounted) return;
+      if (event.streakAfter <= event.streakBefore) return;
+      setState(() {
+        _fromStreak = event.streakBefore;
+        _toStreak = event.streakAfter;
+      });
+      _tickController.forward(from: 0);
+    });
   }
 
   @override
   void dispose() {
+    _returnTimer?.cancel();
+    _celebrationSub?.cancel();
+    _tickController.dispose();
     _pageController.dispose();
     super.dispose();
+  }
+
+  /// Called from the PageView's onPageChanged. Resets the idle
+  /// timer; when it fires and we're still off the current week,
+  /// animate the strip back to it.
+  void _scheduleReturnIfNeeded() {
+    _returnTimer?.cancel();
+    if (_page == _weekCount - 1) return; // already on current
+    _returnTimer = Timer(_idleReturn, () {
+      if (!mounted) return;
+      if (_page == _weekCount - 1) return;
+      _pageController.animateToPage(
+        _weekCount - 1,
+        duration: const Duration(milliseconds: 350),
+        curve: Curves.easeOutCubic,
+      );
+    });
   }
 
   /// Monday (local midnight) of the week whose page-index is [weekIdx].
@@ -83,8 +143,35 @@ class _StreakStripState extends ConsumerState<StreakStrip> {
 
   @override
   Widget build(BuildContext context) {
-    final streakDays =
-        ref.watch(userProfileProvider).valueOrNull?.currentStreak ?? 0;
+    // `select` narrows the subscription to just the two fields we
+    // care about (streak count + recovery state) so the strip only
+    // rebuilds on streak-relevant ticks. `Object?`-typed record so
+    // `.select` can compare with default equality.
+    final streakState = ref.watch(userProfileProvider.select((async) {
+      final p = async.valueOrNull;
+      return (
+        p?.currentStreak ?? 0,
+        p?.isInStreakRecovery ?? false,
+      );
+    }));
+    final streakDays = streakState.$1;
+    final inRecovery = streakState.$2;
+    // 'Dormant' visual state — grey flame + grey caption instead of
+    // the celebratory orange. Fires when the user is either in the
+    // recovery window (streak broken, grace period active) OR has
+    // never started / just reset to 0. A 0-day streak in bright
+    // orange reads as "you're on fire!" which is dishonest — nothing
+    // to celebrate yet. Grey communicates "start today to light it
+    // up" without the awkward mismatch. Added in 1.1.6+29 per user
+    // feedback that "For 0 streak we should have in grey."
+    final dormant = inRecovery || streakDays == 0;
+    // Today-mission-done signal for the grey-flame tooltip copy —
+    // "hit your step goal" reads wrong if the goal is already met.
+    final dailyGoal = ref.watch(userProfileProvider.select(
+      (async) => async.valueOrNull?.dailyStepGoal ?? 8000,
+    ));
+    final todaySteps = ref.watch(todayStepsProvider);
+    final todayMissionDone = todaySteps >= dailyGoal;
     final logsAsync = ref.watch(recentStepLogsProvider);
     final logs =
         logsAsync.valueOrNull ?? const <String, StepLogModel>{};
@@ -128,12 +215,67 @@ class _StreakStripState extends ConsumerState<StreakStrip> {
             children: [
               SizedBox(
                 width: 64,
-                child: Center(
-                  child: Icon(
-                    Icons.local_fire_department,
-                    color: _streakOrange,
-                    size: 48,
-                  ),
+                // Restored to 64x64 so the parent Row's cross-axis
+                // sizing (and thus the weekday labels' alignment with
+                // the flame tip) stays where it always was. Extra
+                // "sky" for the rising sparks comes from an
+                // overflowing Positioned INSIDE the Stack — the
+                // paint area extends 24dp ABOVE the SizedBox via
+                // clipBehavior.none, but layout stays 64x64.
+                height: 64,
+                child: Stack(
+                  alignment: Alignment.center,
+                  clipBehavior: Clip.none,
+                  children: [
+                    // Fire embers rising FROM the flame INTO the air.
+                    // Paint area extends 24dp above the SizedBox so
+                    // particles have visible sky to travel through
+                    // after emerging from the icon top. Colour tracks
+                    // the flame — orange when active, grey when in
+                    // recovery. Only on Home; profile stats strip
+                    // renders the icon without particles.
+                    Positioned(
+                      top: -24,
+                      left: 0,
+                      right: 0,
+                      bottom: 0,
+                      child: IgnorePointer(
+                        child: FireParticles(
+                          colour: (dormant
+                                  ? AppColors.streakGrey
+                                  : AppColors.streakActive)
+                              .withValues(alpha: 0.9),
+                        ),
+                      ),
+                    ),
+                    StreakGreyTooltip(
+                      // Tap only does something when the flame is grey
+                      // (recovery mode) — the coloured flame stays
+                      // non-interactive on Home.
+                      enabled: inRecovery,
+                      inRecovery: inRecovery,
+                      todayMissionDone: todayMissionDone,
+                      child: AnimatedBuilder(
+                        animation: _tickController,
+                        builder: (_, __) {
+                          // Spring bounce with elastic settle — see
+                          // Motion.springBounce docs.
+                          final bounce =
+                              Motion.springBounce(_tickController.value);
+                          return Transform.scale(
+                            scale: bounce,
+                            child: Icon(
+                              Icons.local_fire_department,
+                              color: dormant
+                                  ? AppColors.streakGrey
+                                  : AppColors.streakActive,
+                              size: 48,
+                            ),
+                          );
+                        },
+                      ),
+                    ),
+                  ],
                 ),
               ),
               // Weekday labels sit a few pixels lower so they aren't
@@ -158,9 +300,28 @@ class _StreakStripState extends ConsumerState<StreakStrip> {
               SizedBox(
                 width: 64,
                 child: Center(
-                  child: _StreakCaption(
-                    days: streakDays,
-                    accent: _streakOrange,
+                  child: AnimatedBuilder(
+                    animation: _tickController,
+                    builder: (_, __) {
+                      // Count-up in progress? Interpolate from
+                      // _fromStreak to _toStreak. Otherwise render
+                      // the live streak from the profile stream.
+                      final anim = _tickController.value;
+                      int displayDays;
+                      if (_fromStreak != null &&
+                          _toStreak != null &&
+                          anim < 1.0) {
+                        final range = _toStreak! - _fromStreak!;
+                        displayDays = _fromStreak! + (range * anim).round();
+                      } else {
+                        displayDays = streakDays;
+                      }
+                      return _StreakCaption(
+                        days: displayDays,
+                        accent:
+                            dormant ? AppColors.streakGrey : AppColors.streakActive,
+                      );
+                    },
                   ),
                 ),
               ),
@@ -171,7 +332,10 @@ class _StreakStripState extends ConsumerState<StreakStrip> {
                     controller: _pageController,
                     itemCount: _weekCount,
                     physics: const BouncingScrollPhysics(),
-                    onPageChanged: (i) => setState(() => _page = i),
+                    onPageChanged: (i) {
+                      setState(() => _page = i);
+                      _scheduleReturnIfNeeded();
+                    },
                     itemBuilder: (_, weekIdx) {
                       return _WeekRow(
                         mondayDate: _mondayFor(weekIdx),

@@ -15,6 +15,11 @@ class StreakHistorySheet extends ConsumerWidget {
     final profile = ref.watch(userProfileProvider).valueOrNull;
     final current = profile?.currentStreak ?? 0;
     final best = profile?.bestStreak ?? 0;
+    // Same signal as Home / Profile: grey when in recovery, orange
+    // otherwise. Single source of truth via AppColors.streak*.
+    final inRecovery = profile?.isInStreakRecovery ?? false;
+    final flameColor =
+        inRecovery ? AppColors.streakGrey : AppColors.streakActive;
 
     return Container(
       decoration: BoxDecoration(
@@ -34,22 +39,25 @@ class StreakHistorySheet extends ConsumerWidget {
             children: [
               const BottomSheetHandle(),
 
-          // Fire icon
+          // Fire icon — matches the Home streak strip + Profile streak
+          // stat colour so all three surfaces read as the same signal
+          // (previously used errorDim red which suggested "danger" and
+          // clashed with the celebration meaning of the streak).
           Container(
             width: 72,
             height: 72,
             decoration: BoxDecoration(
-              color: AppColors.errorDim.withValues(alpha: 0.15),
+              color: flameColor.withValues(alpha: 0.15),
               shape: BoxShape.circle,
               boxShadow: [
                 BoxShadow(
-                  color: AppColors.errorDim.withValues(alpha: 0.3),
+                  color: flameColor.withValues(alpha: 0.3),
                   blurRadius: 30,
                 ),
               ],
             ),
             child: Icon(Icons.local_fire_department,
-                color: AppColors.errorDim, size: 36),
+                color: flameColor, size: 36),
           ),
           const SizedBox(height: 16),
 
@@ -79,7 +87,7 @@ class StreakHistorySheet extends ConsumerWidget {
             label: 'Current Streak',
             value: '$current days',
             icon: Icons.local_fire_department,
-            iconColor: current > 0 ? AppColors.errorDim : AppColors.onSurfaceVariant,
+            iconColor: current > 0 ? flameColor : AppColors.onSurfaceVariant,
           ),
           const SizedBox(height: 14),
 

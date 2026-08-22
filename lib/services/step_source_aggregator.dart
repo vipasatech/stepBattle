@@ -90,7 +90,20 @@ class StepSourceAggregator {
   /// we conclude native's baseline is wrong and repair it.
   static const int _nativeDriftFromHCToRepair = 10000;
 
-  static const _nativeTimeout = Duration(seconds: 1);
+  /// Bumped 1s → 3s in 1.1.6+28.
+  ///
+  /// Rationale: on mid-range OEM Androids (moto g35, older Realme /
+  /// Xiaomi models) the first async pull of TYPE_STEP_COUNTER can
+  /// take 2-3 seconds because the sensor batches readings internally.
+  /// The prior 1-second cutoff silently dropped native reads on
+  /// those devices — surfacing as `slow_native_read` in Diagnostics
+  /// and leaving genuinely-counted steps stuck in the sensor. Lavanya's
+  /// moto g35 (2026-08-18): 1,085 real steps captured in the sensor,
+  /// but never surfaced because every read timed out at 1 second.
+  /// 3 seconds gives OEM sensors enough time to respond without
+  /// noticeably slowing hot-path reads (which normally return in
+  /// <200ms — that's why hot reads still feel instant).
+  static const _nativeTimeout = Duration(seconds: 3);
   static const _hcTimeout = Duration(seconds: 3);
   static const _fitTimeout = Duration(seconds: 5);
 

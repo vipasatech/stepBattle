@@ -4,6 +4,7 @@ import '../../config/colors.dart';
 import '../../models/clan_battle_model.dart';
 import '../../providers/clan_provider.dart';
 import '../../widgets/glass_card.dart';
+import '../../widgets/shimmer_loader.dart';
 import '../../widgets/status_pill.dart';
 
 class JoinClanBattleScreen extends ConsumerStatefulWidget {
@@ -65,8 +66,16 @@ class _JoinClanBattleScreenState
         ),
       ),
       body: _loading
-          ? Center(
-              child: CircularProgressIndicator(color: AppColors.primary))
+          ? ListView(
+              padding: const EdgeInsets.fromLTRB(20, 8, 20, 120),
+              children: const [
+                ShimmerCard(),
+                SizedBox(height: 12),
+                ShimmerCard(),
+                SizedBox(height: 12),
+                ShimmerCard(),
+              ],
+            )
           : ListView(
               padding: const EdgeInsets.fromLTRB(20, 8, 20, 120),
               children: [

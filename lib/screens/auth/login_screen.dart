@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../../config/colors.dart';
 import '../../providers/auth_provider.dart';
+import '../../utils/cross_isolate_kv.dart';
 import '../../utils/network_errors.dart';
 import '../../widgets/glass_card.dart';
 import '../../widgets/no_network_sheet.dart';
@@ -99,6 +100,11 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
     });
     try {
       await ref.read(authServiceProvider).sendEmailOtp(email);
+      // Persist the in-flight OTP so an OS-kill mid-verification
+      // (user switches to email client, memory pressure kills app)
+      // routes them BACK to /verify-otp on next launch instead of
+      // dumping them on /welcome. See CrossIsolateKV.savePendingOtp.
+      await CrossIsolateKV.savePendingOtp(email: email, mode: 'login');
       if (mounted) {
         context.go(
           '/verify-otp?email=${Uri.encodeQueryComponent(email)}&mode=login',
@@ -139,6 +145,21 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
       body: SafeArea(
         child: Stack(
           children: [
+            Positioned(
+              top: 4,
+              left: 4,
+              child: IconButton(
+                icon: const Icon(Icons.arrow_back),
+                tooltip: 'Back',
+                onPressed: () {
+                  if (context.canPop()) {
+                    context.pop();
+                  } else {
+                    context.go('/welcome');
+                  }
+                },
+              ),
+            ),
             SingleChildScrollView(
               padding: const EdgeInsets.fromLTRB(24, 120, 24, 24),
               physics: const ClampingScrollPhysics(),

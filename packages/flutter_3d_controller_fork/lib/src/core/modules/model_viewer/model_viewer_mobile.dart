@@ -179,11 +179,38 @@ class ModelViewerState extends State<ModelViewer> {
             ..add(text);
           await response.close();
         default:
+          // Fork addition: try to serve the request path as a Flutter
+          // asset first. Lets callers pass paths like
+          // `assets/images/foo/sky.hdr` to `environment-image` (or any
+          // sibling texture reference from a glTF) — the proxy fetches
+          // from the bundle, no data URI encoding needed. Falls through
+          // to the original redirect/404 logic on read failure.
+          if (request.uri.hasAbsolutePath) {
+            final assetPath = request.uri.path.startsWith('/')
+                ? request.uri.path.substring(1)
+                : request.uri.path;
+            try {
+              final data = await _readAsset(assetPath);
+              response
+                ..statusCode = HttpStatus.ok
+                ..headers.add('Content-Type', 'application/octet-stream')
+                ..headers.add('Content-Length', data.lengthInBytes.toString())
+                ..headers.add('Access-Control-Allow-Origin', '*')
+                ..add(data);
+              await response.close();
+              break;
+            } catch (_) {
+              // Not a bundled asset — fall through.
+            }
+          }
           if (request.uri.isAbsolute) {
             debugPrint('Redirect: ${request.uri}');
             await response.redirect(request.uri);
-          } else if (request.uri.hasAbsolutePath) {
-            // Some gltf models need other resources from the origin
+          } else if (request.uri.hasAbsolutePath && url.hasScheme) {
+            // Some gltf models need other resources from the origin.
+            // Guarded by `url.hasScheme` because `.origin` throws on
+            // scheme-less URIs (e.g. our own asset paths, which we
+            // already tried to serve above).
             final pathSegments = [...url.pathSegments]..removeLast();
             final tryDestination = p.joinAll([
               url.origin,
@@ -357,6 +384,7 @@ class ModelViewerState extends State<ModelViewer> {
       exposure: widget.exposure,
       shadowIntensity: widget.shadowIntensity,
       shadowSoftness: widget.shadowSoftness,
+      toneMapping: widget.toneMapping,
       // Animation Attributes
       animationName: widget.animationName,
       animationCrossfadeDuration: widget.animationCrossfadeDuration,

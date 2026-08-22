@@ -8,14 +8,19 @@ import '../../../widgets/avatar_circle.dart';
 /// line), XP total on the right, chevron.
 ///
 /// Rank 1 renders a crown icon instead of the number. When
-/// [highlightYou] is true the row paints a tinted background — used
-/// for the sticky "You" row pinned at the bottom of the board.
+/// [highlightYou] is true the row paints a subtle purple gradient
+/// background AND a small "YOU" pill sits next to the display name —
+/// used both for the current user's row in the main list AND for the
+/// floating rank card pinned above the bottom nav. Keeping the real
+/// name (rather than replacing it with "You") means the two surfaces
+/// stay visually identical, which is what makes the pinned card feel
+/// like a mirror of the actual list row.
 class RankRow extends StatelessWidget {
   final LeaderboardEntry entry;
   final VoidCallback? onTap;
 
-  /// Show "You" instead of the display name and tint the row with the
-  /// brand surface — used only by the sticky-bottom variant.
+  /// True when this row represents the currently-signed-in user.
+  /// Paints the gradient bg + attaches the "YOU" pill.
   final bool highlightYou;
 
   const RankRow({
@@ -31,89 +36,118 @@ class RankRow extends StatelessWidget {
     final scheme = theme.colorScheme;
     final isTop = entry.rank == 1;
 
-    return InkWell(
-      onTap: onTap,
-      child: Container(
-        // Background: transparent for regular rows, a violet tint for
-        // the sticky "You" highlight. Bottom border segregates each
-        // row like the Strava reference — 1 px muted outline, drawn
-        // per-row so it stays glued to the row on scroll.
-        decoration: BoxDecoration(
-          color: highlightYou
-              ? AppColors.primary.withValues(alpha: 0.08)
-              : null,
-          border: Border(
-            bottom: BorderSide(
-              color: AppColors.outlineVariant.withValues(alpha: 0.4),
-              width: 1,
-            ),
-          ),
-        ),
-        padding:
-            const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
-        child: Row(
-          children: [
-            // ---- Rank cell (fixed width so all rows align) ----
-            SizedBox(
-              width: 36,
-              child: Center(
-                child: isTop
-                    ? Icon(
-                        Icons.emoji_events,
-                        color: AppColors.amber,
-                        size: 22,
-                      )
-                    : Text(
-                        '${entry.rank}',
-                        textAlign: TextAlign.center,
-                        style: theme.textTheme.titleSmall?.copyWith(
-                          color: AppColors.onSurfaceVariant,
-                          fontWeight: FontWeight.w700,
-                        ),
-                      ),
+    // RepaintBoundary — each rank row is one atomic paint unit. The
+    // leaderboard scrolls through hundreds of rows on the global tab;
+    // isolating each row keeps a single row-tint change from repainting
+    // every row above it.
+    return RepaintBoundary(
+      child: InkWell(
+        onTap: onTap,
+        child: Container(
+          // Regular rows: transparent bg + 1 px bottom divider so the
+          // list reads as a table (matches Strava). "You" rows: a
+          // subtle left-to-right purple gradient so the row visually
+          // "steps forward" without shouting.
+          decoration: BoxDecoration(
+            gradient: highlightYou
+                ? LinearGradient(
+                    begin: Alignment.centerLeft,
+                    end: Alignment.centerRight,
+                    colors: [
+                      AppColors.primary.withValues(alpha: 0.18),
+                      AppColors.primary.withValues(alpha: 0.04),
+                    ],
+                  )
+                : null,
+            border: Border(
+              bottom: BorderSide(
+                color: AppColors.outlineVariant.withValues(alpha: 0.4),
+                width: 1,
               ),
             ),
-            const SizedBox(width: 10),
+          ),
+          padding:
+              const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+          child: Row(
+            children: [
+              // ---- Rank cell (fixed width so all rows align) ----
+              SizedBox(
+                width: 36,
+                child: Center(
+                  child: isTop
+                      ? Icon(
+                          Icons.emoji_events,
+                          color: AppColors.amber,
+                          size: 22,
+                        )
+                      : Text(
+                          '${entry.rank}',
+                          textAlign: TextAlign.center,
+                          style: theme.textTheme.titleSmall?.copyWith(
+                            color: highlightYou
+                                ? AppColors.primary
+                                : AppColors.onSurfaceVariant,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                ),
+              ),
+              const SizedBox(width: 10),
 
-            // ---- Avatar ----
-            AvatarCircle(
-              radius: 20,
-              imageUrl: entry.avatarURL,
-              initials: _initials(entry.friendlyName),
-              borderColor: scheme.outlineVariant,
-              borderWidth: 1,
-            ),
-            const SizedBox(width: 12),
+              // ---- Avatar ----
+              AvatarCircle(
+                radius: 20,
+                imageUrl: entry.avatarURL,
+                initials: _initials(entry.friendlyName),
+                borderColor: highlightYou
+                    ? AppColors.primary
+                    : scheme.outlineVariant,
+                borderWidth: highlightYou ? 2 : 1,
+              ),
+              const SizedBox(width: 12),
 
-            // ---- Name ----
-            Expanded(
-              child: Text(
-                highlightYou ? 'You' : entry.friendlyName,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
+              // ---- Name (+ optional YOU pill) ----
+              Expanded(
+                child: Row(
+                  children: [
+                    Flexible(
+                      child: Text(
+                        entry.friendlyName,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: theme.textTheme.titleSmall?.copyWith(
+                          fontWeight: highlightYou
+                              ? FontWeight.w900
+                              : FontWeight.w700,
+                          color: highlightYou ? AppColors.primary : null,
+                        ),
+                      ),
+                    ),
+                    if (highlightYou) ...[
+                      const SizedBox(width: 8),
+                      _YouPill(),
+                    ],
+                  ],
+                ),
+              ),
+
+              // ---- XP right-aligned ----
+              Text(
+                _fmt(entry.totalXP),
                 style: theme.textTheme.titleSmall?.copyWith(
-                  fontWeight:
-                      highlightYou ? FontWeight.w900 : FontWeight.w700,
+                  fontWeight: FontWeight.w800,
+                  fontFamily: 'Manrope',
                   color: highlightYou ? AppColors.primary : null,
                 ),
               ),
-            ),
-
-            // ---- XP right-aligned ----
-            Text(
-              _fmt(entry.totalXP),
-              style: theme.textTheme.titleSmall?.copyWith(
-                fontWeight: FontWeight.w800,
-                fontFamily: 'Manrope',
+              const SizedBox(width: 8),
+              Icon(
+                Icons.chevron_right,
+                size: 18,
+                color: AppColors.onSurfaceVariant.withValues(alpha: 0.5),
               ),
-            ),
-            const SizedBox(width: 8),
-            Icon(
-              Icons.chevron_right,
-              size: 18,
-              color: AppColors.onSurfaceVariant.withValues(alpha: 0.5),
-            ),
-          ],
+            ],
+          ),
         ),
       ),
     );
@@ -137,6 +171,33 @@ class RankRow extends StatelessWidget {
       buf.write(s[i]);
     }
     return buf.toString();
+  }
+}
+
+/// The small "YOU" chip that sits next to the display name on the
+/// current user's row. Purple pill, white text — matches the primary
+/// accent used elsewhere for "you belong here" signals (the profile
+/// stats strip's XP tint, the streak flame, etc.).
+class _YouPill extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+      decoration: BoxDecoration(
+        color: AppColors.primary,
+        borderRadius: BorderRadius.circular(999),
+      ),
+      child: const Text(
+        'YOU',
+        style: TextStyle(
+          color: Colors.white,
+          fontFamily: 'Manrope',
+          fontSize: 9,
+          fontWeight: FontWeight.w900,
+          letterSpacing: 0.8,
+        ),
+      ),
+    );
   }
 }
 

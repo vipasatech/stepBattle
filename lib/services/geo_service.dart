@@ -5,6 +5,20 @@ import 'package:http/http.dart' as http;
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../utils/app_logger.dart';
 
+/// Why a device-location fix couldn't be obtained. Lets the UI show a
+/// tailored recovery CTA (grant permission vs open settings vs retry)
+/// instead of a generic "something went wrong".
+enum LocationFailureReason {
+  servicesOff,
+  permissionDenied,
+  permissionDeniedForever,
+  timeout,
+}
+
+/// Result of a device-location fix attempt. Either [position] is non-null
+/// (success) or [failure] is non-null (with the reason).
+typedef LocationResult = ({Position? position, LocationFailureReason? failure});
+
 /// Resolved home address for a user — country / state / district level.
 /// Free-form local names returned by the platform geocoder; codes when
 /// available (ISO 3166-1 alpha-2 country code).
@@ -49,16 +63,13 @@ class HomeLocation {
 /// Returns a [HomeLocation] with whatever fields the source provided.
 class GeoService {
   /// Request location permission and grab a single coarse-location fix.
-  ///
-  /// Returns null if:
-  ///   - Location services are disabled at OS level
-  ///   - User denies the runtime permission
-  ///   - GPS times out (10s)
-  Future<Position?> getCurrentLocation() async {
+  /// Returns a [LocationResult] — on failure, callers should branch on
+  /// [LocationFailureReason] to offer the right recovery CTA.
+  Future<LocationResult> getCurrentLocation() async {
     AppLogger.geo.i('getCurrentLocation:start');
     if (!await Geolocator.isLocationServiceEnabled()) {
       AppLogger.geo.w('getCurrentLocation:servicesOff');
-      return null;
+      return (position: null, failure: LocationFailureReason.servicesOff);
     }
 
     var permission = await Geolocator.checkPermission();
@@ -66,11 +77,16 @@ class GeoService {
       permission = await Geolocator.requestPermission();
       AppLogger.geo
           .i('getCurrentLocation:permRequested', fields: {'result': permission.name});
-      if (permission == LocationPermission.denied) return null;
+      if (permission == LocationPermission.denied) {
+        return (position: null, failure: LocationFailureReason.permissionDenied);
+      }
     }
     if (permission == LocationPermission.deniedForever) {
       AppLogger.geo.w('getCurrentLocation:deniedForever');
-      return null;
+      return (
+        position: null,
+        failure: LocationFailureReason.permissionDeniedForever,
+      );
     }
 
     try {
@@ -83,10 +99,10 @@ class GeoService {
       );
       AppLogger.geo.i('getCurrentLocation:done',
           fields: {'lat': pos.latitude, 'lng': pos.longitude});
-      return pos;
+      return (position: pos, failure: null);
     } catch (e, s) {
       AppLogger.geo.e('getCurrentLocation:failed', error: e, stack: s);
-      return null;
+      return (position: null, failure: LocationFailureReason.timeout);
     }
   }
 

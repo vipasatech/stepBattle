@@ -1,5 +1,3 @@
-import 'package:cloud_firestore/cloud_firestore.dart';
-
 class BattleParticipant {
   final String userId;
   final String displayName;
@@ -44,6 +42,18 @@ class BattleParticipant {
   /// retroactively swapping the runner on historical battle screens.
   final String? battleAvatarId;
 
+  /// For daily-series instances only (migration 0046): the LOCAL DATE
+  /// (in this participant's timezone) that they are competing on for
+  /// this specific instance. YYYY-MM-DD. Server settlement looks up
+  /// `step_logs` by (user_id, date) using this value.
+  ///
+  /// Null on non-daily battles AND on invitees whose day-1 hasn't
+  /// arrived yet in their tz (they entered the series after the
+  /// creator's day 1 started — per the "late joiners skip day 1" rule).
+  /// The UI reads it to disambiguate "competing today, 0 steps" from
+  /// "not competing today, waiting for local midnight".
+  final String? competingDate;
+
   const BattleParticipant({
     required this.userId,
     required this.displayName,
@@ -56,6 +66,7 @@ class BattleParticipant {
     this.inviteStatus = ParticipantInviteStatus.pending,
     this.teamLabel,
     this.battleAvatarId,
+    this.competingDate,
   });
 
   /// Rendered name — prefers [preferredName] when the user set a
@@ -67,7 +78,8 @@ class BattleParticipant {
     return displayName;
   }
 
-  /// Firestore-style nested map (still used by [BattleModel.toFirestore]).
+  /// Nested-map deserializer — used only by the client-side battle
+  /// deep-copy path; server payloads take the `fromSupabaseRow` route.
   factory BattleParticipant.fromMap(Map<String, dynamic> map) {
     return BattleParticipant(
       userId: map['userId'] as String? ?? '',
@@ -103,6 +115,7 @@ class BattleParticipant {
           d['invite_status'] as String? ?? 'pending'),
       teamLabel: d['team_label'] as String?,
       battleAvatarId: d['battle_avatar_id'] as String?,
+      competingDate: d['competing_date'] as String?,
     );
   }
 }
@@ -203,6 +216,14 @@ class BattleModel {
   /// Defaults to "Team A" / "Team B" if missing.
   final Map<String, String> teamNames;
 
+  /// When a pending battle auto-resolves (auto-start or auto-cancel).
+  /// Populated by the server trigger in Migration 0040:
+  ///   • Immediate mode (start_time ≤ createdAt + 1h) → createdAt + 24h
+  ///   • Scheduled mode (start_time  > createdAt + 1h) → start_time
+  /// Null for non-pending rows and for rows written before Migration 0040
+  /// landed (client tolerates absence — UI just skips the countdown).
+  final DateTime? pendingExpiresAt;
+
   const BattleModel({
     required this.battleId,
     required this.type,
@@ -221,7 +242,29 @@ class BattleModel {
     this.joinCode,
     this.teamCount,
     this.teamNames = const {},
+    this.pendingExpiresAt,
   });
+
+  /// True when the creator picked a start time more than 1h out from
+  /// creation — i.e. "start next Sunday" rather than "start now". The
+  /// threshold matches [setPendingExpiresAt] on the server (Migration 0040).
+  /// Used by the pending-card countdown widget to pick the display flavour
+  /// ("Expires in Xh" vs "Starts in Xh" / an absolute date) and by
+  /// [battleService] to decide whether a 1v1 acceptance should snap the
+  /// window to now vs honour the scheduled slot.
+  bool get isScheduled =>
+      startTime.isAfter(createdAt.add(const Duration(hours: 1)));
+
+  bool get isImmediate => !isScheduled;
+
+  /// Remaining time until the pending deadline fires. Null when the
+  /// battle isn't pending or the server hasn't stamped the column
+  /// (pre-Migration-0040 row).
+  Duration? get timeUntilPendingExpiry {
+    final t = pendingExpiresAt;
+    if (t == null) return null;
+    return t.difference(DateTime.now());
+  }
 
   /// Display name for a team label (e.g. 'A' → 'Crimson Wolves' or 'Team A').
   String teamDisplayName(String label) =>
@@ -240,36 +283,78 @@ class BattleModel {
 
   /// Distinct team labels in this battle, sorted ('A','B','C','D').
   List<String> get teamLabels {
+    // Team battles: the authoritative team count is `battles.team_count`
+    // (2..4). Derive labels A..N from it so freshly-created teams show
+    // up even before anyone is assigned to them. Falls back to
+    // participant-derived labels only when team_count is missing (older
+    // battle rows / non-team battles that got here somehow).
+    final tc = teamCount;
+    if (tc != null && tc >= 2 && tc <= 4) {
+      return List.generate(
+        tc,
+        (i) => String.fromCharCode('A'.codeUnitAt(0) + i),
+      );
+    }
     final set = <String>{
       for (final p in participants)
         if (p.teamLabel != null) p.teamLabel!,
     };
-    final out = set.toList()..sort();
-    return out;
+    return set.toList()..sort();
   }
 
-  factory BattleModel.fromFirestore(
-      DocumentSnapshot<Map<String, dynamic>> doc) {
-    final data = doc.data()!;
-    return BattleModel(
-      battleId: doc.id,
-      type: _parseType(data['type'] as String? ?? '1v1'),
-      status: _parseStatus(data['status'] as String? ?? 'pending'),
-      participants: (data['participants'] as List<dynamic>? ?? [])
-          .map((p) => BattleParticipant.fromMap(p as Map<String, dynamic>))
-          .toList(),
-      startTime:
-          (data['startTime'] as Timestamp?)?.toDate() ?? DateTime.now(),
-      endTime: (data['endTime'] as Timestamp?)?.toDate() ?? DateTime.now(),
-      durationDays: data['durationDays'] as int? ?? 1,
-      xpReward: data['xpReward'] as int? ?? 200,
-      winnerId: data['winnerId'] as String?,
-      createdBy: data['createdBy'] as String? ?? '',
-      createdAt:
-          (data['createdAt'] as Timestamp?)?.toDate() ?? DateTime.now(),
-    );
-  }
+  /// Net XP change for [userId] from the stake pot on a completed
+  /// battle. Every accepted participant paid [stakeXp] at accept time
+  /// (see `battle_service._chargeStake`); the winner (or winning-team
+  /// members split) takes the pot back via `settle_stake_battle()`.
+  /// This returns what that user's total_xp ACTUALLY moved by:
+  ///   • non-participant / free-play (stakeXp = 0)        → 0
+  ///   • TIED battle (no winner selected)                 → 0 (server
+  ///     refunds everyone via `battle_refund` credit — net movement
+  ///     is 0 per user)
+  ///   • solo winner (1v1 / group)                        → pot − stake
+  ///   • team winner (member of winning team)             → (pot / teamSize) − stake
+  ///   • anyone else who paid a stake                     → −stake
+  ///
+  /// UI reads this so completed-battle cards can show the honest delta
+  /// (e.g. `-100 XP LOST` on a loss instead of the misleading `+0 XP`
+  /// that made the tester think stakes weren't being deducted, or
+  /// `-100 XP LOST` on a tie which is also wrong).
+  int netStakeXpFor(String userId) {
+    if (stakeXp <= 0) return 0;
+    final accepted = participants
+        .where((p) => p.inviteStatus == ParticipantInviteStatus.accepted)
+        .toList();
+    if (accepted.isEmpty) return 0;
+    final me = accepted.where((p) => p.userId == userId);
+    if (me.isEmpty) return 0;
+    final pot = stakeXp * accepted.length;
 
+    // Tie detection. Server (`settle_stake_battle`, migration 0017)
+    // leaves winner_id NULL for 1v1/group ties and marks no
+    // `is_winner` participant on team ties, then refunds every staker
+    // via a `battle_refund` credit. Net movement is 0 for everyone —
+    // we surface that as `+0 XP` on the card, not `-stake XP LOST`.
+    final anyoneWon = accepted.any((p) => p.isWinner) || winnerId != null;
+    if (!anyoneWon) return 0;
+
+    if (type == BattleType.team) {
+      // Team ties handled above. For team wins, `is_winner` is stamped
+      // per-member of the winning team (server-side) even though
+      // battles.winner_id stays NULL for team battles. Pot is split
+      // equally among winning-team members.
+      final winners = accepted.where((p) => p.isWinner).toList();
+      if (winners.isEmpty) return 0; // shouldn't happen given anyoneWon
+      final iAmWinner = winners.any((p) => p.userId == userId);
+      if (iAmWinner) {
+        return (pot ~/ winners.length) - stakeXp;
+      }
+      return -stakeXp;
+    }
+
+    // 1v1 / group: single winner takes the whole pot.
+    if (winnerId == userId) return pot - stakeXp;
+    return -stakeXp;
+  }
   /// Build from a Supabase `public.battles` row joined with its
   /// `battle_participants` rows (via a nested PostgREST select).
   factory BattleModel.fromSupabaseRow(Map<String, dynamic> d) {
@@ -320,24 +405,11 @@ class BattleModel {
       joinCode: d['join_code'] as String?,
       teamCount: (d['team_count'] as num?)?.toInt(),
       teamNames: teamNames,
+      pendingExpiresAt: d['pending_expires_at'] == null
+          ? null
+          : DateTime.tryParse(d['pending_expires_at'].toString()),
     );
   }
-
-  Map<String, dynamic> toFirestore() => {
-        'type': BattleModel.typeToString(type),
-        'status': status.name,
-        'participants': participants.map((p) => p.toMap()).toList(),
-        'invitedUserIds': invitedUserIds,
-        'acceptedUserIds': acceptedUserIds,
-        'startTime': Timestamp.fromDate(startTime),
-        'endTime': Timestamp.fromDate(endTime),
-        'durationDays': durationDays,
-        'xpReward': xpReward,
-        'winnerId': winnerId,
-        'createdBy': createdBy,
-        'createdAt': Timestamp.fromDate(createdAt),
-      };
-
   /// True if this is a pending invite for the given user and they haven't responded.
   bool isPendingInviteFor(String userId) {
     if (status != BattleStatus.pending) return false;
@@ -345,17 +417,13 @@ class BattleModel {
     return p != null && p.inviteStatus == ParticipantInviteStatus.pending;
   }
 
-  /// True when this battle is the "Daily • Today" shape: ends at the local
-  /// 23:59 of the same day it started. Used by the UI to badge daily battles.
-  bool get isDaily {
-    final s = startTime.toLocal();
-    final e = endTime.toLocal();
-    return s.year == e.year &&
-        s.month == e.month &&
-        s.day == e.day &&
-        e.hour == 23 &&
-        e.minute >= 59;
-  }
+  /// True when this battle is part of a recurring daily series.
+  /// Post migration 0046, `series_id != null` is the authoritative
+  /// signal. The old start/end-time heuristic was replaced because
+  /// daily-series instances now use nominal UTC start/end and per-user
+  /// `competing_date` for the actual window — the heuristic was
+  /// unreliable across timezones.
+  bool get isDaily => seriesId != null;
 
   /// True if the invite has expired (>24h old and still pending).
   bool get isExpired {
@@ -365,6 +433,10 @@ class BattleModel {
 
   /// Get this user's participant entry.
   BattleParticipant? participantFor(String userId) {
+    // Guard against empty string (auth still hydrating on cold-start).
+    // Without this, callers could accidentally search for empty-id
+    // participants and get null even when data is present.
+    if (userId.isEmpty) return null;
     try {
       return participants.firstWhere((p) => p.userId == userId);
     } catch (_) {
@@ -373,7 +445,18 @@ class BattleModel {
   }
 
   /// Get the opponent in a 1v1 battle.
+  ///
+  /// Guards against `userId == ''` — otherwise `firstWhere((p) =>
+  /// p.userId != '')` would match the FIRST participant (since every
+  /// real userId is non-empty), i.e. the current user's own row would
+  /// be returned as their "opponent". That produced the transient
+  /// "You vs [own first name]" render on battle cards during the
+  /// ~200ms auth-hydration window on cold-start (reported 2026-08-17).
+  /// Empty-uid callers now get `null` → the card falls through to the
+  /// `'Opponent'` placeholder in `_shortName`, which is at least
+  /// truthful during the brief window.
   BattleParticipant? opponentFor(String userId) {
+    if (userId.isEmpty) return null;
     try {
       return participants.firstWhere((p) => p.userId != userId);
     } catch (_) {

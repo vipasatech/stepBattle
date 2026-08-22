@@ -11,8 +11,7 @@ import '../../models/user_model.dart';
 import '../../providers/leaderboard_provider.dart';
 import '../../providers/user_provider.dart';
 import '../../services/geo_boundary_loader.dart';
-import '../../sheets/avatar_customizer_sheet.dart';
-import '../../widgets/fluttermoji_avatar.dart';
+import '../../widgets/avatar_circle.dart';
 import '../../widgets/map_tile_layer.dart';
 
 /// The canonical zoom tiers we snap between.
@@ -100,13 +99,6 @@ class _MapScreenState extends ConsumerState<MapScreen>
     super.initState();
     _map = MapController();
     WidgetsBinding.instance.addPostFrameCallback((_) async {
-      // Prompt the user to design their character avatar the first
-      // time they open the Map. Cancellation is fine — the sheet
-      // pops up again on the next Map / Create Battle entry until
-      // they save a spec.
-      if (mounted) {
-        await showAvatarCustomizerIfNeeded(context, ref);
-      }
       if (!mounted) return;
       _bootstrap();
     });
@@ -850,8 +842,7 @@ class _LeaderCluster extends StatelessWidget {
                   ),
                 ],
               ),
-              child: FluttermojiAvatar(
-                config: leader.avatarConfig,
+              child: AvatarCircle(
                 imageUrl: leader.avatarURL,
                 initials: _initials(leader.friendlyName),
                 radius: 28,
@@ -871,8 +862,7 @@ class _LeaderCluster extends StatelessWidget {
               for (final f in followers)
                 Padding(
                   padding: const EdgeInsets.symmetric(horizontal: 3),
-                  child: FluttermojiAvatar(
-                    config: f.avatarConfig,
+                  child: AvatarCircle(
                     imageUrl: f.avatarURL,
                     initials: _initials(f.friendlyName),
                     radius: 15,

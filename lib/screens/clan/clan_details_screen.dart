@@ -9,6 +9,7 @@ import '../../providers/clan_provider.dart';
 import '../../services/clan_service.dart';
 import '../../widgets/avatar_circle.dart';
 import '../../widgets/glass_card.dart';
+import '../../widgets/shimmer_loader.dart';
 
 /// Clan Details — reachable from the gear icon on the Clan tab.
 /// Shows clan metadata, full member list with role actions, and the
@@ -37,8 +38,16 @@ class ClanDetailsScreen extends ConsumerWidget {
         ),
       ),
       body: clan == null
-          ? Center(
-              child: CircularProgressIndicator(color: AppColors.primary))
+          ? ListView(
+              padding: const EdgeInsets.fromLTRB(20, 16, 20, 32),
+              children: const [
+                ShimmerLoader(height: 120, borderRadius: 20),
+                SizedBox(height: 16),
+                ShimmerRow(),
+                ShimmerRow(),
+                ShimmerRow(),
+              ],
+            )
           : ListView(
               padding: const EdgeInsets.fromLTRB(20, 8, 20, 40),
               children: [

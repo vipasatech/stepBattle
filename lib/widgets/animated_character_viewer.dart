@@ -38,9 +38,12 @@ class AnimatedCharacterViewer extends StatefulWidget {
 class _AnimatedCharacterViewerState extends State<AnimatedCharacterViewer> {
   late final Flutter3DController _controller;
 
+  DateTime? _mountedAt;
+
   @override
   void initState() {
     super.initState();
+    _mountedAt = DateTime.now();
     _controller = Flutter3DController();
   }
 
@@ -51,6 +54,9 @@ class _AnimatedCharacterViewerState extends State<AnimatedCharacterViewer> {
       src: widget.glbAssetPath,
       progressBarColor: widget.progressBarColor,
       onLoad: (String modelAddress) async {
+        final msSinceMount = _mountedAt == null
+            ? -1
+            : DateTime.now().difference(_mountedAt!).inMilliseconds;
         // Baked animation is our exported Taunt loop. We could name it
         // via a Character3D field, but the GLB only has one animation
         // and glTF spec makes it index 0 — grabbing the first available
@@ -61,12 +67,13 @@ class _AnimatedCharacterViewerState extends State<AnimatedCharacterViewer> {
             'src': widget.glbAssetPath,
             'animCount': animations.length,
             'anims': animations,
+            'msSinceMount': msSinceMount,
           });
           if (animations.isEmpty) return;
           _controller.playAnimation(animationName: animations.first);
         } catch (e, s) {
           AppLogger.battle.e('char3d:onLoad:failed',
-              fields: {'src': widget.glbAssetPath},
+              fields: {'src': widget.glbAssetPath, 'msSinceMount': msSinceMount},
               error: e,
               stack: s);
         }

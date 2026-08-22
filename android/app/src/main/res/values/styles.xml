@@ -22,4 +22,18 @@
     <style name="NormalTheme" parent="@android:style/Theme.Light.NoTitleBar">
         <item name="android:windowBackground">?android:colorBackground</item>
     </style>
+
+    <!-- Theme for the uCrop activity used by image_cropper. The default
+         Theme.AppCompat.Light.NoActionBar goes edge-to-edge on Android 15+,
+         which puts the toolbar behind the status bar and the bottom
+         controls behind the gesture bar. `fitsSystemWindows` insets the
+         root layout so nothing overflows, and we match the status-bar
+         colour to the toolbar (#14141A) + light-icon nav bar to the
+         white bottom-controls surface for a seamless look. -->
+    <style name="UCropTheme" parent="Theme.AppCompat.Light.NoActionBar">
+        <item name="android:fitsSystemWindows">true</item>
+        <item name="android:statusBarColor">#14141A</item>
+        <item name="android:navigationBarColor">#FFFFFF</item>
+        <item name="android:windowLightNavigationBar">true</item>
+    </style>
 </resources>

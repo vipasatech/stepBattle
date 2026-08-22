@@ -14,6 +14,13 @@ import 'package:flutter/foundation.dart';
 /// `./logs/<session>/<category>.log` so per-domain history is preserved
 /// across hot reloads.
 ///
+/// PII redaction: every string value that flows through `_write` is
+/// scanned for emails, phone numbers, and JWT tokens; matches are
+/// replaced with placeholder tokens (`<email>`, `<phone>`, `<jwt>`)
+/// before hitting the ring buffer, stream, `debugPrint`, or any future
+/// upstream sink (Sentry). Prevents user PII leaking into third-party
+/// error trackers or in-app diagnostics screens. See [_redactPII].
+///
 /// `debugPrint` output is a no-op in release builds unless built with
 /// `--dart-define=ENABLE_LOGS=true`. The IN-MEMORY RING BUFFER, however,
 /// is always populated — so an in-app logs viewer (see
@@ -81,11 +88,24 @@ class LogEntry {
   }
 }
 
+/// Callback fired every time an error-level log is emitted. Wired in
+/// [ObservabilityService] to forward to Sentry. Kept as a plain callback
+/// (not a stream) so a missing subscription can't drop the report.
+typedef ErrorHook = void Function(
+    LogEntry entry, Object? error, StackTrace? stack);
+
 class AppLogger {
   // Enabled in any debug/profile build, or whenever the host passes the
   // ENABLE_LOGS define explicitly (useful for release-mode field debugging).
   static const bool _debugPrintEnabled =
       kDebugMode || bool.fromEnvironment('ENABLE_LOGS', defaultValue: false);
+
+  static ErrorHook? _errorHook;
+
+  /// Install a callback fired for every [LogLevel.error] entry. Used by
+  /// [ObservabilityService] to forward errors to Sentry. Only one hook
+  /// is supported — the last call wins. Pass `null` to detach.
+  static void setOnErrorHook(ErrorHook? hook) => _errorHook = hook;
 
   /// Ring buffer capacity. ~500 entries × ~200 chars ≈ 100KB resident —
   /// cheap, and enough to cover a 30-minute run worth of tick logs.
@@ -135,6 +155,30 @@ class AppLogger {
   static final track = AppLogger._(LogCategory.track);
   static final payments = AppLogger._(LogCategory.payments);
 
+  /// Resolve a logger from a runtime [LogCategory]. Used by call-site
+  /// helpers (see [SupabaseApiClient]) that need to route log lines to
+  /// a category the caller picks at runtime.
+  static AppLogger forCategory(LogCategory category) {
+    switch (category) {
+      case LogCategory.session: return session;
+      case LogCategory.step: return step;
+      case LogCategory.mission: return mission;
+      case LogCategory.xp: return xp;
+      case LogCategory.battle: return battle;
+      case LogCategory.clan: return clan;
+      case LogCategory.auth: return auth;
+      case LogCategory.friend: return friend;
+      case LogCategory.health: return health;
+      case LogCategory.permission: return permission;
+      case LogCategory.leaderboard: return leaderboard;
+      case LogCategory.geo: return geo;
+      case LogCategory.notification: return notification;
+      case LogCategory.nav: return nav;
+      case LogCategory.track: return track;
+      case LogCategory.payments: return payments;
+    }
+  }
+
   final LogCategory _category;
   AppLogger._(this._category);
 
@@ -148,7 +192,10 @@ class AppLogger {
       _write(LogLevel.warn, event, fields);
 
   /// Error logger that also captures the error + a trimmed stack trace so the
-  /// per-service log file is self-contained for triage.
+  /// per-service log file is self-contained for triage. Additionally fires
+  /// the installed [ErrorHook] (typically the Sentry bridge) with the raw
+  /// error + stack so remote crash tracking sees the actual exception,
+  /// not the redacted `.toString()`.
   void e(
     String event, {
     Map<String, dynamic>? fields,
@@ -162,16 +209,24 @@ class AppLogger {
       merged['stack'] =
           stack.toString().split('\n').take(6).join(' || ');
     }
-    _write(LogLevel.error, event, merged);
+    final entry = _write(LogLevel.error, event, merged);
+    final hook = _errorHook;
+    if (hook != null && entry != null) {
+      try {
+        hook(entry, error, stack);
+      } catch (_) {
+        // A crashing error hook must never crash the app. Swallow.
+      }
+    }
   }
 
-  void _write(LogLevel lvl, String event, Map<String, dynamic>? fields) {
+  LogEntry? _write(LogLevel lvl, String event, Map<String, dynamic>? fields) {
     final entry = LogEntry(
       ts: DateTime.now(),
       category: _category,
       level: lvl,
-      event: event,
-      fields: fields,
+      event: _redactPII(event),
+      fields: _redactFieldsPII(fields),
     );
 
     // Always append to the ring buffer — survives release builds so the
@@ -185,5 +240,74 @@ class AppLogger {
     if (_debugPrintEnabled) {
       debugPrint(entry.formatted());
     }
+    return entry;
   }
+}
+
+// ─── PII redaction ────────────────────────────────────────────────────────
+// Regexes are static + final so they compile once. Loose-enough patterns to
+// catch the common leak vectors — false positives (e.g. a UUID with dots
+// matching part of the email pattern) prefer redaction over disclosure.
+
+// RFC 5322 subset: word-char + . + _ + - + %, `@`, hostname, TLD.
+final RegExp _emailRegex =
+    RegExp(r'[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}');
+
+// E.164 flavoured phone matcher: optional `+`, 8-15 digits, allowing
+// dashes/spaces/parens between groups. Boundary set excludes:
+//   - alphanumerics + `_`  (identifiers)
+//   - `-`, `/`             (UUID segments like `2318-4166`, paths)
+// so we redact real phones in JSON strings (`{"phone":"+15551234567"}`)
+// but leave UUIDs, hex hashes, build IDs, and file paths alone. The
+// digit body itself still allows internal `-`, spaces, and parens so
+// `+1 415-555-0123` and `(415) 555 0123` still match.
+final RegExp _phoneRegex = RegExp(
+  r'(?:(?<=^)|(?<=[^A-Za-z0-9_\-/]))\+?(?:\d[\s\-()]?){7,14}\d(?=$|[^A-Za-z0-9_\-/])',
+);
+
+// JWT: 3 base64url segments joined by `.`. Second and third segments are
+// long enough that <20 chars/segment weeds out false positives from
+// filenames like `foo.bar.baz`.
+final RegExp _jwtRegex = RegExp(
+  r'eyJ[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{20,}\.[A-Za-z0-9_\-]{20,}',
+);
+
+/// Replace common PII patterns in `s` with fixed placeholder tokens.
+/// Idempotent — running twice yields the same output.
+///
+/// Ordering matters: JWTs before phones (JWT segments can look like long
+/// digit runs), emails last (some emails contain a `+phone-like` local
+/// part we don't want mistaken for phones).
+String _redactPII(String s) {
+  if (s.isEmpty) return s;
+  return s
+      .replaceAll(_jwtRegex, '<jwt>')
+      .replaceAll(_phoneRegex, '<phone>')
+      .replaceAll(_emailRegex, '<email>');
+}
+
+/// Walk a fields map and redact string values in place. Non-string values
+/// (ints, doubles, bools, nulls) pass through; nested maps + lists are
+/// visited recursively so error objects with a `data:{email:'x@y'}` field
+/// still get scrubbed.
+Map<String, dynamic>? _redactFieldsPII(Map<String, dynamic>? fields) {
+  if (fields == null) return null;
+  final out = <String, dynamic>{};
+  fields.forEach((k, v) {
+    out[k] = _redactValuePII(v);
+  });
+  return out;
+}
+
+Object? _redactValuePII(Object? v) {
+  if (v == null) return null;
+  if (v is String) return _redactPII(v);
+  if (v is Map) {
+    // Preserve string-keyed maps (the only shape the logger receives).
+    return v.map<String, dynamic>(
+      (dynamic k, dynamic val) => MapEntry(k.toString(), _redactValuePII(val)),
+    );
+  }
+  if (v is Iterable) return v.map(_redactValuePII).toList(growable: false);
+  return v;
 }

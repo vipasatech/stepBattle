@@ -1,7 +1,7 @@
 name: stepbattle
 description: "StepBattle — Fitness gamification app"
 publish_to: 'none'
-version: 1.0.0+1
+version: 1.1.6+36
 
 environment:
   sdk: ^3.6.0
@@ -17,13 +17,14 @@ dependencies:
   # Routing
   go_router: ^14.8.1
 
-  # Firebase
+  # Firebase — trimmed to the minimum needed. Auth flows through
+  # supabase_flutter (Google/Apple via signInWithIdToken); data lives
+  # in Supabase; storage lives in Supabase Storage. FCM stays for push.
   firebase_core: ^3.12.1
-  firebase_auth: ^5.5.1
-  cloud_firestore: ^5.6.5
-  google_sign_in: ^6.2.2
   firebase_messaging: ^15.2.4
-  firebase_storage: ^12.4.4
+  # google_sign_in still needed as the ID-token provider that we pass
+  # into Supabase's signInWithIdToken (not into firebase_auth).
+  google_sign_in: ^6.2.2
 
   # Health Data
   health: ^11.1.0
@@ -65,6 +66,13 @@ dependencies:
   cached_network_image: ^3.4.1
   intl: ^0.19.0
   shimmer: ^3.0.0
+  # Fluent animation API. Powers the app-wide motion redesign: fade
+  # / slide / scale / stagger primitives compose via `.animate()` and
+  # `.effect()` chains, so per-widget AnimationControllers stay for the
+  # handful of surfaces that need custom curves (streak flame bounce,
+  # tick-ups). Every duration/curve reference resolves through
+  # `lib/config/motion.dart` — do NOT hard-code Duration(...) inline.
+  flutter_animate: ^4.5.0
   # Video playback — used by the splash screen to play the hyperframes-
   # rendered runner animation (assets/animations/splash_runner.mp4).
   video_player: ^2.9.0
@@ -80,14 +88,34 @@ dependencies:
   supabase_flutter: ^2.8.0
   flutter_dotenv: ^5.2.1
 
-  # In-app XP purchases (migration 0016). ~2% MDR vs Play's 15–30% and
-  # native UPI support; see lib/services/razorpay_service.dart for the
-  # end-to-end flow + Edge Function spec.
+  # In-app XP purchases — Razorpay (India-native, ~2% MDR, native UPI).
+  # Currently the DEFAULT provider (see PAYMENT_PROVIDER env flag in
+  # lib/providers/payment_provider_provider.dart). Kept alive during
+  # the Stripe cutover so v1.0.1+8 users still on Razorpay don't break.
+  # See lib/services/razorpay_service.dart + supabase/functions/razorpay_*.
   razorpay_flutter: ^1.3.7
+
+  # Second payment provider — Stripe. Enables multi-currency (INR + USD
+  # + EUR + GBP + AUD) and international acceptance. Coexists with
+  # Razorpay behind the PAYMENT_PROVIDER feature flag; ship-side we
+  # flip to `stripe` once end-to-end verification passes. See
+  # lib/services/stripe_service.dart + supabase/functions/stripe_*.
+  flutter_stripe: ^11.5.0
 
   # Battle Status page (C.16): users can swap in their own photo as the
   # background. image_picker handles the gallery/camera selection.
   image_picker: ^1.1.2
+
+  # Profile-photo crop step — after image_picker returns the raw file
+  # we open the cropper to let the user frame it inside the avatar
+  # circle before we upload. Ships native UIs on both platforms.
+  image_cropper: ^8.0.2
+
+  # Reactive network status. Used by the profile-photo pipeline to fire
+  # `LocalProfilePhotoService.retryPendingUpload()` the moment WiFi /
+  # mobile data comes back, so a photo picked while offline uploads on
+  # its own without waiting for the next app-resume tick.
+  connectivity_plus: ^6.0.5
 
   # Community Material Design Icons — bundles the ~6000-glyph MDI set so
   # we can use icons Flutter's built-in Material Icons doesn't ship, e.g.
@@ -95,20 +123,23 @@ dependencies:
   # Battles bottom-nav tab).
   material_design_icons_flutter: ^7.0.7296
 
-  # Bitmoji-style character avatars — user picks face / hair / eyes /
-  # mouth / clothing / accessories and the widget renders the result as
-  # layered SVG. The chosen options are stored as a JSON spec on the
-  # profile (see migration 0026), so a single ~200-byte column syncs
-  # the whole look across devices without shipping PNGs.
-  fluttermoji: ^1.0.2
+  # QR code rendering — used in the Profile "Share my QR Code" bottom
+  # sheet so friends can scan a code that contains the current user's
+  # `userCode` (e.g. `#U4X92`). Pure-Dart, no native deps.
+  qr_flutter: ^4.1.0
 
-  # Direct-use transitive deps of `fluttermoji` — we import them
-  # ourselves in the customizer sheet (SharedPreferences to seed the
-  # picker with the user's saved spec) and the FluttermojiAvatar
-  # widget (SvgPicture.string to render other users' character rigs).
-  # Explicit declaration keeps `depend_on_referenced_packages` clean
-  # and pins the version range we've verified against.
+  # Native in-app review prompt for the Settings → "Rate the app" row.
+  # Opens Google Play's in-app rating card without leaving the app on
+  # Android; falls back to the store page listing when the API isn't
+  # available. iOS uses SKStoreReviewController under the hood.
+  in_app_review: ^2.0.9
+
+  # `shared_preferences` — persists lightweight per-install state:
+  # the profile-photo path picked in the profile screen, streak-strip
+  # scroll offset, seen-onboarding flags, etc.
   shared_preferences: ^2.3.3
+  # `flutter_svg` — used for a handful of SVG assets rendered inline
+  # via `SvgPicture` (badge icons, etc.).
   flutter_svg: ^2.0.10+1
 
   # Share cards (Track session, Battle, Streak): render a custom card
@@ -122,12 +153,28 @@ dependencies:
   url_launcher: ^6.3.1
   gal: ^2.3.1
 
+  # Observability. Both packages are init'd in main.dart from .env values —
+  # if the DSN / API key is unset ('changeme' placeholder), the SDKs no-op
+  # rather than crash, so a dev environment without production secrets
+  # still builds. See lib/services/observability_service.dart for the
+  # gated init + wrapping of FlutterError.onError + PlatformDispatcher.
+  sentry_flutter: ^8.11.0
+  posthog_flutter: ^4.10.0
+
   # 3D character rendering — loads the .glb files under
   # assets/images/3dAvatars/{adam,amy,shannon,jackie}/character.glb (idle
   # pose) and Taunt.glb (taunt animation). Mixamo-rigged, Blender-converted
   # from FBX with Draco compression and 512-px textures (~2-7 MB each).
   # Handles model load, animation playback, and camera orbit inside a widget.
   flutter_3d_controller: ^2.0.5
+
+  # WebView used by flutter_3d_controller under the hood. Declared as
+  # a direct dep (in addition to the transitive one) so we can call
+  # InAppWebViewController.getDefaultUserAgent() at splash to warm the
+  # Android/iOS WebView provider — see MediaWarmup.primeWebViewEngine.
+  # Version pin matches what the fork resolves.
+  flutter_inappwebview: ^6.1.5
+  android_alarm_manager_plus: 4.0.7
 
 dependency_overrides:
   # Local fork of flutter_3d_controller — patches setCameraOrbit so its
@@ -139,6 +186,11 @@ dependency_overrides:
   # data/datasources/flutter_3d_datasource_mobile.dart:137.
   flutter_3d_controller:
     path: packages/flutter_3d_controller_fork
+  # image_cropper_platform_interface 7.2.0 uses `Color.toARGB32()`, which
+  # wasn't added to the Flutter framework until 3.29. We're on 3.27.1, so
+  # pin the interface at 7.1.0 (still uses `Color.value`) until we bump
+  # Flutter. `image_cropper: ^8.0.2` remains compatible with 7.1.0.
+  image_cropper_platform_interface: 7.1.0
 
 dev_dependencies:
   flutter_test:
@@ -197,9 +249,13 @@ flutter:
     - assets/images/3dAvatars/amy/
     - assets/images/3dAvatars/shannon/
     - assets/images/3dAvatars/jackie/
-    # Welcome-screen carousel mockups — one PNG per bottom-nav tab
-    # (home / battles / track / clan / leaderboard). Drop screenshots
-    # in here; the Welcome screen wires them into a floating phone
-    # frame on a violet gradient.
-    - assets/mockups/
+    # Welcome-screen carousel illustrations — the current live art the
+    # Welcome screen renders. Sized 1080x2340 (9:19.5 aspect) so they
+    # fit the phone-frame widget without cropping.
+    # (Removed in 1.1.6+30: `assets/mockups/` was declared here as a
+    # legacy "fallback source" but the fallback code path was deleted
+    # long ago; grep confirmed no lib/ file references it. Removing
+    # the declaration + folder shaves ~290 KB off the AAB with zero
+    # runtime effect.)
+    - assets/illustrations/
     - .env

@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../../config/colors.dart';
 import '../../providers/auth_provider.dart';
+import '../../utils/cross_isolate_kv.dart';
 import '../../utils/network_errors.dart';
 import '../../widgets/glass_card.dart';
 import '../../widgets/no_network_sheet.dart';
@@ -99,6 +100,12 @@ class _SignupScreenState extends ConsumerState<SignupScreen> {
     });
     try {
       await ref.read(authServiceProvider).sendEmailOtp(email);
+      // Persist the in-flight OTP so if the OS kills the app while
+      // the user switches to their email client for the code, the
+      // router restores the verify screen on next launch instead of
+      // dumping them back on /welcome. Cleared on successful verify
+      // or on "Use a different email" tap. See routes.dart.
+      await CrossIsolateKV.savePendingOtp(email: email, mode: 'signup');
       if (mounted) {
         context.go(
           '/verify-otp?email=${Uri.encodeQueryComponent(email)}&mode=signup',
@@ -139,6 +146,23 @@ class _SignupScreenState extends ConsumerState<SignupScreen> {
       body: SafeArea(
         child: Stack(
           children: [
+            // Top-left back button — pops to /welcome (or wherever the
+            // user came from).
+            Positioned(
+              top: 4,
+              left: 4,
+              child: IconButton(
+                icon: const Icon(Icons.arrow_back),
+                tooltip: 'Back',
+                onPressed: () {
+                  if (context.canPop()) {
+                    context.pop();
+                  } else {
+                    context.go('/welcome');
+                  }
+                },
+              ),
+            ),
             SingleChildScrollView(
               padding: const EdgeInsets.fromLTRB(24, 120, 24, 24),
               physics: const ClampingScrollPhysics(),

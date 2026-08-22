@@ -36,10 +36,23 @@ class BattleDurationPicker extends StatefulWidget {
   final ValueChanged<BattleWindow> onChanged;
   final BattleWindow? initial;
 
+  /// Minimum allowed start moment. When non-null the picker:
+  ///   • Snaps the current start forward to this value on the frame it
+  ///     changes, if the current start is earlier.
+  ///   • Uses this as `firstDate` on the start-time DateTime picker.
+  ///   • Disables the `Daily` preset (its start = now, which violates
+  ///     any minStart later than now).
+  ///
+  /// The 1v1 / group setup sheets pass `now + 1h` here when the Public
+  /// battle toggle is on — public battles must give discoverers enough
+  /// lead time.
+  final DateTime? minStart;
+
   const BattleDurationPicker({
     super.key,
     required this.onChanged,
     this.initial,
+    this.minStart,
   });
 
   @override
@@ -84,9 +97,50 @@ class _BattleDurationPickerState extends State<BattleDurationPicker> {
       _start = DateTime.now();
       _end = _start.add(const Duration(days: 1));
     }
+    _applyMinStart();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _emitChange();
     });
+  }
+
+  @override
+  void didUpdateWidget(covariant BattleDurationPicker old) {
+    super.didUpdateWidget(old);
+    // If the parent toggles the min-start floor (public toggle on),
+    // snap our start forward if it's now too early.
+    if (old.minStart != widget.minStart) {
+      _applyMinStart();
+      _emitChange();
+    }
+  }
+
+  /// If [widget.minStart] is set and our current start is before it,
+  /// clamp start forward, preserving the active preset's duration
+  /// (so end moves too). Also flip off `Daily` since it means "start = now".
+  ///
+  /// The snap target is `floor + 5 minutes` — a small buffer above the
+  /// hard floor so that if the user takes a few seconds to submit,
+  /// the picked time is still comfortably above `now + hardFloor` at
+  /// submit time (the parent re-checks the floor on submit for
+  /// defense in depth). Without this buffer, snapping to exact
+  /// `now + 1h` at 10:57 meant that submitting at 10:58 tripped the
+  /// submit-side "public battles need to start ≥1h from now" guard.
+  void _applyMinStart() {
+    final floor = widget.minStart;
+    if (floor == null) return;
+    if (_preset == _Preset.daily) {
+      _preset = _Preset.d1;
+    }
+    if (_start.isBefore(floor)) {
+      final snapTarget = floor.add(const Duration(minutes: 5));
+      final duration = _preset == _Preset.custom
+          ? _end.difference(_start)
+          : _durationForPreset(_preset);
+      _start = snapTarget;
+      _end = _start.add(
+        duration <= Duration.zero ? const Duration(days: 1) : duration,
+      );
+    }
   }
 
   /// Emits the current window to the parent, tagging `recurring: true` when
@@ -121,6 +175,10 @@ class _BattleDurationPickerState extends State<BattleDurationPicker> {
   }
 
   void _pickPreset(_Preset p) {
+    // Daily is disabled while a min-start floor is set (Public toggle
+    // on) — daily implies start=now, which violates a floor of now+1h.
+    if (p == _Preset.daily && widget.minStart != null) return;
+
     if (p == _Preset.custom) {
       // Custom means "you'll choose end manually" — open the end picker.
       _editEnd();
@@ -142,21 +200,32 @@ class _BattleDurationPickerState extends State<BattleDurationPicker> {
     setState(() {
       _preset = p;
       _end = _start.add(_durationForPreset(p));
+      // Re-apply the floor in case setting the preset would have
+      // dragged start backward (e.g. reselecting 1d after custom).
+      _applyMinStart();
     });
     _emitChange();
   }
 
   Future<void> _editStart() async {
-    final picked = await _showDateTimePicker(
-      initial: _start,
-      // Clamp to >= now (or a small back-skew tolerance handled in service).
-      firstDate: DateTime.now().subtract(const Duration(minutes: 1)),
+    // Floor is `minStart` when the parent set one (Public toggle on),
+    // otherwise the normal small back-skew tolerance from "now".
+    final floor = widget.minStart ??
+        DateTime.now().subtract(const Duration(minutes: 1));
+    var picked = await _showDateTimePicker(
+      initial: _start.isBefore(floor) ? floor : _start,
+      firstDate: floor,
       helpDate: 'Start date',
       helpTime: 'Start time',
     );
     if (picked == null) return;
+    // Flutter's showTimePicker doesn't respect the date picker's
+    // firstDate — user can pick a TIME earlier than the floor even
+    // though the DATE was floored. Clamp up. Applies to any picker
+    // usage; matters most when Public is on and floor = now+1h.
+    final clamped = picked.isBefore(floor) ? floor : picked;
     setState(() {
-      _start = picked;
+      _start = clamped;
       // "Daily" anchors end at midnight; once the user drags start off "now",
       // the preset no longer makes sense → fall back to Custom and keep the
       // midnight end the user already saw.
@@ -271,6 +340,10 @@ class _BattleDurationPickerState extends State<BattleDurationPicker> {
               .map((p) => _Chip(
                     label: _presetShort[p]!,
                     selected: _preset == p,
+                    // Daily is disabled when the parent set a start-time
+                    // floor (Public toggle → start ≥ now+1h). Grey it out
+                    // so users see it's unavailable in this context.
+                    disabled: p == _Preset.daily && widget.minStart != null,
                     onTap: () => _pickPreset(p),
                   ))
               .toList(),
@@ -365,38 +438,43 @@ class _TimePill extends StatelessWidget {
 class _Chip extends StatelessWidget {
   final String label;
   final bool selected;
+  final bool disabled;
   final VoidCallback onTap;
 
   const _Chip({
     required this.label,
     required this.selected,
     required this.onTap,
+    this.disabled = false,
   });
 
   @override
   Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: onTap,
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-        decoration: BoxDecoration(
-          color: selected
-              ? AppColors.primary.withValues(alpha: 0.18)
-              : AppColors.surfaceContainerLow,
-          borderRadius: BorderRadius.circular(20),
-          border: Border.all(
+    return Opacity(
+      opacity: disabled ? 0.35 : 1.0,
+      child: GestureDetector(
+        onTap: disabled ? null : onTap,
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+          decoration: BoxDecoration(
             color: selected
-                ? AppColors.primary
-                : AppColors.outlineVariant.withValues(alpha: 0.4),
+                ? AppColors.primary.withValues(alpha: 0.18)
+                : AppColors.surfaceContainerLow,
+            borderRadius: BorderRadius.circular(20),
+            border: Border.all(
+              color: selected
+                  ? AppColors.primary
+                  : AppColors.outlineVariant.withValues(alpha: 0.4),
+            ),
           ),
-        ),
-        child: Text(
-          label,
-          style: TextStyle(
-            fontFamily: 'Manrope',
-            fontSize: 12,
-            fontWeight: FontWeight.w700,
-            color: selected ? AppColors.primary : AppColors.onSurfaceVariant,
+          child: Text(
+            label,
+            style: TextStyle(
+              fontFamily: 'Manrope',
+              fontSize: 12,
+              fontWeight: FontWeight.w700,
+              color: selected ? AppColors.primary : AppColors.onSurfaceVariant,
+            ),
           ),
         ),
       ),

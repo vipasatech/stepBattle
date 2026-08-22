@@ -173,7 +173,7 @@ class BattleResultCard extends StatelessWidget {
             Align(
               alignment: Alignment.centerRight,
               child: Text(
-                '+${_fmt(battle.xpReward)} XP on win',
+                '+${_fmt(battle.stakeXp)} XP on win',
                 style: TextStyle(
                   color: opAccent,
                   fontSize: 13 * scale,

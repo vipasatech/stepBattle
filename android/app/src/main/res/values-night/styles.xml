@@ -19,4 +19,15 @@
     <style name="NormalTheme" parent="@android:style/Theme.Black.NoTitleBar">
         <item name="android:windowBackground">?android:colorBackground</item>
     </style>
+
+    <!-- Night-mode variant of UCropTheme — mirrors the light values above.
+         The uCrop UI itself is force-dark (dark toolbar + white bottom bar
+         via ImageCropper AndroidUiSettings), so we keep the same status
+         and navigation bar colours in both themes. -->
+    <style name="UCropTheme" parent="Theme.AppCompat.Light.NoActionBar">
+        <item name="android:fitsSystemWindows">true</item>
+        <item name="android:statusBarColor">#14141A</item>
+        <item name="android:navigationBarColor">#FFFFFF</item>
+        <item name="android:windowLightNavigationBar">true</item>
+    </style>
 </resources>

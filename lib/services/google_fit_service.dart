@@ -34,6 +34,13 @@ class GoogleFitService {
   static const String _kEnabled = 'fit_enabled';
   static const String _kScopeGranted = 'fit_scope_granted';
 
+  /// Set to `true` in Hive when we auto-disable because the Fit REST
+  /// API returned 403. The Step Sources screen reads this flag to
+  /// show a "Google retired this API" banner + prevent the user from
+  /// pointlessly re-enabling. Cleared only when the user acknowledges
+  /// the banner (via a "Got it" tap on the UI).
+  static const String _kAutoDisabledDeprecated = 'fit_deprecated_disabled';
+
   final GoogleSignIn _signIn;
   final Box _box;
   String? _lastError;
@@ -51,6 +58,35 @@ class GoogleFitService {
   bool get hasScope => _box.get(_kScopeGranted) as bool? ?? false;
   String? get lastError => _lastError;
 
+  /// True when the Fit REST API returned 403 and we auto-disabled the
+  /// toggle. Step Sources UI reads this to show a "Google retired
+  /// this API" deprecation banner so the user understands why the
+  /// switch went off on its own.
+  bool get wasAutoDisabledDueToDeprecation =>
+      _box.get(_kAutoDisabledDeprecated) as bool? ?? false;
+
+  /// Clear the deprecation flag after the user acknowledges the banner.
+  Future<void> acknowledgeDeprecationBanner() async {
+    try {
+      await _box.put(_kAutoDisabledDeprecated, false);
+    } catch (_) {}
+  }
+
+  /// Internal — called when Fit REST returns 403. Disables the toggle
+  /// AND sets the deprecation flag so the UI can show a specific
+  /// message. Best-effort; a Hive write failure just means the flag
+  /// won't stick, and the next 403 will re-trigger this path.
+  Future<void> _autoDisableOnDeprecation(String from) async {
+    AppLogger.health.w('googleFit:autoDisabledOn403', fields: {
+      'from': from,
+      'reason': 'Google Fit REST API retired 2026-06-30',
+    });
+    try {
+      await _box.put(_kEnabled, false);
+      await _box.put(_kAutoDisabledDeprecated, true);
+    } catch (_) {}
+  }
+
   /// Toggle Fit fallback on/off. When enabling, we lazily request the
   /// `fitness.activity.read` scope so the user only sees the OAuth dialog
   /// at this moment.
@@ -64,10 +100,20 @@ class GoogleFitService {
       return true;
     }
 
-    // Lazily request the scope on the existing signed-in account.
-    final account = _signIn.currentUser ?? await _signIn.signInSilently();
+    // We construct our OWN GoogleSignIn instance in the constructor,
+    // separate from the one the auth service uses at login. That means
+    // `currentUser` on THIS instance is null and `signInSilently()` only
+    // works when the OS already has a matching account granted the
+    // needed scopes — which for a fresh install with only `email`
+    // granted, it doesn't. Prior versions gave up here with "Not signed
+    // in", stranding Motorola / Realme / Nothing users who tapped
+    // Enable. Fall back to interactive `signIn()` so the account picker
+    // opens and the user can grant the fitness scope in one flow.
+    final account = _signIn.currentUser ??
+        await _signIn.signInSilently() ??
+        await _interactiveSignIn();
     if (account == null) {
-      _lastError = 'Not signed in';
+      _lastError = 'Sign-in cancelled';
       return false;
     }
 
@@ -81,10 +127,26 @@ class GoogleFitService {
       }
       await _box.put(_kEnabled, true);
       await _box.put(_kScopeGranted, true);
+      _lastError = null;
       return true;
     } catch (e) {
       _lastError = e.toString();
       return false;
+    }
+  }
+
+  /// Interactive Google sign-in on THIS service's GoogleSignIn instance.
+  /// Returns null when the user cancels the account picker (which is
+  /// distinct from a hard failure). Isolated so callers don't have to
+  /// re-derive the try/catch shape.
+  Future<GoogleSignInAccount?> _interactiveSignIn() async {
+    try {
+      return await _signIn.signIn();
+    } catch (e) {
+      _lastError = 'signIn: $e';
+      AppLogger.health.w('googleFit:interactiveSignInFailed',
+          fields: {'err': e.toString()});
+      return null;
     }
   }
 
@@ -129,6 +191,15 @@ class GoogleFitService {
 
       if (res.statusCode != 200) {
         _lastError = 'Fit API HTTP ${res.statusCode}';
+        // 403 = the Fitness REST API is refusing us. Google formally
+        // retired this API on 2026-06-30; most projects now return
+        // 403 unconditionally. Auto-disable so we stop hammering a
+        // dead endpoint on every aggregator tick. The Step Sources
+        // screen carries a deprecation banner explaining why the
+        // toggle went off and pointing users at Health Connect.
+        if (res.statusCode == 403) {
+          await _autoDisableOnDeprecation('getTodaySteps');
+        }
         return null;
       }
 
@@ -160,7 +231,91 @@ class GoogleFitService {
     }
   }
 
+  /// Aggregate step count for a specific past date (00:00 → 23:59 local
+   /// midnight). Used by the missed-days backfill to reconstruct
+  /// step_logs rows for days the app was terminated across.
+  ///
+  /// Returns null when Fit is disabled, no auth token, or the request
+  /// fails — caller should treat null as "source unavailable" and
+  /// fall through to the time-proportional estimator.
+  Future<int?> getStepsForDate(DateTime date) async {
+    if (!isEnabled) {
+      AppLogger.health.t('googleFit:disabled');
+      return null;
+    }
+    final token = await _accessToken();
+    if (token == null) {
+      _lastError = 'No access token';
+      return null;
+    }
+    // Bucket the requested calendar day locally so DST changes /
+    // near-midnight edge cases don't leak into the neighbouring day.
+    final startOfDay = DateTime(date.year, date.month, date.day);
+    final endOfDay = startOfDay.add(const Duration(days: 1));
+    final body = jsonEncode({
+      'aggregateBy': [
+        {'dataTypeName': _stepCountDataType}
+      ],
+      'bucketByTime': {'durationMillis': 86400000},
+      'startTimeMillis': startOfDay.millisecondsSinceEpoch,
+      'endTimeMillis': endOfDay.millisecondsSinceEpoch,
+    });
+    try {
+      final res = await http
+          .post(
+            Uri.parse(_aggregateUrl),
+            headers: {
+              'Authorization': 'Bearer $token',
+              'Content-Type': 'application/json',
+            },
+            body: body,
+          )
+          .timeout(const Duration(seconds: 5));
+      if (res.statusCode != 200) {
+        _lastError = 'Fit API HTTP ${res.statusCode}';
+        // Same 403 auto-disable path as getTodaySteps — see there for
+        // rationale. Missed-day backfill goes silent for this device
+        // and future calls short-circuit at the isEnabled guard.
+        if (res.statusCode == 403) {
+          await _autoDisableOnDeprecation('getStepsForDate');
+        }
+        return null;
+      }
+      final json = jsonDecode(res.body) as Map<String, dynamic>;
+      final buckets = (json['bucket'] as List?) ?? const [];
+      if (buckets.isEmpty) return 0;
+      var total = 0;
+      for (final bucket in buckets) {
+        final datasets = (bucket['dataset'] as List?) ?? const [];
+        for (final ds in datasets) {
+          final points = (ds['point'] as List?) ?? const [];
+          for (final p in points) {
+            final values = (p['value'] as List?) ?? const [];
+            for (final v in values) {
+              final n = (v['intVal'] as num?)?.toInt() ?? 0;
+              total += n;
+            }
+          }
+        }
+      }
+      _lastError = null;
+      AppLogger.health.d('googleFit:getStepsForDate', fields: {
+        'date': startOfDay.toIso8601String().split('T').first,
+        'steps': total,
+      });
+      return total;
+    } catch (e, s) {
+      _lastError = e.toString();
+      AppLogger.health.e('googleFit:getStepsForDate:failed',
+          error: e, stack: s);
+      return null;
+    }
+  }
+
   Future<String?> _accessToken() async {
+    // Read side: never open an interactive account picker mid-poll.
+    // If both current + silent are empty, treat as "no token" — the
+    // enable flow above is what surfaces the sign-in UI.
     final account = _signIn.currentUser ?? await _signIn.signInSilently();
     if (account == null) return null;
     try {

@@ -1,17 +1,30 @@
 import 'package:flutter/material.dart';
+
 import '../../../config/colors.dart';
 import '../../../models/battle_model.dart';
-import '../../../widgets/avatar_circle.dart';
+import '../../../widgets/multiplayer_battle_visuals.dart';
 
-/// Compact ranking strip docked at the bottom of the battle ground.
-/// Participants sorted by step count descending. Tap to expand the full list.
+/// Arena leaderboard pill — sits above the road at the bottom of the
+/// battle ground. Shares its visual language with the Battles-tab
+/// battle-card boards via `MultiplayerStackedBar`, `GroupBoardDropdown`,
+/// and `TeamBoardDropdown` from
+/// [lib/widgets/multiplayer_battle_visuals.dart]. Players wear the same
+/// colors here as on the card so users cross-reference bar slice → row
+/// on either surface without confusion.
+///
+/// Layout:
+///   • Always visible: `📊 BATTLE BOARD · N players/teams · ▼/▲` header
+///     row, plus the colored stacked rail below it.
+///   • Tap to expand: the full ranked list (grouped by team on team
+///     battles). Grows tall — no cap on rows since the user asked to
+///     see every participant during a live battle.
 class LeaderboardPill extends StatefulWidget {
-  final List<BattleParticipant> participants;
+  final BattleModel battle;
   final String currentUserId;
 
   const LeaderboardPill({
     super.key,
-    required this.participants,
+    required this.battle,
     required this.currentUserId,
   });
 
@@ -25,10 +38,32 @@ class _LeaderboardPillState extends State<LeaderboardPill> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final sorted = [...widget.participants]
-      ..sort((a, b) => b.currentSteps.compareTo(a.currentSteps));
-    final leaderSteps =
-        sorted.isNotEmpty ? sorted.first.currentSteps : 0;
+    final isTeam = widget.battle.type == BattleType.team;
+
+    // Data + segments derived on every build — cheap (list operations
+    // over ≤10 participants) and always in sync with the realtime
+    // stream that drives `widget.battle`.
+    final List<BarSegment> segments;
+    final Widget expandedBody;
+    final String countLabel;
+    if (isTeam) {
+      final teams = buildTeamGroups(widget.battle, widget.currentUserId);
+      segments = [
+        for (final t in teams)
+          BarSegment(color: t.color, value: t.totalSteps),
+      ];
+      expandedBody = TeamBoardDropdown(teams: teams, headerless: true);
+      countLabel = '${teams.length} ${teams.length == 1 ? "team" : "teams"}';
+    } else {
+      final rows = buildPlayerRows(widget.battle, widget.currentUserId);
+      segments = [
+        for (final r in rows)
+          BarSegment(color: r.color, value: r.steps),
+      ];
+      expandedBody = GroupBoardDropdown(rows: rows, headerless: true);
+      countLabel =
+          '${rows.length} ${rows.length == 1 ? "player" : "players"}';
+    }
 
     return AnimatedContainer(
       duration: const Duration(milliseconds: 260),
@@ -40,298 +75,73 @@ class _LeaderboardPillState extends State<LeaderboardPill> {
           color: AppColors.onSurface.withValues(alpha: 0.08),
         ),
       ),
-      child: InkWell(
-        borderRadius: BorderRadius.circular(20),
-        onTap: () => setState(() => _expanded = !_expanded),
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Row(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          InkWell(
+            borderRadius: BorderRadius.circular(20),
+            onTap: () => setState(() => _expanded = !_expanded),
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(14, 10, 12, 8),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
                 children: [
-                  Icon(Icons.leaderboard,
-                      size: 16, color: AppColors.primary),
-                  const SizedBox(width: 6),
-                  Text(
-                    'BATTLE BOARD',
-                    style: theme.textTheme.labelSmall?.copyWith(
-                      color: AppColors.onSurface.withValues(alpha: 0.85),
-                      letterSpacing: 1.6,
-                      fontWeight: FontWeight.w800,
-                    ),
+                  Row(
+                    children: [
+                      Icon(Icons.leaderboard,
+                          size: 14, color: AppColors.primary),
+                      const SizedBox(width: 6),
+                      Text(
+                        'BATTLE BOARD',
+                        style: theme.textTheme.labelSmall?.copyWith(
+                          color: Colors.white.withValues(alpha: 0.9),
+                          letterSpacing: 1.6,
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
+                      const SizedBox(width: 10),
+                      Text(
+                        countLabel,
+                        style: theme.textTheme.labelSmall?.copyWith(
+                          color: Colors.white.withValues(alpha: 0.65),
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                      const Spacer(),
+                      Icon(
+                        _expanded
+                            ? Icons.keyboard_arrow_down
+                            : Icons.keyboard_arrow_up,
+                        size: 18,
+                        color: Colors.white.withValues(alpha: 0.7),
+                      ),
+                    ],
                   ),
-                  const Spacer(),
-                  Icon(
-                    _expanded
-                        ? Icons.keyboard_arrow_down
-                        : Icons.keyboard_arrow_up,
-                    size: 18,
-                    color: AppColors.onSurface.withValues(alpha: 0.7),
+                  const SizedBox(height: 8),
+                  // Rail — always visible so the user sees live standings
+                  // at a glance without needing to expand the pill.
+                  MultiplayerStackedBar(
+                    segments: segments,
+                    height: 10,
                   ),
                 ],
               ),
-              const SizedBox(height: 6),
-              if (!_expanded)
-                _Collapsed(sorted: sorted, currentUserId: widget.currentUserId)
-              else
-                _Expanded(
-                  sorted: sorted,
-                  leaderSteps: leaderSteps,
-                  currentUserId: widget.currentUserId,
-                ),
-            ],
+            ),
           ),
-        ),
+          if (_expanded) ...[
+            Divider(
+              height: 1,
+              color: Colors.white.withValues(alpha: 0.1),
+            ),
+            // Expanded body grows tall — no cap. User asked for the full
+            // list to be visible during a live battle.
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 4),
+              child: expandedBody,
+            ),
+          ],
+        ],
       ),
     );
-  }
-}
-
-class _Collapsed extends StatelessWidget {
-  final List<BattleParticipant> sorted;
-  final String currentUserId;
-  const _Collapsed({required this.sorted, required this.currentUserId});
-
-  @override
-  Widget build(BuildContext context) {
-    return Row(
-      children: [
-        for (var i = 0; i < sorted.length && i < 4; i++) ...[
-          _MiniRow(
-            rank: i + 1,
-            p: sorted[i],
-            isMe: sorted[i].userId == currentUserId,
-          ),
-          if (i < sorted.length - 1 && i < 3)
-            Container(
-              width: 1,
-              height: 22,
-              margin: const EdgeInsets.symmetric(horizontal: 8),
-              color: AppColors.onSurface.withValues(alpha: 0.08),
-            ),
-        ],
-        if (sorted.length > 4) ...[
-          const SizedBox(width: 6),
-          Text('+${sorted.length - 4}',
-              style: const TextStyle(
-                fontFamily: 'Manrope',
-                color: Colors.white70,
-                fontSize: 11,
-                fontWeight: FontWeight.w700,
-              )),
-        ],
-      ],
-    );
-  }
-}
-
-class _MiniRow extends StatelessWidget {
-  final int rank;
-  final BattleParticipant p;
-  final bool isMe;
-  const _MiniRow({required this.rank, required this.p, required this.isMe});
-
-  @override
-  Widget build(BuildContext context) {
-    final medal = switch (rank) {
-      1 => AppColors.gold,
-      2 => AppColors.silver,
-      3 => AppColors.bronze,
-      _ => AppColors.onSurfaceVariant,
-    };
-    return Row(
-      children: [
-        Container(
-          width: 20,
-          height: 20,
-          alignment: Alignment.center,
-          decoration: BoxDecoration(
-            color: medal.withValues(alpha: 0.18),
-            shape: BoxShape.circle,
-            border: Border.all(color: medal.withValues(alpha: 0.7)),
-          ),
-          child: Text(
-            '$rank',
-            style: TextStyle(
-              fontFamily: 'Manrope',
-              color: medal,
-              fontSize: 10,
-              fontWeight: FontWeight.w900,
-            ),
-          ),
-        ),
-        const SizedBox(width: 6),
-        Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              isMe ? 'You' : _short(p.friendlyName),
-              style: TextStyle(
-                fontFamily: 'Manrope',
-                color: isMe ? AppColors.primary : Colors.white,
-                fontWeight: FontWeight.w800,
-                fontSize: 11,
-              ),
-            ),
-            Text(
-              _fmt(p.currentSteps),
-              style: const TextStyle(
-                fontFamily: 'Manrope',
-                color: Colors.white70,
-                fontSize: 10,
-              ),
-            ),
-          ],
-        ),
-      ],
-    );
-  }
-
-  static String _short(String s) => s.length > 6 ? '${s.substring(0, 6)}…' : s;
-
-  static String _fmt(int n) {
-    if (n == 0) return '0';
-    final s = n.toString();
-    final buf = StringBuffer();
-    for (var i = 0; i < s.length; i++) {
-      if (i > 0 && (s.length - i) % 3 == 0) buf.write(',');
-      buf.write(s[i]);
-    }
-    return buf.toString();
-  }
-}
-
-class _Expanded extends StatelessWidget {
-  final List<BattleParticipant> sorted;
-  final int leaderSteps;
-  final String currentUserId;
-  const _Expanded({
-    required this.sorted,
-    required this.leaderSteps,
-    required this.currentUserId,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Column(
-      children: [
-        for (var i = 0; i < sorted.length; i++)
-          Padding(
-            padding: EdgeInsets.only(top: i == 0 ? 0 : 6),
-            child: _FullRow(
-              rank: i + 1,
-              p: sorted[i],
-              leaderSteps: leaderSteps,
-              isMe: sorted[i].userId == currentUserId,
-            ),
-          ),
-      ],
-    );
-  }
-}
-
-class _FullRow extends StatelessWidget {
-  final int rank;
-  final BattleParticipant p;
-  final int leaderSteps;
-  final bool isMe;
-  const _FullRow({
-    required this.rank,
-    required this.p,
-    required this.leaderSteps,
-    required this.isMe,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final medal = switch (rank) {
-      1 => AppColors.gold,
-      2 => AppColors.silver,
-      3 => AppColors.bronze,
-      _ => AppColors.onSurfaceVariant,
-    };
-    final gap = rank == 1 ? 0 : leaderSteps - p.currentSteps;
-
-    return Row(
-      children: [
-        Container(
-          width: 24,
-          height: 24,
-          alignment: Alignment.center,
-          decoration: BoxDecoration(
-            color: medal.withValues(alpha: 0.18),
-            shape: BoxShape.circle,
-            border: Border.all(color: medal.withValues(alpha: 0.7)),
-          ),
-          child: Text(
-            '$rank',
-            style: TextStyle(
-              fontFamily: 'Manrope',
-              color: medal,
-              fontSize: 11,
-              fontWeight: FontWeight.w900,
-            ),
-          ),
-        ),
-        const SizedBox(width: 10),
-        AvatarCircle(
-          radius: 14,
-          imageUrl: p.avatarURL,
-          initials: p.friendlyName.isNotEmpty
-              ? p.friendlyName[0].toUpperCase()
-              : '?',
-          borderColor: isMe ? AppColors.primary : AppColors.outlineVariant,
-          borderWidth: 1.5,
-        ),
-        const SizedBox(width: 10),
-        Expanded(
-          child: Text(
-            isMe ? 'You' : p.friendlyName,
-            style: theme.textTheme.labelMedium?.copyWith(
-              color: isMe ? AppColors.primary : Colors.white,
-              fontWeight: FontWeight.w700,
-            ),
-            overflow: TextOverflow.ellipsis,
-          ),
-        ),
-        Column(
-          crossAxisAlignment: CrossAxisAlignment.end,
-          children: [
-            Text(
-              _fmt(p.currentSteps),
-              style: const TextStyle(
-                fontFamily: 'Manrope',
-                color: Colors.white,
-                fontSize: 12,
-                fontWeight: FontWeight.w800,
-              ),
-            ),
-            if (rank > 1)
-              Text(
-                '-${_fmt(gap)}',
-                style: TextStyle(
-                  fontFamily: 'Manrope',
-                  color: AppColors.onSurface.withValues(alpha: 0.5),
-                  fontSize: 10,
-                ),
-              ),
-          ],
-        ),
-      ],
-    );
-  }
-
-  static String _fmt(int n) {
-    if (n == 0) return '0';
-    final s = n.toString();
-    final buf = StringBuffer();
-    for (var i = 0; i < s.length; i++) {
-      if (i > 0 && (s.length - i) % 3 == 0) buf.write(',');
-      buf.write(s[i]);
-    }
-    return buf.toString();
   }
 }

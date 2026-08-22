@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../config/colors.dart';
+import '../models/avatar.dart';
 import '../models/user_model.dart';
 import '../providers/auth_provider.dart';
 import '../services/goal_formula.dart';
@@ -199,6 +200,41 @@ class _EditSurveySheetState extends ConsumerState<EditSurveySheet> {
             behavior: SnackBarBehavior.floating,
           ),
         );
+      }
+
+      // 4. If the new personal-info values point at a different
+      //    battle avatar, update it silently and confirm with a
+      //    passive snackbar. Users can still open the avatar picker
+      //    and override this at any time — the auto-update is
+      //    "match your info by default, override on purpose".
+      final suggested = Avatar.defaultForUser(
+        gender: _gender,
+        fitnessLevel: _fitnessLevel,
+        ageYears: _ageFromDob(_dateOfBirth!),
+      );
+      if (suggested.id != me.battleAvatarId) {
+        try {
+          await ref.read(authServiceProvider).updateBattleAvatar(
+                userId: me.userId,
+                avatarId: suggested.id,
+              );
+          ref.invalidate(currentUserProvider);
+          if (!mounted) return;
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(
+                'Battle avatar updated to match — ${suggested.label}.',
+              ),
+              duration: const Duration(seconds: 4),
+              behavior: SnackBarBehavior.floating,
+            ),
+          );
+        } catch (_) {
+          // Avatar auto-update is a best-effort follow-on to the
+          // primary save — swallow errors so a hiccup here doesn't
+          // masquerade as a failed personal-info save. The user can
+          // change the runner manually from the avatar picker.
+        }
       }
     } catch (e) {
       if (!mounted) return;

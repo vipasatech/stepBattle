@@ -10,9 +10,12 @@ import '../providers/battle_provider.dart';
 import '../services/battle_service.dart';
 import '../widgets/avatar_circle.dart';
 import '../widgets/battle_duration_picker.dart';
+import '../widgets/battle_stake_picker.dart';
 import '../widgets/battle_visibility_toggle.dart';
 import '../widgets/bottom_sheet_handle.dart';
+import '../providers/subscription_provider.dart';
 import 'add_friends_sheet.dart';
+import 'upgrade_cta_sheet.dart';
 
 /// Multi-player battle setup — invite up to N participants for a free-for-all.
 ///
@@ -33,10 +36,19 @@ class _BattleGroupSetupSheetState
     extends ConsumerState<BattleGroupSetupSheet> {
   final List<UserModel> _invited = [];
   bool _creating = false;
+  /// In-sheet error banner (see 1v1 sheet for rationale — snackbars
+  /// render behind bottom sheets and can't be surfaced without
+  /// dismissing the sheet).
+  String? _submitError;
   BattleWindow? _window;
 
   /// Public lobby toggle — see [Battle1v1SetupSheet] for design.
   bool _isPublic = false;
+
+  /// Per-participant XP stake. v2 economy requires ≥
+  /// [AppConstants.minBattleStakeXp] (100). Pot = stake × participants
+  /// (creator + accepted invitees). Winner takes the whole pot.
+  int _stakeXp = AppConstants.minBattleStakeXp;
 
   final _battleCode = BattleService.generateBattleCode();
 
@@ -140,11 +152,66 @@ class _BattleGroupSetupSheetState
     );
   }
 
+  /// Public-battle toggle handler. Turning ON prompts a confirmation
+  /// dialog explaining the 1-hour advance rule; Cancel reverts, Continue
+  /// accepts and the duration picker's minStart snaps to now+1h on the
+  /// next rebuild. Turning OFF is instant.
+  Future<void> _onPublicToggleChanged(bool value) async {
+    if (!value) {
+      setState(() => _isPublic = false);
+      return;
+    }
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: AppColors.surfaceContainerHigh,
+        title: const Text('Public battle'),
+        content: const Text(
+          'Public battles are scheduled at least 1 hour in advance, '
+          'giving other players enough time to discover and join before '
+          'the battle begins.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('Continue'),
+          ),
+        ],
+      ),
+    );
+    if (!mounted) return;
+    if (confirmed == true) {
+      setState(() => _isPublic = true);
+    }
+  }
+
   Future<void> _createBattle() async {
-    if (_invited.isEmpty) return;
+    // Public battles skip the invitee requirement — anyone with the
+    // join code / via Discover can drop in.
+    if (!_isPublic && _invited.isEmpty) return;
     final window = _window;
     if (window == null || !window.isValid) return;
-    setState(() => _creating = true);
+    // Submit-time defense in depth for public battles. 5-min tolerance
+    // matches the picker's snap buffer (+5 min above the strict floor),
+    // so a normal submit never trips this check.
+    if (_isPublic) {
+      final floorWithTolerance =
+          DateTime.now().add(const Duration(minutes: 55));
+      if (window.start.isBefore(floorWithTolerance)) {
+        setState(() => _submitError =
+            'Public battles need to start at least 1 hour from now. '
+            'Re-open the start time and pick a later slot.');
+        return;
+      }
+    }
+    setState(() {
+      _creating = true;
+      _submitError = null;
+    });
 
     try {
       final me = ref.read(currentUserProvider).valueOrNull;
@@ -176,6 +243,7 @@ class _BattleGroupSetupSheetState
               endTime: window.end,
               createdBy: me.userId,
               visibility: visibility,
+              stakeXp: _stakeXp,
             )
           : await service.createBattle(
               type: BattleType.group,
@@ -184,6 +252,7 @@ class _BattleGroupSetupSheetState
               endTime: window.end,
               createdBy: me.userId,
               visibility: visibility,
+              stakeXp: _stakeXp,
             );
       if (mounted) {
         Navigator.pop(context);
@@ -228,7 +297,7 @@ class _BattleGroupSetupSheetState
                   Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text('MULTI-PLAYER',
+                      Text('MULTI BATTLE',
                           style: theme.textTheme.headlineSmall?.copyWith(
                               color: AppColors.primary,
                               fontWeight: FontWeight.w700)),
@@ -266,16 +335,36 @@ class _BattleGroupSetupSheetState
                 controller: scrollController,
                 padding: const EdgeInsets.symmetric(horizontal: 24),
                 children: [
-                  // Start + end + chips
+                  // Public toggle sits above the duration picker: the
+                  // "public → +1h floor" dialog fires BEFORE the user
+                  // picks a start time so the picker can enforce the
+                  // floor from the start.
+                  BattleVisibilityToggle(
+                    isPublic: _isPublic,
+                    onChanged: _onPublicToggleChanged,
+                  ),
+                  const SizedBox(height: 16),
+
+                  // Start + end + chips. When public is on, minStart
+                  // forces start >= now+1h.
                   BattleDurationPicker(
+                    minStart: _isPublic
+                        ? DateTime.now().add(const Duration(hours: 1))
+                        : null,
                     onChanged: (window) {
                       _window = window;
                     },
                   ),
-                  const SizedBox(height: 16),
-                  BattleVisibilityToggle(
-                    isPublic: _isPublic,
-                    onChanged: (v) => setState(() => _isPublic = v),
+                  const SizedBox(height: 20),
+
+                  // Stake picker — every participant commits this many
+                  // XP; winner takes the whole pot. Min 100 (v2 economy).
+                  // Pot size scales with number of accepted seats (creator
+                  // + invitees).
+                  BattleStakePicker(
+                    value: _stakeXp,
+                    participantsCount: _invited.length + 1,
+                    onChanged: (v) => setState(() => _stakeXp = v),
                   ),
                   const SizedBox(height: 24),
 
@@ -352,22 +441,91 @@ class _BattleGroupSetupSheetState
               ),
               child: Column(
                 children: [
-                  SizedBox(
-                    width: double.infinity,
-                    height: 56,
-                    child: FilledButton(
-                      onPressed: _invited.isNotEmpty && !_creating
-                          ? _createBattle
-                          : null,
-                      child: _creating
-                          ? const SizedBox(
-                              width: 20,
-                              height: 20,
-                              child: CircularProgressIndicator(
-                                  strokeWidth: 2, color: Colors.white))
-                          : const Text('Send Battle Invites'),
+                  // In-sheet error banner — replaces the old
+                  // ScaffoldMessenger snackbar (rendered behind the
+                  // sheet and was invisible to the user).
+                  if (_submitError != null) ...[
+                    Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 14, vertical: 10),
+                      decoration: BoxDecoration(
+                        color: AppColors.error.withValues(alpha: 0.12),
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(
+                          color: AppColors.error.withValues(alpha: 0.35),
+                        ),
+                      ),
+                      child: Row(
+                        children: [
+                          Icon(Icons.error_outline,
+                              color: AppColors.error, size: 18),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: Text(
+                              _submitError!,
+                              style: theme.textTheme.bodySmall?.copyWith(
+                                color: AppColors.error,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                          ),
+                          IconButton(
+                            visualDensity: VisualDensity.compact,
+                            padding: EdgeInsets.zero,
+                            constraints: const BoxConstraints(),
+                            icon: Icon(Icons.close,
+                                color: AppColors.error, size: 18),
+                            onPressed: () =>
+                                setState(() => _submitError = null),
+                          ),
+                        ],
+                      ),
                     ),
-                  ),
+                    const SizedBox(height: 10),
+                  ],
+                  Consumer(builder: (context, ref, _) {
+                    final decision = ref.watch(canCreateBattleProvider);
+                    // Public battles don't need an invitee list — anyone
+                    // with the code / from Discover can join. So the
+                    // button becomes actionable as soon as we're not
+                    // mid-submit. Private battles still need ≥1 invitee.
+                    final rosterReady =
+                        (_isPublic || _invited.isNotEmpty) && !_creating;
+                    final buttonEnabled = rosterReady && decision.allowed;
+                    final blockedBySubOnly =
+                        rosterReady && !decision.allowed;
+                    return SizedBox(
+                      width: double.infinity,
+                      height: 56,
+                      child: FilledButton(
+                        onPressed: buttonEnabled
+                            ? _createBattle
+                            : blockedBySubOnly
+                                ? () => showUpgradeCtaSheet(
+                                      context,
+                                      focusTier: decision.upgradeTo,
+                                    )
+                                : null,
+                        style: blockedBySubOnly
+                            ? FilledButton.styleFrom(
+                                backgroundColor: AppColors.amber
+                                    .withValues(alpha: 0.85),
+                                foregroundColor: Colors.black,
+                              )
+                            : null,
+                        child: _creating
+                            ? const SizedBox(
+                                width: 20,
+                                height: 20,
+                                child: CircularProgressIndicator(
+                                    strokeWidth: 2, color: Colors.white))
+                            : Text(blockedBySubOnly
+                                ? 'Upgrade to create'
+                                : 'Send Battle Invites'),
+                      ),
+                    );
+                  }),
                   const SizedBox(height: 6),
                   Text(
                     'Battle starts at the chosen Start Time once all accept',

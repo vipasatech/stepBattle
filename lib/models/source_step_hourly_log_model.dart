@@ -1,4 +1,3 @@
-import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:intl/intl.dart';
 
 /// One row per (user, hour-of-day) capturing what each step source reported.
@@ -25,8 +24,8 @@ class SourceStepHourlyLog {
   final DateTime hourStart;
 
   /// Same as `hourStart` formatted `yyyy-MM-dd-HH` (UTC). Stored
-  /// redundantly to make Firestore filtering by hour fast without
-  /// a Timestamp comparison index.
+  /// redundantly so hourly grouping / de-dup lookups are cheap
+  /// without a range scan over the timestamp column.
   final String hourKey;
 
   // ── Per-source today-cumulative-steps as of this hour's last sync ──
@@ -134,49 +133,4 @@ class SourceStepHourlyLog {
       createdAt: parseTs(d['created_at']),
       updatedAt: parseTs(d['updated_at']),
     );
-  }
-
-  Map<String, dynamic> toFirestore() => {
-        'userId': userId,
-        'hourStart': Timestamp.fromDate(hourStart),
-        'hourKey': hourKey,
-        'nativeSteps': nativeSteps,
-        'healthConnectSteps': healthConnectSteps,
-        'googleFitSteps': googleFitSteps,
-        'aggregateSteps': aggregateSteps,
-        'winningSource': winningSource,
-        'nativeError': nativeError,
-        'healthConnectError': healthConnectError,
-        'googleFitError': googleFitError,
-        'deviceManufacturer': deviceManufacturer,
-        'deviceModel': deviceModel,
-        'androidVersion': androidVersion,
-        'appVersion': appVersion,
-        'createdAt': Timestamp.fromDate(createdAt),
-        'updatedAt': Timestamp.fromDate(updatedAt),
-      };
-
-  factory SourceStepHourlyLog.fromFirestore(
-      DocumentSnapshot<Map<String, dynamic>> doc) {
-    final d = doc.data()!;
-    return SourceStepHourlyLog(
-      userId: d['userId'] as String? ?? '',
-      hourStart: (d['hourStart'] as Timestamp?)?.toDate() ?? DateTime.now(),
-      hourKey: d['hourKey'] as String? ?? '',
-      nativeSteps: d['nativeSteps'] as int? ?? 0,
-      healthConnectSteps: d['healthConnectSteps'] as int? ?? 0,
-      googleFitSteps: d['googleFitSteps'] as int?,
-      aggregateSteps: d['aggregateSteps'] as int? ?? 0,
-      winningSource: d['winningSource'] as String? ?? 'none',
-      nativeError: d['nativeError'] as String?,
-      healthConnectError: d['healthConnectError'] as String?,
-      googleFitError: d['googleFitError'] as String?,
-      deviceManufacturer: d['deviceManufacturer'] as String? ?? '',
-      deviceModel: d['deviceModel'] as String? ?? '',
-      androidVersion: d['androidVersion'] as String? ?? '',
-      appVersion: d['appVersion'] as String? ?? '',
-      createdAt: (d['createdAt'] as Timestamp?)?.toDate() ?? DateTime.now(),
-      updatedAt: (d['updatedAt'] as Timestamp?)?.toDate() ?? DateTime.now(),
-    );
-  }
-}
+  }}

@@ -1,20 +1,25 @@
 ﻿import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 import '../config/colors.dart';
+import '../providers/auth_provider.dart';
+import '../providers/battle_provider.dart';
 import '../widgets/bottom_sheet_handle.dart';
 import 'battle_1v1_setup_sheet.dart';
 import 'battle_group_setup_sheet.dart';
-import 'battle_team_setup_sheet.dart';
+import 'team_battle_confirm_dialog.dart';
 
 /// Step 1 of battle creation: choose 1v1, Multi-player, or Team format.
-class NewBattleSelectionSheet extends StatefulWidget {
+class NewBattleSelectionSheet extends ConsumerStatefulWidget {
   const NewBattleSelectionSheet({super.key});
 
   @override
-  State<NewBattleSelectionSheet> createState() =>
+  ConsumerState<NewBattleSelectionSheet> createState() =>
       _NewBattleSelectionSheetState();
 }
 
-class _NewBattleSelectionSheetState extends State<NewBattleSelectionSheet> {
+class _NewBattleSelectionSheetState
+    extends ConsumerState<NewBattleSelectionSheet> {
   int? _selected; // 0 = 1v1, 1 = multi-player, 2 = team
 
   @override
@@ -113,20 +118,54 @@ class _NewBattleSelectionSheetState extends State<NewBattleSelectionSheet> {
     );
   }
 
-  void _continue() {
+  Future<void> _continue() async {
+    // Team battles now open a full-screen page instead of a bottom
+    // sheet. Correct sequence:
+    //   1. Show the confirm dialog OVER the still-open selection
+    //      sheet (using the sheet's context is safe as long as the
+    //      sheet hasn't been popped yet).
+    //   2. If confirmed, capture a router + scaffold messenger BEFORE
+    //      popping — the sheet's context becomes invalid the moment
+    //      Navigator.pop starts tearing it down, so any subsequent
+    //      `context.push(...)` would silently no-op.
+    //   3. Pop the sheet, create the lobby, then router.push to the
+    //      new page.
+    if (_selected == 2) {
+      final confirmed = await showTeamBattleConfirmDialog(context);
+      if (!confirmed || !mounted) return;
+      final me = ref.read(currentUserProvider).valueOrNull;
+      if (me == null) return;
+      // Capture references now while `context` is still live.
+      final router = GoRouter.of(context);
+      final messenger = ScaffoldMessenger.of(context);
+      Navigator.pop(context);
+      try {
+        final result =
+            await ref.read(battleServiceProvider).createTeamLobby(
+                  createdBy: me.userId,
+                  creatorDisplayName:
+                      me.displayName.isEmpty ? 'You' : me.displayName,
+                  creatorPreferredName: me.preferredName,
+                  creatorAvatarUrl: me.avatarURL,
+                );
+        router.push('/team-lobby/${result.battleId}');
+      } catch (e) {
+        messenger.showSnackBar(
+          SnackBar(content: Text('Could not open team lobby: $e')),
+        );
+      }
+      return;
+    }
+    // 1v1 / group still use the bottom-sheet flow.
     Navigator.pop(context);
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
-      // Same reason as the parent selection sheet: push to root navigator
-      // so the "Send Battle Invite" CTA at the bottom of the setup sheet
-      // sits above the shell's bottom nav instead of being hidden behind it.
       useRootNavigator: true,
       backgroundColor: Colors.transparent,
       builder: (_) => switch (_selected) {
         0 => const Battle1v1SetupSheet(),
         1 => const BattleGroupSetupSheet(),
-        2 => const BattleTeamSetupSheet(),
         _ => const Battle1v1SetupSheet(),
       },
     );

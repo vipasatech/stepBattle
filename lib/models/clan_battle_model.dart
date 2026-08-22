@@ -1,5 +1,3 @@
-import 'package:cloud_firestore/cloud_firestore.dart';
-
 class ClanBattleTeam {
   final String clanId;
   final String clanName;
@@ -104,36 +102,6 @@ class ClanBattleModel {
       winnerClanId: d['winner_clan_id'] as String?,
     );
   }
-
-  factory ClanBattleModel.fromFirestore(
-      DocumentSnapshot<Map<String, dynamic>> doc) {
-    final d = doc.data()!;
-    return ClanBattleModel(
-      clanBattleId: doc.id,
-      status: _parseStatus(d['status'] as String? ?? 'pending'),
-      clanA: ClanBattleTeam.fromMap(d['clanA'] as Map<String, dynamic>? ?? {}),
-      clanB: ClanBattleTeam.fromMap(d['clanB'] as Map<String, dynamic>? ?? {}),
-      startTime: (d['startTime'] as Timestamp?)?.toDate() ?? DateTime.now(),
-      endTime: (d['endTime'] as Timestamp?)?.toDate() ?? DateTime.now(),
-      durationDays: d['durationDays'] as int? ?? 3,
-      battleType: d['battleType'] as String? ?? 'total_steps',
-      xpPerMember: d['xpPerMember'] as int? ?? 300,
-      winnerClanId: d['winnerClanId'] as String?,
-    );
-  }
-
-  Map<String, dynamic> toFirestore() => {
-        'status': status.name,
-        'clanA': clanA.toMap(),
-        'clanB': clanB.toMap(),
-        'startTime': Timestamp.fromDate(startTime),
-        'endTime': Timestamp.fromDate(endTime),
-        'durationDays': durationDays,
-        'battleType': battleType,
-        'xpPerMember': xpPerMember,
-        'winnerClanId': winnerClanId,
-      };
-
   static ClanBattleStatus _parseStatus(String s) => switch (s) {
         'active' => ClanBattleStatus.active,
         'completed' => ClanBattleStatus.completed,

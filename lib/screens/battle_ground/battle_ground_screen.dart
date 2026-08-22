@@ -1,9 +1,6 @@
 import 'dart:async';
-import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
-import 'package:flutter_3d_controller/flutter_3d_controller.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
@@ -11,29 +8,23 @@ import '../../config/colors.dart';
 import '../../models/battle_model.dart';
 import '../../providers/auth_provider.dart';
 import '../../providers/battle_provider.dart';
-import '../../providers/character_3d_provider.dart';
 import '../../services/battleground_tile.dart';
-import '../../utils/app_logger.dart';
-import '../../widgets/animated_character_viewer.dart';
+import '../../widgets/shimmer_loader.dart';
 import 'widgets/countdown_ring.dart';
 import 'widgets/leaderboard_pill.dart';
 
-/// Battle-ground arena — live 3D city scene.
+/// Battle-ground arena — top-down 2D scroll of a Blender-rendered city
+/// with runner avatars overlaid on the road.
 ///
-/// The screen mounts a single [Flutter3DViewer] loading
-/// `assets/images/battleground/cityView/city_arena_{tod}.glb`. The variant
-/// is picked from the device wall clock at build time (see
-/// [BattlegroundTimeOfDay.forNow]) — no server round-trip.
-///
-/// M5 (dual camera modes): toggle between top-down and third-person
-/// eye-level views. Each mode configures its own camera orbit + target on
-/// the [Flutter3DController]. Zoom / pan clamps are model-viewer-native
-/// (initial position only for now — hard clamping via JS bridge lands as
-/// M5c once we validate the basic mode swap works on device).
-///
-/// Locking philosophy: the user should never see outside the two building
-/// rows. Only "up" (sky) is a free direction — the camera stays boxed
-/// between the buildings in both modes.
+/// Layout:
+///   • Single PNG per TOD at `assets/images/battleground/cityView/
+///     arena_{tod}.png` (1080 × 4320, rendered from Blender)
+///   • Image scaled to viewport width, height proportional
+///   • Runner sprites overlaid at rank-derived positions on the central
+///     cobblestone road, side-by-side when steps tie
+///   • Rank badges (gold/silver/bronze/purple) on each avatar
+///   • Tap avatar → floating profile card → navigate to user page
+///   • Opening cinematic: pans top → bottom → user, skip pill top-right
 class BattleGroundScreen extends ConsumerStatefulWidget {
   final String battleId;
 
@@ -44,566 +35,302 @@ class BattleGroundScreen extends ConsumerStatefulWidget {
       _BattleGroundScreenState();
 }
 
-/// Which camera framing the arena is currently using.
-enum ArenaCameraMode {
-  /// Bird's-eye top-down of the whole block. Users can zoom in on details
-  /// but the initial zoom-out shows the full arena between building rows.
-  topView,
+class _BattleGroundScreenState extends ConsumerState<BattleGroundScreen>
+    with TickerProviderStateMixin {
+  // Arena PNG intrinsic size — must match the Blender export.
+  static const double _kArenaImgWidth = 1080.0;
+  static const double _kArenaImgHeight = 4320.0;
+  static const double _kArenaAspect = _kArenaImgHeight / _kArenaImgWidth;
 
-  /// Eye-level walking view down the road, framed by buildings on both
-  /// sides. Users can zoom in on cars / benches / trees; zoom-out reset
-  /// returns to this framing.
-  thirdPerson,
-}
+  /// Peak zoom during the cinematic. 1.5 gives a noticeable "camera in
+  /// close" feel without cropping so much that the road disappears.
+  static const double _kCinematicZoom = 1.5;
 
-/// State of the arena-open cinematic sweep.
-enum _CinematicPhase {
-  /// Cinematic hasn't kicked off yet — waiting for onLoad.
-  idle,
-
-  /// Camera visiting the TOP user (rank #1). Their Taunt animation plays.
-  atTop,
-
-  /// Camera visiting the BOTTOM user (rank last).
-  atBottom,
-
-  /// Camera arriving at the main user (You).
-  atMain,
-
-  /// Cinematic finished (or skipped). Normal gestures active.
-  done,
-}
-
-/// Slot Y positions (Blender coords) — must match the arena GLB bake.
-/// Index 0 = backmost/south end; index 5 = frontmost/north end. Ranks
-/// assigned in DESCENDING step count: #1 → slot 5, last → slot 0.
-const List<double> _slotBlenderY = [-80.0, -50.0, -20.0, 20.0, 50.0, 80.0];
-
-class _BattleGroundScreenState extends ConsumerState<BattleGroundScreen> {
   late final BattlegroundTimeOfDay _timeOfDay;
-  late final Flutter3DController _controller;
 
-  /// Currently-active camera framing. Toggling this re-runs
-  /// [_applyCameraForMode] which drives the model-viewer camera.
-  ArenaCameraMode _cameraMode = ArenaCameraMode.thirdPerson;
+  final ScrollController _scrollController = ScrollController();
 
-  /// Pings the completion RPC once per screen lifetime when end_time
-  /// crosses while this screen is open.
-  bool _completionRequested = false;
+  /// Drives the cinematic zoom. value 0.0 → scale 1.0 (normal),
+  /// value 1.0 → scale `_kCinematicZoom` (fully zoomed). Runs in parallel
+  /// with the scroll animation.
+  late final AnimationController _zoomController;
 
-  // ---------------------------------------------------------------------------
-  // Top-view camera state
-  // ---------------------------------------------------------------------------
-  //
-  // Top view uses custom Flutter gesture handling (model-viewer's own touch
-  // is disabled while Top is active). Zoom-out is hard-locked at the initial
-  // radius; zoom-in is unlimited. Pan is 1-finger, clamped to the arena
-  // block; zoom is 2-finger pinch only. See _onTopScaleUpdate for the math.
+  /// Drives the cinematic Y translate (Option C centering compensation).
+  /// When a target row's ideal scroll position is outside `[0, maxScroll]`
+  /// the scroll clamps and the row would end up off-centre. Translating
+  /// the whole scaled view by `clampedScroll − idealScroll` slides the
+  /// row exactly to viewport centre. Value interpolates `_translateStart`
+  /// → `_translateEnd` under an easeInOutCubic curve.
+  late final AnimationController _translateController;
+  double _translateStart = 0;
+  double _translateEnd = 0;
 
-  /// Initial radius when Top mode is entered — becomes the max radius the
-  /// user can zoom out to. Also serves as the yardstick for pixel→meter
-  /// pan conversion.
-  static const double _topInitialRadius = 45.0;
-  static const double _topMinRadius = 2.0;
+  /// The opening cinematic runs on the first LayoutBuilder pass that
+  /// has battle data. Flag prevents it re-firing on rebuilds.
+  bool _cinematicStarted = false;
 
-  /// Arena bounds in model-viewer coords for Top-view pan clamping. mv X =
-  /// Blender X (arena width). mv Z = -Blender Y (arena length, negated
-  /// because export_yup=True flips forward-axis sign). Tightened INSIDE
-  /// the last building rows — camera can never look past them into the
-  /// backdrop cluster.
-  static const double _topPanBoundX = 5.0;
-  static const double _topPanBoundZ = 75.0;
+  /// True while the cinematic is actively animating. Blocks user
+  /// scroll input (via `NeverScrollableScrollPhysics`) and shows the
+  /// Skip pill top-right.
+  bool _cinematicRunning = false;
 
-  /// Idle timeout after which either camera returns to its initial
-  /// framing. Reset on every gesture; fires once after this delay of no
-  /// touch input.
-  static const Duration _idleResetDelay = Duration(seconds: 5);
+  /// The current user's avatar position — cached each build so the
+  /// auto-recentre timer can animate scroll back to them without
+  /// having to re-derive positions from the battle. Null before the
+  /// first arena build, or if the user is not an accepted participant.
+  _AvatarPos? _userPos;
 
-  /// Current camera target + radius while in Top mode. Reset every time
-  /// Top mode is (re-)entered.
-  double _topTargetX = 0;
-  double _topTargetZ = 0;
-  double _topRadius = _topInitialRadius;
+  /// The leader's avatar position — cached each build so the step-gap
+  /// indicator can render without recomputing positions.
+  _AvatarPos? _leaderPos;
 
-  /// Snapshots taken at gesture start for delta computation.
-  double _topScaleStartRadius = _topInitialRadius;
-  double _topScaleStartTargetX = 0;
-  double _topScaleStartTargetZ = 0;
+  /// Fires 3 s after the last user scroll gesture ends. Callback
+  /// animates the scroll view back to the current user's row.
+  Timer? _autoRecentreTimer;
 
-  /// Idle-timeout timer. Started when a gesture ends; cancelled when a
-  /// new gesture begins.
-  Timer? _topIdleResetTimer;
-
-  // ---------------------------------------------------------------------------
-  // Third-person view camera state
-  // ---------------------------------------------------------------------------
-  //
-  // 3P view mirrors the Top-view gesture model: 1-finger pan, 2-finger
-  // pinch zoom, zoom-out locked at initial radius, 5-second idle reset.
-  // The camera is horizontal (phi=90°) with the target 12 m ahead of the
-  // camera position. Swipe-up → walk forward; swipe-left/right → strafe
-  // across the road.
-
-  static const double _tpInitialRadius = 12.0;
-  static const double _tpMinRadius = 2.0;
-
-  /// 3P pan clamps. Target X mirrors Top — before the grass beds.
-  /// Target Z is chosen so the CAMERA (target.z + radius) stays inside
-  /// Blender Y = ±75. Camera-mv-Z ranges [-75, +75] → target-mv-Z =
-  /// camera-mv-Z − 12 → target-mv-Z ∈ [−87, +63].
-  static const double _tpPanBoundX = 5.0;
-  static const double _tpPanBoundZMin = -87.0;
-  static const double _tpPanBoundZMax = 63.0;
-
-  double _tpTargetX = 0;
-  double _tpTargetZ = 0;
-  double _tpRadius = _tpInitialRadius;
-
-  double _tpScaleStartRadius = _tpInitialRadius;
-  double _tpScaleStartTargetX = 0;
-  double _tpScaleStartTargetZ = 0;
-
-  Timer? _tpIdleResetTimer;
-
-  // ---------------------------------------------------------------------------
-  // Cinematic intro state
-  // ---------------------------------------------------------------------------
-
-  _CinematicPhase _cinematicPhase = _CinematicPhase.idle;
-
-  /// Slot index (0..5) that maps to each rank position; computed once per
-  /// battle open. slotForRank[0] = the top user's slot, .last = bottom user.
-  List<int> _slotForRank = const [];
-
-  /// Slot index of the current user. Cinematic ends here.
-  int _mySlotIndex = 3;
-
-  /// Whether the current user is #1 on the battle board. Drives which GLB
-  /// the character overlay picks — `Taunt.glb` if true, `character.glb`
-  /// otherwise. Set in [_startCinematic] once ranks are computed and
-  /// stays sticky until the next mount (rank changes mid-arena would
-  /// require a rebuild we don't do yet).
-  bool _isTopRanked = false;
-
-  /// Live timers driving the cinematic. Cancelled on skip / dispose / mode
-  /// toggle.
-  final List<Timer> _cinematicTimers = [];
+  static const Duration _kAutoRecentreDelay = Duration(seconds: 3);
+  static const Duration _kAutoRecentreAnimation = Duration(milliseconds: 800);
 
   @override
   void initState() {
     super.initState();
     _timeOfDay = BattlegroundTimeOfDay.forNow();
-    _controller = Flutter3DController();
-    // Lock to portrait — the 3D arena is designed for that aspect.
+    _zoomController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 1600),
+    );
+    _translateController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 1600),
+    );
+    // Self-refresh the current user's snapshotted battle avatar to
+    // whatever they currently have picked in their profile. Cheap
+    // no-op when they haven't changed avatars since the battle was
+    // created. Fixes the case where a user picked Runner 10 AFTER
+    // joining a battle and expected the arena to reflect that; the
+    // creator's snapshot took the older value. Post-frame so
+    // widget-tree init isn't blocked on a Supabase round-trip.
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      SystemChrome.setPreferredOrientations(const [
-        DeviceOrientation.portraitUp,
-      ]);
+      if (!mounted) return;
+      final uid = ref.read(authStateProvider).valueOrNull?.id;
+      if (uid == null) return;
+      ref
+          .read(battleServiceProvider)
+          .refreshOwnBattleAvatar(
+            battleId: widget.battleId,
+            userId: uid,
+          );
     });
   }
 
   @override
   void dispose() {
-    _topIdleResetTimer?.cancel();
-    _tpIdleResetTimer?.cancel();
-    _cancelCinematic();
-    SystemChrome.setPreferredOrientations(const [
-      DeviceOrientation.portraitUp,
-    ]);
+    _autoRecentreTimer?.cancel();
+    _zoomController.dispose();
+    _translateController.dispose();
+    _scrollController.dispose();
     super.dispose();
   }
 
-  // ---------------------------------------------------------------------------
-  // Cinematic
-  // ---------------------------------------------------------------------------
-
-  /// Kick off the cinematic sweep. Called once from onLoad. If for any
-  /// reason there aren't at least 2 participants, we skip straight to
-  /// the resting 3P framing.
-  void _startCinematic(BattleModel battle, String myUid) {
-    if (_cinematicPhase != _CinematicPhase.idle) return;
-
-    // 1) Rank participants by step count DESC. Only accepted participants
-    //    count (invitees who haven't joined shouldn't get a slot).
-    final ranked = battle.participants
-        .where((p) => p.inviteStatus == ParticipantInviteStatus.accepted)
-        .toList()
-      ..sort((a, b) => b.currentSteps.compareTo(a.currentSteps));
-
-    if (ranked.length < 2) {
-      // 1v1 not-yet-joined case → skip cinematic.
-      _cinematicPhase = _CinematicPhase.done;
-      _applyCameraForMode(_cameraMode);
-      return;
-    }
-
-    // 2) Assign slots: top of ranking → slot 5, next → slot 4, etc.
-    //    Only assign up to 6 slots; extra participants share the last.
-    _slotForRank = List<int>.generate(
-      ranked.length,
-      (i) => (5 - i).clamp(0, 5),
-    );
-
-    // 3) Locate MY rank/slot.
-    final myRankIdx = ranked.indexWhere((p) => p.userId == myUid);
-    _mySlotIndex =
-        myRankIdx >= 0 ? _slotForRank[myRankIdx] : 3; // fallback to middle
-    _isTopRanked = myRankIdx == 0;
-
-    final topSlot = _slotForRank.first;
-    final bottomSlot = _slotForRank.last;
-    final mySlot = _mySlotIndex;
-
-    AppLogger.battle.i('arena3d:cinematicStart', fields: {
-      'topSlot': topSlot,
-      'bottomSlot': bottomSlot,
-      'mySlot': mySlot,
-      'ranked': ranked.length,
-      'isTopRanked': _isTopRanked,
-    });
-
-    // 4) Frame TOP user first.
-    _cinematicPhase = _CinematicPhase.atTop;
-    _frameSlot(topSlot);
-
-    // 5) Schedule the two subsequent moves. Model-viewer interpolates the
-    //    camera automatically between setCameraOrbit / setCameraTarget
-    //    calls, so we just fire the next values at the right beats.
-    _cinematicTimers.add(Timer(const Duration(seconds: 3), () {
-      if (!mounted || _cinematicPhase == _CinematicPhase.done) return;
-      _cinematicPhase = _CinematicPhase.atBottom;
-      _frameSlot(bottomSlot);
-    }));
-    _cinematicTimers.add(Timer(const Duration(seconds: 5), () {
-      if (!mounted || _cinematicPhase == _CinematicPhase.done) return;
-      _cinematicPhase = _CinematicPhase.atMain;
-      _frameSlot(mySlot);
-    }));
-    _cinematicTimers.add(Timer(const Duration(seconds: 7), () {
-      if (!mounted || _cinematicPhase == _CinematicPhase.done) return;
-      _finishCinematic();
-    }));
-    // Force a rebuild so the Skip button is visible.
-    setState(() {});
-  }
-
-  /// Point the camera at a slot's over-shoulder framing. Slot Y is Blender
-  /// coord — convert to model-viewer (mv Z = -Blender Y).
-  void _frameSlot(int slotIndex) {
-    final blenderY = _slotBlenderY[slotIndex.clamp(0, 5)];
-    final mvZChar = -blenderY;
-    // Target 5 m in front of the character (looking down the road).
-    _controller.setCameraTarget(0, 1.6, mvZChar - 5);
-    // Camera 8 m behind target (3 m behind character) at eye level.
-    _controller.setCameraOrbit(0, 90, 8);
-  }
-
-  /// End the cinematic — cancel timers, snap to the standard 3P framing,
-  /// re-enable gestures.
-  void _finishCinematic() {
-    if (_cinematicPhase == _CinematicPhase.done) return;
-    for (final t in _cinematicTimers) {
-      t.cancel();
-    }
-    _cinematicTimers.clear();
-    _cinematicPhase = _CinematicPhase.done;
-    // Rest at YOUR slot rather than arena centre.
-    _frameSlot(_mySlotIndex);
-    AppLogger.battle.i('arena3d:cinematicDone', fields: {});
-    setState(() {});
-  }
-
-  void _skipCinematic() {
-    AppLogger.battle.i('arena3d:cinematicSkip', fields: {});
-    _finishCinematic();
-  }
-
-  /// Cancel + wipe cinematic state (mode toggle, dispose).
-  void _cancelCinematic() {
-    for (final t in _cinematicTimers) {
-      t.cancel();
-    }
-    _cinematicTimers.clear();
-    _cinematicPhase = _CinematicPhase.done;
-  }
-
-  // ---------------------------------------------------------------------------
-  // Camera modes
-  // ---------------------------------------------------------------------------
-
-  /// Push the current [_cameraMode]'s target + orbit onto model-viewer.
-  ///
-  /// Coordinate note: we exported the GLB with `export_yup=True`, so Blender's
-  /// Y (arena depth) becomes model-viewer's -Z, and Blender's Z (height)
-  /// becomes model-viewer's Y. All camera coords below are in
-  /// model-viewer space.
-  ///
-  /// Configure model-viewer's lighting for the loaded TOD.
-  ///
-  /// Each GLB now ships with 52 KHR_lights_punctual entries:
-  ///  - 1 directional sun (color+direction+intensity varies per TOD)
-  ///  - 1 directional fill (opposite side softener)
-  ///  - 50 point lights at each lamp post (0 intensity at day, 1358 at
-  ///    evening, 6522 at night — so lamps physically light the scene at
-  ///    night)
-  ///
-  /// Materials also carry TOD-baked emissions: window glass and lamp
-  /// bulbs are dark at noon, glow warm yellow at evening/night. Same
-  /// applies to awnings (subtle by day, neon at night).
-  ///
-  /// Since the GLB already carries all the light-source variation, this
-  /// helper only needs to configure the tone-map (exposure), how much
-  /// ambient IBL to add on top, and how strong the ground contact
-  /// shadow should read.
-  void _applyShadowConfigForTod(BattlegroundTimeOfDay tod) {
-    late final double intensity;
-    late final double softness;
-    late final double exposure;
-    late final double envIntensity;
-    switch (tod) {
-      case BattlegroundTimeOfDay.morning:
-        intensity = 0.80;
-        softness = 0.45;
-        exposure = 1.00;
-        envIntensity = 0.40;
-        break;
-      case BattlegroundTimeOfDay.afternoon:
-        intensity = 1.00;
-        softness = 0.25;
-        exposure = 0.95;
-        envIntensity = 0.35;
-        break;
-      case BattlegroundTimeOfDay.evening:
-        intensity = 0.65;
-        softness = 0.60;
-        exposure = 0.75;
-        envIntensity = 0.18;
-        break;
-      case BattlegroundTimeOfDay.night:
-        intensity = 0.30;
-        softness = 0.80;
-        exposure = 0.55;
-        envIntensity = 0.04;
-        break;
-    }
-    _controller.setShadowConfig(
-      shadowIntensity: intensity,
-      shadowSoftness: softness,
-      exposure: exposure,
-      environmentImage: 'neutral',
-      environmentIntensity: envIntensity,
+  /// Animate the scroll view back to the current user's row after
+  /// [_kAutoRecentreDelay] of inactivity. No-op if the user is already
+  /// centred, if the cinematic is running, or if we lost the cached
+  /// position for some reason.
+  void _returnToUser() {
+    if (!mounted || _cinematicRunning) return;
+    final pos = _userPos;
+    if (pos == null || !_scrollController.hasClients) return;
+    final target = _scrollTargetFor(pos);
+    final current = _scrollController.offset;
+    // Already within 5 px — don't fire a useless animation and don't
+    // trigger a self-perpetuating ScrollEndNotification loop.
+    if ((target - current).abs() < 5) return;
+    _scrollController.animateTo(
+      target,
+      duration: _kAutoRecentreAnimation,
+      curve: Curves.easeInOutCubic,
     );
   }
 
-  /// `setCameraOrbit` uses (θ, φ, radius):
-  ///   • θ (azimuth) — 0° means camera sits on the +Z side of target, looking
-  ///     along -Z. Increasing θ rotates counter-clockwise around the +Y axis.
-  ///   • φ (polar)  — 0° means straight down from above; 90° is horizontal.
-  ///   • radius     — distance from the target point.
-  void _applyCameraForMode(ArenaCameraMode mode) {
-    // NOTE: we ship a LOCAL FORK of flutter_3d_controller (see
-    // packages/flutter_3d_controller_fork) that changes setCameraOrbit's
-    // radius arg from percent-of-auto-frame ('%') to meters ('m'), and
-    // exposes a separate setCameraOrbitBounds() for installing radius
-    // clamps once per mode entry. Values below are meters.
-    switch (mode) {
-      case ArenaCameraMode.thirdPerson:
-        // Eye-level walking view. Reset target/radius; install clamps for
-        // zoom-out at initial radius, zoom-in down to _tpMinRadius.
-        // If slot assignments are known, park the camera at YOUR slot;
-        // otherwise arena centre.
-        final blenderY = _slotForRank.isNotEmpty
-            ? _slotBlenderY[_mySlotIndex.clamp(0, 5)]
-            : 0.0;
-        final mvZTarget = -(blenderY + 5);
-        _tpTargetX = 0;
-        _tpTargetZ = mvZTarget;
-        _tpRadius = _tpInitialRadius;
-        _controller.setCameraOrbitBounds(
-          minRadius: _tpMinRadius,
-          maxRadius: _tpInitialRadius,
-        );
-        _controller.setCameraTarget(0, 1.6, mvZTarget);
-        _controller.setCameraOrbit(0, 90, _tpInitialRadius);
+  /// Current scale factor derived from the zoom controller.
+  double get _currentZoomScale =>
+      1.0 + _zoomController.value * (_kCinematicZoom - 1.0);
+
+  /// Current translate value — eased interpolation between the beat's
+  /// start and end targets. Applied INSIDE the scale transform so the
+  /// centring correction is scale-invariant.
+  double get _currentTranslateY {
+    final t = Curves.easeInOutCubic.transform(_translateController.value);
+    return _translateStart + (_translateEnd - _translateStart) * t;
+  }
+
+  /// Compute the translate needed to bring [pos] to exact viewport centre
+  /// at any zoom level. Non-zero only when the ideal scroll target for
+  /// the row falls outside the scroll extent (i.e., the row is close
+  /// enough to the top or bottom of the arena that scroll alone can't
+  /// centre it). Formula: `translate = clampedScroll − idealScroll`.
+  double _translateFor(_AvatarPos pos) {
+    if (!_scrollController.hasClients) return 0;
+    final vp = _scrollController.position.viewportDimension;
+    final centreY = pos.top + pos.size / 2;
+    final ideal = centreY - vp / 2;
+    final clamped =
+        ideal.clamp(0.0, _scrollController.position.maxScrollExtent);
+    return clamped - ideal;
+  }
+
+  /// Kick off a new translate animation to [target] over [duration].
+  /// Sets [_translateStart] to the current translate so the animation
+  /// starts smoothly from wherever the previous beat left off.
+  Future<void> _animateTranslate(double target, Duration duration) async {
+    _translateStart = _currentTranslateY;
+    _translateEnd = target;
+    _translateController.duration = duration;
+    await _translateController.forward(from: 0.0);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Opening cinematic
+  // ---------------------------------------------------------------------------
+
+  /// Video-style cinematic:
+  ///   1. Zoom in on the leader (rank #1) — scroll and scale animate together.
+  ///   2. Stay zoomed. Pan along the road from leader → trailing player.
+  ///   3. Stay zoomed. Pan to the current user.
+  ///   4. Zoom out — settle at scale 1.0 with the user centred.
+  Future<void> _runCinematic(List<_AvatarPos> positions, String uid) async {
+    if (_cinematicRunning || positions.isEmpty) return;
+    final leader = positions.first;
+    final trailing = positions.last;
+    _AvatarPos? me;
+    for (final p in positions) {
+      if (p.participant.userId == uid) {
+        me = p;
         break;
-      case ArenaCameraMode.topView:
-        // Reset gesture state — target starts centered, radius at the max
-        // (which is also the initial framing).
-        _topTargetX = 0;
-        _topTargetZ = 0;
-        _topRadius = _topInitialRadius;
-        _controller.setCameraOrbitBounds(
-          minRadius: _topMinRadius,
-          maxRadius: _topInitialRadius,
-        );
-        _controller.setCameraTarget(0, 0, 0);
-        _controller.setCameraOrbit(0, 0, _topInitialRadius);
+      }
+    }
+    me ??= trailing;
+
+    setState(() => _cinematicRunning = true);
+
+    // Give the scroll controller a beat to attach after the first
+    // build so animateTo doesn't no-op.
+    await Future<void>.delayed(const Duration(milliseconds: 150));
+    if (!mounted || !_cinematicRunning) return;
+
+    Future<void> panTo(_AvatarPos p, Duration d) async {
+      if (!_scrollController.hasClients) return;
+      final target = _scrollTargetFor(p);
+      await _scrollController.animateTo(
+        target,
+        duration: d,
+        curve: Curves.easeInOutCubic,
+      );
+    }
+
+    Future<void> hold(Duration d) => Future<void>.delayed(d);
+
+    // Beat 1: zoom IN + scroll to leader + translate to centre leader.
+    await Future.wait<void>([
+      _zoomController.animateTo(
+        1.0,
+        duration: const Duration(milliseconds: 1600),
+        curve: Curves.easeInOutCubic,
+      ),
+      panTo(leader, const Duration(milliseconds: 1600)),
+      _animateTranslate(
+          _translateFor(leader), const Duration(milliseconds: 1600)),
+    ]);
+    if (!mounted || !_cinematicRunning) return;
+    await hold(const Duration(milliseconds: 350));
+    if (!mounted || !_cinematicRunning) return;
+
+    // Beat 2: stay zoomed, pan leader → trailing, translate to centre
+    // trailing.
+    await Future.wait<void>([
+      panTo(trailing, const Duration(milliseconds: 1600)),
+      _animateTranslate(
+          _translateFor(trailing), const Duration(milliseconds: 1600)),
+    ]);
+    if (!mounted || !_cinematicRunning) return;
+    await hold(const Duration(milliseconds: 350));
+    if (!mounted || !_cinematicRunning) return;
+
+    // Beat 3: stay zoomed, pan to the user's row + centre-translate.
+    await Future.wait<void>([
+      panTo(me, const Duration(milliseconds: 1200)),
+      _animateTranslate(
+          _translateFor(me), const Duration(milliseconds: 1200)),
+    ]);
+    if (!mounted || !_cinematicRunning) return;
+
+    // Beat 4: zoom OUT + settle translate to 0 (restore normal scroll
+    // framing at the user's row).
+    await Future.wait<void>([
+      _zoomController.animateBack(
+        0.0,
+        duration: const Duration(milliseconds: 800),
+        curve: Curves.easeInOutCubic,
+      ),
+      _animateTranslate(0, const Duration(milliseconds: 800)),
+    ]);
+    if (!mounted) return;
+    setState(() => _cinematicRunning = false);
+  }
+
+  /// User tapped Skip during the cinematic — cancel every in-flight
+  /// animation, reset zoom to 1.0, jump straight to their own row.
+  void _skipCinematic(List<_AvatarPos> positions, String uid) {
+    if (!_cinematicRunning) return;
+    _AvatarPos? me;
+    for (final p in positions) {
+      if (p.participant.userId == uid) {
+        me = p;
         break;
+      }
     }
-    AppLogger.battle.i('arena3d:cameraMode', fields: {'mode': mode.name});
+    me ??= positions.isNotEmpty ? positions.last : null;
+    _zoomController.stop();
+    _zoomController.value = 0.0;
+    _translateController.stop();
+    _translateStart = 0;
+    _translateEnd = 0;
+    _translateController.value = 0.0;
+    if (me != null && _scrollController.hasClients) {
+      _scrollController.jumpTo(_scrollTargetFor(me));
+    }
+    setState(() => _cinematicRunning = false);
+  }
+
+  /// Scroll offset that vertically centres [pos] in the viewport,
+  /// clamped so we don't overshoot the top / bottom of the scroll area.
+  double _scrollTargetFor(_AvatarPos pos) {
+    if (!_scrollController.hasClients) return 0.0;
+    final viewportHeight = _scrollController.position.viewportDimension;
+    final centreY = pos.top + pos.size / 2;
+    final target = centreY - viewportHeight / 2;
+    return target.clamp(0.0, _scrollController.position.maxScrollExtent);
   }
 
   // ---------------------------------------------------------------------------
-  // Top-view gesture handling
+  // Profile card popup
   // ---------------------------------------------------------------------------
 
-  void _onTopScaleStart(ScaleStartDetails details) {
-    // Any new touch cancels a pending idle-reset. The timer restarts on
-    // scale end.
-    _topIdleResetTimer?.cancel();
-    _topScaleStartRadius = _topRadius;
-    _topScaleStartTargetX = _topTargetX;
-    _topScaleStartTargetZ = _topTargetZ;
-  }
-
-  void _onTopScaleUpdate(ScaleUpdateDetails details) {
-    if (details.pointerCount >= 2) {
-      // 2-finger pinch → zoom. scale > 1 = fingers moved apart = zoom in.
-      final newRadius = (_topScaleStartRadius / details.scale)
-          .clamp(_topMinRadius, _topInitialRadius);
-      AppLogger.battle.i('arena3d:topZoom', fields: {
-        'scale': details.scale.toStringAsFixed(3),
-        'startRadius': _topScaleStartRadius.toStringAsFixed(2),
-        'newRadius': newRadius.toStringAsFixed(2),
-      });
-      if ((newRadius - _topRadius).abs() > 0.05) {
-        _topRadius = newRadius;
-        _controller.setCameraOrbit(0, 0, _topRadius);
-      }
-    } else if (details.pointerCount == 1) {
-      // 1-finger drag → pan. Convert screen pixels to arena meters using
-      // the current camera height (radius) and model-viewer's default FOV
-      // (~30°). At height H, the horizontal visible width on ground is
-      // 2·H·tan(FOV/2). Use screen width to derive meters-per-pixel.
-      final size = MediaQuery.of(context).size;
-      const halfFovRad = 15.0 * math.pi / 180.0; // half of 30° FOV
-      final visibleWidthMeters = 2 * _topRadius * math.tan(halfFovRad);
-      final metersPerPixel = visibleWidthMeters / size.width;
-
-      final delta = details.focalPointDelta;
-
-      // "Map follows finger" mapping — inverse of the finger direction.
-      // Swipe right → camera goes LEFT (target.x decreases), so the arena
-      // appears to slide right with the finger. Same for vertical.
-      final newX = (_topTargetX - delta.dx * metersPerPixel)
-          .clamp(-_topPanBoundX, _topPanBoundX);
-      final newZ = (_topTargetZ - delta.dy * metersPerPixel)
-          .clamp(-_topPanBoundZ, _topPanBoundZ);
-
-      if ((newX - _topTargetX).abs() > 0.02 ||
-          (newZ - _topTargetZ).abs() > 0.02) {
-        _topTargetX = newX;
-        _topTargetZ = newZ;
-        _controller.setCameraTarget(_topTargetX, 0, _topTargetZ);
-      }
-    }
-  }
-
-  void _onTopScaleEnd(ScaleEndDetails details) {
-    // Kick off the idle-reset timer. If the user touches again inside
-    // this window, ScaleStart cancels it.
-    _topIdleResetTimer?.cancel();
-    _topIdleResetTimer = Timer(_idleResetDelay, _resetTopCameraToInitial);
-  }
-
-  /// Snap camera back to the initial Top-view framing.
-  void _resetTopCameraToInitial() {
-    _topTargetX = 0;
-    _topTargetZ = 0;
-    _topRadius = _topInitialRadius;
-    _controller.setCameraTarget(0, 0, 0);
-    _controller.setCameraOrbit(0, 0, _topInitialRadius);
-    AppLogger.battle.i('arena3d:topIdleReset', fields: {});
-  }
-
-  // ---------------------------------------------------------------------------
-  // Third-person gesture handling
-  // ---------------------------------------------------------------------------
-
-  void _onTpScaleStart(ScaleStartDetails details) {
-    _tpIdleResetTimer?.cancel();
-    _tpScaleStartRadius = _tpRadius;
-    _tpScaleStartTargetX = _tpTargetX;
-    _tpScaleStartTargetZ = _tpTargetZ;
-  }
-
-  void _onTpScaleUpdate(ScaleUpdateDetails details) {
-    if (details.pointerCount >= 2) {
-      // 2-finger pinch → zoom. Radius clamped to [_tpMinRadius, initial].
-      final newRadius = (_tpScaleStartRadius / details.scale)
-          .clamp(_tpMinRadius, _tpInitialRadius);
-      AppLogger.battle.i('arena3d:tpZoom', fields: {
-        'scale': details.scale.toStringAsFixed(3),
-        'startRadius': _tpScaleStartRadius.toStringAsFixed(2),
-        'newRadius': newRadius.toStringAsFixed(2),
-        'currentRadius': _tpRadius.toStringAsFixed(2),
-      });
-      if ((newRadius - _tpRadius).abs() > 0.05) {
-        _tpRadius = newRadius;
-        _controller.setCameraOrbit(0, 90, _tpRadius);
-      }
-    } else if (details.pointerCount == 1) {
-      // 1-finger drag → pan the target. In 3P the camera is horizontal,
-      // so we treat "screen-space" pixel deltas the same way as top view
-      // but scale by radius (distance to target) instead of camera height.
-      final size = MediaQuery.of(context).size;
-      const halfFovRad = 15.0 * math.pi / 180.0;
-      final visibleWidthMeters = 2 * _tpRadius * math.tan(halfFovRad);
-      final metersPerPixel = visibleWidthMeters / size.width;
-
-      final delta = details.focalPointDelta;
-
-      // Map-follows-finger: swipe right → target moves left; swipe up →
-      // target moves toward horizon (walk forward, target.z decreases).
-      final newX = (_tpTargetX - delta.dx * metersPerPixel)
-          .clamp(-_tpPanBoundX, _tpPanBoundX);
-      final newZ = (_tpTargetZ - delta.dy * metersPerPixel)
-          .clamp(_tpPanBoundZMin, _tpPanBoundZMax);
-
-      if ((newX - _tpTargetX).abs() > 0.02 ||
-          (newZ - _tpTargetZ).abs() > 0.02) {
-        _tpTargetX = newX;
-        _tpTargetZ = newZ;
-        _controller.setCameraTarget(_tpTargetX, 1.6, _tpTargetZ);
-      }
-    }
-  }
-
-  void _onTpScaleEnd(ScaleEndDetails details) {
-    _tpIdleResetTimer?.cancel();
-    _tpIdleResetTimer = Timer(_idleResetDelay, _resetTpCameraToInitial);
-  }
-
-  void _resetTpCameraToInitial() {
-    // After the cinematic ends, camera should sit at YOUR slot, not arena
-    // centre. Compute the target Z from the current mySlotIndex.
-    final blenderY = _slotBlenderY[_mySlotIndex.clamp(0, 5)];
-    final mvZTarget = -(blenderY + 5); // target 5m ahead of your slot
-    _tpTargetX = 0;
-    _tpTargetZ = mvZTarget;
-    _tpRadius = _tpInitialRadius;
-    _controller.setCameraTarget(0, 1.6, mvZTarget);
-    _controller.setCameraOrbit(0, 90, _tpInitialRadius);
-    AppLogger.battle
-        .i('arena3d:tpIdleReset', fields: {'mySlot': _mySlotIndex});
-  }
-
-  void _toggleCameraMode() {
-    // Any pending idle-reset for the leaving mode has to be cancelled or
-    // it'd fire in the new mode and clobber that camera.
-    _topIdleResetTimer?.cancel();
-    _tpIdleResetTimer?.cancel();
-    // Toggling the mode kills any in-progress cinematic — the user's
-    // opting out of the intro.
-    if (_cinematicPhase != _CinematicPhase.done) {
-      _cancelCinematic();
-    }
-    setState(() {
-      _cameraMode = _cameraMode == ArenaCameraMode.thirdPerson
-          ? ArenaCameraMode.topView
-          : ArenaCameraMode.thirdPerson;
-    });
-    _applyCameraForMode(_cameraMode);
+  Future<void> _showProfileCard(
+      _AvatarPos pos, int totalParticipants) async {
+    await showDialog<void>(
+      context: context,
+      barrierDismissible: true,
+      barrierColor: Colors.black.withValues(alpha: 0.55),
+      builder: (dialogCtx) => _ProfileCard(
+        pos: pos,
+        totalParticipants: totalParticipants,
+        onOpenProfile: () {
+          Navigator.of(dialogCtx).pop();
+          context.push('/users/${pos.participant.userId}');
+        },
+      ),
+    );
   }
 
   // ---------------------------------------------------------------------------
@@ -613,13 +340,14 @@ class _BattleGroundScreenState extends ConsumerState<BattleGroundScreen> {
   @override
   Widget build(BuildContext context) {
     final battleAsync = ref.watch(battleDetailProvider(widget.battleId));
+    final goalsAsync =
+        ref.watch(battleParticipantGoalsProvider(widget.battleId));
     final uid = ref.watch(authStateProvider).valueOrNull?.id ?? '';
 
     return Scaffold(
       backgroundColor: Colors.black,
       body: battleAsync.when(
-        loading: () => Center(
-            child: CircularProgressIndicator(color: AppColors.primary)),
+        loading: () => const _ArenaShimmer(),
         error: (e, _) => Center(
           child: Padding(
             padding: const EdgeInsets.all(24),
@@ -634,117 +362,378 @@ class _BattleGroundScreenState extends ConsumerState<BattleGroundScreen> {
                   style: TextStyle(color: Colors.white)),
             );
           }
-          if (!_completionRequested &&
-              battle.status == BattleStatus.active &&
-              !DateTime.now().isBefore(battle.endTime) &&
-              uid.isNotEmpty) {
-            _completionRequested = true;
-            ref.read(battleServiceProvider).completeExpiredBattles(uid);
-          }
-          return _buildArenaScene(battle, uid);
+          // Arena no longer auto-completes battles client-side (see
+          // battle_service.completeExpiredBattles block comment). If
+          // the user lands here on an active-past-end-time battle,
+          // the server cron settles it within ~60 s and the arena
+          // rebuilds when battleDetailProvider streams the completed
+          // state. In the interim the arena still animates against
+          // whatever current_steps are cached.
+          // Block the arena on step-goals fetch — the positions depend
+          // on the collective daily-goal average and starting the
+          // cinematic against a fallback map would then jitter runners
+          // when the fetch resolves. Fetch is one batched query, ~100
+          // ms typical; a brief spinner is cleaner than mid-cinematic
+          // jump. On error, fall back to a synthetic goals map keyed
+          // to defaults so the arena still opens.
+          return goalsAsync.when(
+            loading: () => const _ArenaShimmer(),
+            error: (_, __) =>
+                _buildArenaScene(battle, uid, const <String, int>{}),
+            data: (goals) => _buildArenaScene(battle, uid, goals),
+          );
         },
       ),
     );
   }
 
-  Widget _buildArenaScene(BattleModel battle, String uid) {
+  Widget _buildArenaScene(
+      BattleModel battle, String uid, Map<String, int> stepGoals) {
     final ctx = _arenaContext(battle, uid);
-    final glbPath =
-        'assets/images/battleground/cityView/city_arena_${_timeOfDay.name}.glb';
+    final assetPath =
+        'assets/images/battleground/cityView/arena_${_timeOfDay.name}.png';
+    final durationDays = _battleDurationDays(battle);
 
-    // Viewer is created ONCE per screen open. `enableTouch` is fixed at
-    // false and `activeGestureInterceptor` is fixed at false; both of
-    // those props feed into the underlying WebView init, and changing
-    // them per mode was rebuilding the viewer + reloading the GLB on
-    // every toggle. The plugin's own gesture-interceptor also swallows
-    // touches before Flutter sees them, so we kill it here — we drive
-    // the camera 100% from Flutter regardless of mode.
-    final Widget viewer = Flutter3DViewer(
-      key: ValueKey('arena-${_timeOfDay.name}'),
-      controller: _controller,
-      src: glbPath,
-      progressBarColor: AppColors.primary,
-      enableTouch: false,
-      activeGestureInterceptor: false,
-      onLoad: (address) async {
-        AppLogger.battle.i('arena3d:onLoad', fields: {'src': glbPath});
-        _applyShadowConfigForTod(_timeOfDay);
-        await Future.delayed(const Duration(milliseconds: 800));
-        if (!mounted) return;
-        _applyCameraForMode(_cameraMode);
-        if (_cinematicPhase == _CinematicPhase.idle) {
-          _startCinematic(battle, uid);
+    return LayoutBuilder(builder: (context, constraints) {
+      final viewportWidth = constraints.maxWidth;
+      final scaledImgHeight = viewportWidth * _kArenaAspect;
+
+      // Compute avatar positions once — used both for the visual overlay
+      // and for the cinematic scroll targets.
+      final positions = _computeAvatarPositions(
+        battle,
+        uid,
+        viewportWidth,
+        scaledImgHeight,
+        stepGoals,
+        durationDays,
+      );
+
+      // Cache leader + current-user positions for the auto-recentre
+      // timer and the step-gap indicator. Iterate once instead of
+      // filtering the list twice.
+      _AvatarPos? me;
+      for (final p in positions) {
+        if (p.isMe) {
+          me = p;
+          break;
         }
-      },
-      onError: (err) => AppLogger.battle
-          .e('arena3d:onError', fields: {'src': glbPath, 'err': err}),
-    );
+      }
+      _userPos = me;
+      _leaderPos = positions.isNotEmpty ? positions.first : null;
 
-    // Current user's picked 3D character. If they're #1 on the battle
-    // board load the Taunt GLB (baked animation plays automatically via
-    // AnimatedCharacterViewer's first-anim-on-load logic); otherwise the
-    // neutral pose from character.glb. Sized as a small corner tile so it
-    // sits on top of the arena without covering it.
-    final character = ref.watch(currentCharacter3DProvider);
-    final characterGlb = _isTopRanked
-        ? character.tauntGlbAssetPath
-        : character.glbAssetPath;
+      // Kick off the cinematic on the first pass that has real viewport
+      // dimensions. Post-frame callback so the ScrollController is
+      // attached before animateTo tries to run.
+      if (!_cinematicStarted && positions.isNotEmpty) {
+        _cinematicStarted = true;
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) _runCinematic(positions, uid);
+        });
+      }
 
-    return Stack(
-      fit: StackFit.expand,
-      children: [
-        viewer,
-        // Top-view gesture overlay — only present in Top mode. Sits on
-        // top of the viewer in the Stack so it wins the hit test.
-        Positioned.fill(
-          child: _cameraMode == ArenaCameraMode.topView
-              ? GestureDetector(
-                  behavior: HitTestBehavior.opaque,
-                  onScaleStart: _onTopScaleStart,
-                  onScaleUpdate: _onTopScaleUpdate,
-                  onScaleEnd: _onTopScaleEnd,
-                )
-              : GestureDetector(
-                  behavior: HitTestBehavior.opaque,
-                  onScaleStart: _onTpScaleStart,
-                  onScaleUpdate: _onTpScaleUpdate,
-                  onScaleEnd: _onTpScaleEnd,
-                ),
-        ),
-        // Corner character tile — shows the current user's picked 3D
-        // avatar. Bottom-right so it doesn't collide with the top-left
-        // close button or top-right camera-mode / XP chip. Non-blocking
-        // for hit-test so the arena gestures still fire underneath.
-        Positioned(
-          right: 16,
-          bottom: 24,
-          child: IgnorePointer(
-            child: Container(
-              width: 120,
-              height: 168,
-              decoration: BoxDecoration(
-                color: Colors.black.withValues(alpha: 0.35),
-                borderRadius: BorderRadius.circular(16),
-                border: Border.all(
-                  color: _isTopRanked
-                      ? AppColors.primary.withValues(alpha: 0.85)
-                      : Colors.white.withValues(alpha: 0.2),
-                  width: _isTopRanked ? 2 : 1,
+      // Step-gap indicator visibility. Hidden during the cinematic (so
+      // it doesn't jitter under the zoom+pan). Otherwise ALWAYS shown
+      // between the #1 and #2 spots (regardless of who "me" is) —
+      // this way both devices in a 1v1 see the same on-road arrow +
+      // gap number (fixed 1.1.6+27; prior implementation only rendered
+      // on the trailer's device because it anchored between leader
+      // and `me`, meaning the leader saw nothing).
+      final leader = _leaderPos;
+      final runnerUp = positions.length > 1 ? positions[1] : null;
+      final gapSteps = (leader != null && runnerUp != null)
+          ? leader.participant.currentSteps -
+              runnerUp.participant.currentSteps
+          : 0;
+      final showGap = !_cinematicRunning &&
+          leader != null &&
+          runnerUp != null &&
+          gapSteps > 0;
+
+      // The scroll view is wrapped in ClipRect + Transform.scale so the
+      // cinematic can "zoom in" on the arena. Transform.scale is
+      // centred on the viewport, so the row currently centred by
+      // scroll position stays visually centred at any zoom level —
+      // scroll-target math is unchanged. ClipRect prevents the scaled
+      // view from spilling outside its layout bounds.
+      final scrollView = SingleChildScrollView(
+        controller: _scrollController,
+        physics: _cinematicRunning
+            ? const NeverScrollableScrollPhysics()
+            : const BouncingScrollPhysics(),
+        child: SizedBox(
+          width: viewportWidth,
+          height: scaledImgHeight,
+          child: Stack(
+            children: [
+              Positioned.fill(
+                child: Image.asset(
+                  assetPath,
+                  fit: BoxFit.fill,
+                  filterQuality: FilterQuality.high,
                 ),
               ),
-              clipBehavior: Clip.antiAlias,
-              child: AnimatedCharacterViewer(
-                key: ValueKey('arena-char-${character.id}-$_isTopRanked'),
-                glbAssetPath: characterGlb,
-                progressBarColor: Colors.transparent,
-              ),
-            ),
+              // Step-gap indicator sits BELOW the avatars in Z-order,
+              // so runners always draw on top of the line/pill.
+              // Anchors between the #1 and #2 spots so both devices
+              // in a 1v1 see the same arrow.
+              if (showGap)
+                _StepGapIndicator(
+                  leaderPos: leader,
+                  trailerPos: runnerUp,
+                  gapSteps: gapSteps,
+                  viewportWidth: viewportWidth,
+                ),
+              for (final pos in positions)
+                _AvatarSpot(
+                  key: ValueKey('avatar-${pos.participant.userId}'),
+                  pos: pos,
+                  onTap: () => _showProfileCard(pos, positions.length),
+                ),
+            ],
           ),
         ),
-        ..._sharedChrome(battle, ctx),
-      ],
-    );
+      );
+
+      // Auto-recentre: any user-driven scroll cancels the pending
+      // return, and on scroll-end we schedule a new one for 3 s later.
+      // Programmatic scrolls (cinematic beats, our own animateTo)
+      // still fire notifications but we filter them: only
+      // `ScrollUpdateNotification.dragDetails != null` counts as user
+      // input, and we skip scheduling once the scroll is at the
+      // user's target (avoids a self-perpetuating loop).
+      final scrollListened = NotificationListener<ScrollNotification>(
+        onNotification: (n) {
+          if (_cinematicRunning) return false;
+          if (n is ScrollStartNotification ||
+              n is ScrollUpdateNotification) {
+            _autoRecentreTimer?.cancel();
+          } else if (n is ScrollEndNotification) {
+            _autoRecentreTimer?.cancel();
+            final target = me == null ? null : _scrollTargetFor(me);
+            if (target != null &&
+                _scrollController.hasClients &&
+                (_scrollController.offset - target).abs() > 5) {
+              _autoRecentreTimer = Timer(
+                  _kAutoRecentreDelay, _returnToUser);
+            }
+          }
+          return false;
+        },
+        child: scrollView,
+      );
+
+      return Stack(
+        fit: StackFit.expand,
+        children: [
+          ClipRect(
+            // Transform.translate is INSIDE Transform.scale so the
+            // centring correction lives in the scaled child's local
+            // coordinate space. That makes the translate scale-
+            // invariant: the same `T = clampedScroll − idealScroll`
+            // centres the target row at any zoom level.
+            child: AnimatedBuilder(
+              animation: Listenable.merge(
+                  [_zoomController, _translateController]),
+              builder: (context, child) => Transform.scale(
+                scale: _currentZoomScale,
+                alignment: Alignment.center,
+                child: Transform.translate(
+                  offset: Offset(0, _currentTranslateY),
+                  child: child,
+                ),
+              ),
+              child: scrollListened,
+            ),
+          ),
+          ..._sharedChrome(battle, ctx, positions, uid),
+        ],
+      );
+    });
   }
+
+  // ---------------------------------------------------------------------------
+  // Avatar positioning
+  // ---------------------------------------------------------------------------
+
+  /// Battle length in whole days (min 1). Used with the participants'
+  /// average daily step goal to derive the arena's positioning scale:
+  /// `MIN_SCALE = avgDailyGoal × durationDays`. A 3-day battle with
+  /// 8000-step average → 24000-step scale, so a runner has to walk
+  /// 24000 steps before they anchor at the top of the arena.
+  int _battleDurationDays(BattleModel battle) {
+    final delta = battle.endTime.difference(battle.startTime);
+    final days = (delta.inMinutes / (24 * 60)).ceil();
+    return days < 1 ? 1 : days;
+  }
+
+  /// Turn a battle's participants into runner-sprite positions on the
+  /// arena.
+  ///
+  /// **Step-anchored positioning.** Rows are placed by each runner's
+  /// step-count relative to a `scale` value, NOT by rank. That means
+  /// two runners at 200 vs 202 steps end up nearly on top of each
+  /// other (they're neck-and-neck), while a leader at 5000 and a
+  /// trailing player at 200 have a large visible road between them —
+  /// the arena's vertical distance means "actual step gap", not
+  /// "position in the standings".
+  ///
+  /// **Adaptive scale.** The old formula was
+  /// `scale = max(leaderSteps, avgDailyGoal × durationDays)`, which
+  /// meant early in a battle EVERYONE clustered near the start line
+  /// because they were all only a few percent of the way to the
+  /// daily goal — a 425-vs-19 lead (~22× ratio) rendered visually
+  /// indistinguishable from a 425-vs-400 lead. Now the scale
+  /// switches based on how far the leader has come:
+  ///
+  ///   • Leader hasn't reached the collective daily target yet:
+  ///     `scale = max(leaderSteps × 1.15, 100)`. The leader
+  ///     anchors near the top of the arena and everyone else scales
+  ///     against them. Small absolute step counts now produce a
+  ///     visible spread because the frame zooms in on the current
+  ///     pack instead of the full unwalked road.
+  ///   • Leader has crossed the collective daily target:
+  ///     `scale = leaderSteps`. Same as before — leader anchors at
+  ///     the very top, everyone else scales relative to their own
+  ///     step total. Preserves the "road to the goal" visual for
+  ///     the endgame of a battle.
+  ///
+  /// Ties (**exact** step-count matches only) render side-by-side on
+  /// one row. Near-ties (different step counts but similar positions)
+  /// stay on separate rows.
+  List<_AvatarPos> _computeAvatarPositions(
+    BattleModel battle,
+    String currentUid,
+    double viewportWidth,
+    double scaledImgHeight,
+    Map<String, int> stepGoals,
+    int durationDays,
+  ) {
+    final accepted = battle.participants
+        .where((p) => p.inviteStatus == ParticipantInviteStatus.accepted)
+        .toList()
+      ..sort((a, b) => b.currentSteps.compareTo(a.currentSteps));
+    if (accepted.isEmpty) return const [];
+
+    final avatarSize = viewportWidth * 0.14;
+    final gap = avatarSize * 0.30;
+
+    // Runners occupy this vertical band on the arena. Leader anchored
+    // at 10% (front of the pack); start-line at 85% (bottom of arena
+    // with breathing room below the last runner).
+    const double topFrac = 0.10;
+    const double bottomFrac = 0.85;
+
+    // Collective daily step goal — mean over the accepted participants.
+    // Missing rows (RLS, race, or new user) fall back to the default
+    // 8000-step goal so one missing lookup doesn't skew the average.
+    double sum = 0;
+    for (final p in accepted) {
+      final g = stepGoals[p.userId];
+      sum += (g != null && g > 0) ? g : 8000;
+    }
+    final avgGoal = sum / accepted.length;
+    final collectiveTarget = avgGoal * durationDays;
+    final leaderSteps = accepted.first.currentSteps.toDouble();
+
+    // Adaptive scale — see the docstring above for the full
+    // rationale. In short: if the leader hasn't reached the daily
+    // target yet, we zoom the arena in on the current pack so
+    // step-ratio differences at low absolute counts stay visible.
+    // Otherwise we use the leader-anchored scale so the endgame
+    // reads as "how close is everyone to the winner."
+    //
+    // The `× 1.15` headroom leaves ~13% of the runway above the
+    // leader so their sprite isn't clipped by the top of the arena.
+    // The `100.0` floor guards a fresh battle where every runner
+    // has 0 steps — without it, `leaderSteps × 1.15` collapses to
+    // 0 and we'd divide by zero downstream. `100` is small enough
+    // that the first real step still shifts a runner visibly off
+    // the start line.
+    final double scale;
+    if (leaderSteps >= collectiveTarget) {
+      scale = leaderSteps;
+    } else {
+      final compressed = leaderSteps * 1.15;
+      scale = compressed > 100.0 ? compressed : 100.0;
+    }
+
+    // Group runners into shared rows by **pixel proximity**, not
+    // exact-tie step counts. The old exact-tie rule left every
+    // near-neck-and-neck pair on separate rows whose step-based Y
+    // positions could land within one avatar height of each other —
+    // sprites then overlapped visibly (11-vs-0 with scale=100 =
+    // ~66 px vertical gap, avatar height ~100 px, ~35 px overlap).
+    //
+    // Two-pass:
+    //   1) Compute each accepted runner's ideal center-Y from their
+    //      step count (unchanged formula).
+    //   2) Walk the rank-ordered list; if the current runner's Y is
+    //      within `avatarSize + minVerticalGap` of the previous
+    //      row's Y, merge them into the same row (side-by-side).
+    //      Otherwise start a new row at the current Y.
+    //
+    // Grouped runners render at the FIRST member's Y (the leader
+    // among tied/near-tied runners), preserving "leader anchors the
+    // row" reading. Exact ties still work because their Y positions
+    // are identical, which trivially passes the proximity check.
+    const double minVerticalGap = 8.0;
+    final rowMergeThreshold = avatarSize + minVerticalGap;
+
+    double centreYFor(BattleParticipant p) {
+      final progress = scale > 0 ? p.currentSteps / scale : 0.0;
+      final vFrac = bottomFrac - progress * (bottomFrac - topFrac);
+      return scaledImgHeight * vFrac;
+    }
+
+    final List<List<BattleParticipant>> groups = [];
+    final List<double> groupYs = [];
+    for (final p in accepted) {
+      final y = centreYFor(p);
+      if (groups.isNotEmpty && (y - groupYs.last).abs() < rowMergeThreshold) {
+        // Close enough to the previous row's Y — pack side-by-side.
+        // Row keeps the leader's Y so the leader appears to anchor
+        // the row rather than the row drifting toward the trailer.
+        groups.last.add(p);
+      } else {
+        groups.add([p]);
+        groupYs.add(y);
+      }
+    }
+
+    final positions = <_AvatarPos>[];
+    int flatRank = 0;
+
+    for (int gi = 0; gi < groups.length; gi++) {
+      final group = groups[gi];
+      final centreY = groupYs[gi];
+
+      final n = group.length;
+      final rowWidth = n * avatarSize + (n - 1) * gap;
+      // Shift by _kRoadOffsetFrac so runners sit on the cobblestone's
+      // true centre, not the viewport's centre (see the constant's doc).
+      final rowCentreX = viewportWidth / 2 + viewportWidth * _kRoadOffsetFrac;
+      final rowStartX = rowCentreX - rowWidth / 2;
+
+      for (int i = 0; i < n; i++) {
+        final p = group[i];
+        flatRank++;
+        positions.add(_AvatarPos(
+          participant: p,
+          rank: flatRank,
+          isMe: p.userId == currentUid,
+          top: centreY - avatarSize / 2,
+          left: rowStartX + i * (avatarSize + gap),
+          size: avatarSize,
+        ));
+      }
+    }
+    return positions;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Chrome
+  // ---------------------------------------------------------------------------
 
   _ArenaContext _arenaContext(BattleModel battle, String uid) {
     final now = DateTime.now();
@@ -771,7 +760,8 @@ class _BattleGroundScreenState extends ConsumerState<BattleGroundScreen> {
     );
   }
 
-  List<Widget> _sharedChrome(BattleModel battle, _ArenaContext ctx) {
+  List<Widget> _sharedChrome(BattleModel battle, _ArenaContext ctx,
+      List<_AvatarPos> positions, String uid) {
     return [
       if (ctx.frozen)
         const IgnorePointer(
@@ -789,37 +779,43 @@ class _BattleGroundScreenState extends ConsumerState<BattleGroundScreen> {
       SafeArea(
         child: Padding(
           padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
+          // Stack instead of Row-with-Spacers so the countdown ring
+          // anchors to the SCREEN centre regardless of how wide the
+          // side chips are. With a Row + Spacers, the ring drifts left
+          // when the pot badge (right) is wider than the close button
+          // (left) — which it usually is.
+          child: Stack(
+            alignment: Alignment.topCenter,
             children: [
-              _GlassIconBtn(
-                icon: Icons.close,
-                onTap: () => context.pop(),
-              ),
-              const Spacer(),
               CountdownRing(remaining: ctx.remaining, total: ctx.total),
-              const Spacer(),
-              _CameraModeToggle(
-                mode: _cameraMode,
-                onTap: _toggleCameraMode,
+              Align(
+                alignment: Alignment.topLeft,
+                child: _GlassIconBtn(
+                  icon: Icons.close,
+                  onTap: () => context.pop(),
+                ),
               ),
-              const SizedBox(width: 8),
-              _PotBadge(xp: ctx.potXp, isStake: battle.stakeXp > 0),
+              Align(
+                alignment: Alignment.topRight,
+                child: _PotBadge(
+                    xp: ctx.potXp, isStake: battle.stakeXp > 0),
+              ),
             ],
           ),
         ),
       ),
-      // Skip button — only visible during the intro cinematic. Sits below
-      // the main chrome row, right-aligned, low-opacity so it doesn't
-      // dominate the cinematic itself.
-      if (_cinematicPhase != _CinematicPhase.done &&
-          _cinematicPhase != _CinematicPhase.idle)
+      // Skip pill — only visible while cinematic is running. Positioned
+      // just under the top chrome row so it doesn't fight the close /
+      // XP badge for the corner.
+      if (_cinematicRunning)
         SafeArea(
           child: Align(
             alignment: Alignment.topRight,
             child: Padding(
               padding: const EdgeInsets.only(top: 60, right: 12),
-              child: _SkipIntroBtn(onTap: _skipCinematic),
+              child: _SkipCinematicBtn(
+                onTap: () => _skipCinematic(positions, uid),
+              ),
             ),
           ),
         ),
@@ -829,7 +825,11 @@ class _BattleGroundScreenState extends ConsumerState<BattleGroundScreen> {
           child: Align(
             alignment: Alignment.bottomCenter,
             child: LeaderboardPill(
-              participants: battle.participants,
+              // Pill filters internally to accepted participants via
+              // buildPlayerRows / buildTeamGroups — passing the whole
+              // battle here lets it distinguish group vs team format
+              // and render the right board variant.
+              battle: battle,
               currentUserId: ctx.uid,
             ),
           ),
@@ -855,49 +855,340 @@ class _ArenaContext {
   });
 }
 
-/// Two-state pill button that flips between the two camera modes. Sits in
-/// the top chrome row so it's always visible without eating arena space.
-class _CameraModeToggle extends StatelessWidget {
-  final ArenaCameraMode mode;
+/// Position + metadata for a single runner sprite on the arena.
+class _AvatarPos {
+  final BattleParticipant participant;
+
+  /// 1-based rank in the sorted-by-steps list. Ties get sequential
+  /// ranks (leader tied → 1 and 2, then the next player is 3).
+  final int rank;
+
+  final bool isMe;
+  final double top;
+  final double left;
+  final double size;
+
+  const _AvatarPos({
+    required this.participant,
+    required this.rank,
+    required this.isMe,
+    required this.top,
+    required this.left,
+    required this.size,
+  });
+}
+
+/// One runner sprite on the arena. Tap opens the profile card popup.
+///
+/// `GestureDetector` catches taps only — no drag callbacks, so vertical
+/// scroll gestures pass through to the ScrollView underneath.
+class _AvatarSpot extends StatelessWidget {
+  final _AvatarPos pos;
   final VoidCallback onTap;
-  const _CameraModeToggle({required this.mode, required this.onTap});
+  const _AvatarSpot({super.key, required this.pos, required this.onTap});
 
   @override
   Widget build(BuildContext context) {
-    final label = mode == ArenaCameraMode.topView ? 'Top' : '3P';
-    final icon = mode == ArenaCameraMode.topView
-        ? Icons.map_outlined
-        : Icons.videocam_outlined;
-    return Material(
-      color: Colors.transparent,
-      child: InkWell(
+    final avatarId = pos.participant.battleAvatarId ?? 'avatar_01';
+    final assetPath = 'assets/images/avatars/$avatarId.png';
+    final badgeSize = pos.size * 0.35;
+
+    return Positioned(
+      top: pos.top,
+      left: pos.left,
+      width: pos.size,
+      height: pos.size,
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
         onTap: onTap,
-        borderRadius: BorderRadius.circular(20),
-        child: Container(
-          height: 40,
-          padding: const EdgeInsets.symmetric(horizontal: 12),
-          decoration: BoxDecoration(
-            color: Colors.black.withValues(alpha: 0.55),
-            borderRadius: BorderRadius.circular(20),
-            border: Border.all(
-                color: AppColors.primary.withValues(alpha: 0.5)),
-          ),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(icon, color: Colors.white, size: 18),
-              const SizedBox(width: 6),
-              Text(
-                label,
-                style: const TextStyle(
-                  fontFamily: 'Manrope',
-                  color: Colors.white,
-                  fontSize: 12,
-                  fontWeight: FontWeight.w800,
-                  letterSpacing: 0.5,
+        child: Stack(
+          clipBehavior: Clip.none,
+          children: [
+            // Ground shadow: soft dark ellipse just below the avatar so
+            // every runner reads as "on the road" instead of "flat on
+            // the pixel plane". Subtle by design — 30% black, 6px blur.
+            Positioned(
+              bottom: -pos.size * 0.02,
+              left: pos.size * 0.18,
+              right: pos.size * 0.18,
+              height: pos.size * 0.10,
+              child: DecoratedBox(
+                decoration: BoxDecoration(
+                  color: Colors.black.withValues(alpha: 0.30),
+                  borderRadius: BorderRadius.circular(pos.size),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withValues(alpha: 0.35),
+                      blurRadius: 6,
+                    ),
+                  ],
                 ),
               ),
-            ],
+            ),
+            // Subtle purple glow behind the current user's avatar —
+            // makes them findable without shouting. Kept lower-intensity
+            // than the initial pass (0.65 α, 14 blur, +2 spread) which
+            // was too heavy: 0.30 α, 10 blur, 0 spread reads as
+            // "faint aura", not "burning halo".
+            if (pos.isMe)
+              Positioned.fill(
+                child: DecoratedBox(
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    boxShadow: [
+                      BoxShadow(
+                        color: AppColors.primary.withValues(alpha: 0.30),
+                        blurRadius: 10,
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            Positioned.fill(
+              child: Image.asset(
+                assetPath,
+                fit: BoxFit.contain,
+                filterQuality: FilterQuality.medium,
+              ),
+            ),
+            // Rank badge — floats above the head, horizontally centred
+            // with a 4-px gap so it never touches the character. Colour
+            // by rank so #1 pops (gold) vs the pack.
+            Positioned(
+              top: -(badgeSize + 4),
+              left: (pos.size - badgeSize) / 2,
+              child: _RankBadge(rank: pos.rank, size: badgeSize),
+            ),
+            // "You" label below the current-user's avatar so they can
+            // spot themselves at a glance without opening the popup.
+            if (pos.isMe)
+              Positioned(
+                bottom: -pos.size * 0.20,
+                left: 0,
+                right: 0,
+                child: Center(
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 6, vertical: 2),
+                    decoration: BoxDecoration(
+                      color: AppColors.primary,
+                      borderRadius: BorderRadius.circular(6),
+                    ),
+                    child: const Text(
+                      'You',
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontFamily: 'Manrope',
+                        fontWeight: FontWeight.w800,
+                        fontSize: 9,
+                        letterSpacing: 0.5,
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Small circular badge showing the runner's rank in the battle.
+/// Colour-graded: gold for #1, silver #2, bronze #3, purple for the rest.
+class _RankBadge extends StatelessWidget {
+  final int rank;
+  final double size;
+  const _RankBadge({required this.rank, required this.size});
+
+  static const Color _gold = Color(0xFFFFD700);
+  static const Color _silver = Color(0xFFC0C0C0);
+  static const Color _bronze = Color(0xFFCD7F32);
+
+  Color get _color {
+    switch (rank) {
+      case 1:
+        return _gold;
+      case 2:
+        return _silver;
+      case 3:
+        return _bronze;
+      default:
+        return AppColors.primary;
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: size,
+      height: size,
+      alignment: Alignment.center,
+      decoration: BoxDecoration(
+        color: _color,
+        shape: BoxShape.circle,
+        border: Border.all(color: Colors.white, width: 1.5),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.35),
+            blurRadius: 3,
+            offset: const Offset(0, 1),
+          ),
+        ],
+      ),
+      child: Text(
+        '$rank',
+        style: TextStyle(
+          color: Colors.white,
+          fontFamily: 'Manrope',
+          fontSize: size * 0.55,
+          fontWeight: FontWeight.w800,
+        ),
+      ),
+    );
+  }
+}
+
+/// Floating game-style profile card. Bigger avatar + name + rank + steps
+/// on a rounded dark card, with a "View profile" affordance. Tap card
+/// body → navigate; tap backdrop → dismiss.
+class _ProfileCard extends StatelessWidget {
+  final _AvatarPos pos;
+  final int totalParticipants;
+  final VoidCallback onOpenProfile;
+  const _ProfileCard({
+    required this.pos,
+    required this.totalParticipants,
+    required this.onOpenProfile,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final p = pos.participant;
+    final avatarId = p.battleAvatarId ?? 'avatar_01';
+    final name = (p.preferredName?.trim().isNotEmpty ?? false)
+        ? p.preferredName!.trim()
+        : p.displayName;
+
+    return Center(
+      child: Material(
+        color: Colors.transparent,
+        child: GestureDetector(
+          onTap: onOpenProfile,
+          child: Container(
+            width: 280,
+            padding: const EdgeInsets.fromLTRB(20, 20, 20, 16),
+            decoration: BoxDecoration(
+              color: const Color(0xFF1A1A1F),
+              borderRadius: BorderRadius.circular(20),
+              border: Border.all(
+                  color: AppColors.primary.withValues(alpha: 0.4)),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withValues(alpha: 0.6),
+                  blurRadius: 24,
+                  offset: const Offset(0, 8),
+                ),
+              ],
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                // Big avatar with rank badge overlaid
+                SizedBox(
+                  width: 100,
+                  height: 100,
+                  child: Stack(
+                    clipBehavior: Clip.none,
+                    children: [
+                      Positioned.fill(
+                        child: Image.asset(
+                          'assets/images/avatars/$avatarId.png',
+                          fit: BoxFit.contain,
+                        ),
+                      ),
+                      Positioned(
+                        top: -6,
+                        left: -6,
+                        child: _RankBadge(rank: pos.rank, size: 34),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 12),
+                Text(
+                  name,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontFamily: 'Space Grotesk',
+                    fontWeight: FontWeight.w700,
+                    fontSize: 18,
+                  ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  'Rank ${pos.rank} of $totalParticipants',
+                  style: TextStyle(
+                    color: AppColors.onSurfaceVariant,
+                    fontFamily: 'Manrope',
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                const SizedBox(height: 12),
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: 14, vertical: 8),
+                  decoration: BoxDecoration(
+                    color: AppColors.primary.withValues(alpha: 0.15),
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(
+                        color: AppColors.primary.withValues(alpha: 0.35)),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(Icons.directions_walk,
+                          color: AppColors.primary, size: 16),
+                      const SizedBox(width: 6),
+                      Text(
+                        '${p.currentSteps} steps',
+                        style: TextStyle(
+                          color: AppColors.primary,
+                          fontFamily: 'Manrope',
+                          fontWeight: FontWeight.w800,
+                          fontSize: 13,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 14),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Icon(Icons.person_outline,
+                        color: Colors.white.withValues(alpha: 0.7), size: 14),
+                    const SizedBox(width: 4),
+                    Text(
+                      'View profile',
+                      style: TextStyle(
+                        color: Colors.white.withValues(alpha: 0.85),
+                        fontFamily: 'Manrope',
+                        fontSize: 12,
+                        fontWeight: FontWeight.w700,
+                        letterSpacing: 0.4,
+                      ),
+                    ),
+                    const SizedBox(width: 4),
+                    Icon(Icons.chevron_right,
+                        color: Colors.white.withValues(alpha: 0.7), size: 14),
+                  ],
+                ),
+              ],
+            ),
           ),
         ),
       ),
@@ -905,15 +1196,15 @@ class _CameraModeToggle extends StatelessWidget {
   }
 }
 
-/// Low-opacity "Skip →" pill shown top-right during the intro cinematic.
-class _SkipIntroBtn extends StatelessWidget {
+/// Low-opacity "Skip →" pill shown top-right during the opening cinematic.
+class _SkipCinematicBtn extends StatelessWidget {
   final VoidCallback onTap;
-  const _SkipIntroBtn({required this.onTap});
+  const _SkipCinematicBtn({required this.onTap});
 
   @override
   Widget build(BuildContext context) {
     return Opacity(
-      opacity: 0.5,
+      opacity: 0.6,
       child: Material(
         color: Colors.transparent,
         child: InkWell(
@@ -1012,6 +1303,294 @@ class _PotBadge extends StatelessWidget {
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+// ─── Step-gap indicator ──────────────────────────────────────────────────
+//
+// Painted-on-the-road markings that visually communicate the step-gap
+// between the current user and the leader. Two pieces:
+//
+//   1. An arrow (arrowhead + stem) painted on the cobblestone in a
+//      dark path-toned ink (looks engraved / carved into the road
+//      rather than pasted on top).
+//   2. The gap number in WHITE, rotated 90° so the digits progress
+//      along the direction of travel — like the "WELCOME" road-
+//      painting reference: first digit near the user, last digit near
+//      the leader, tops of the letters facing the road's left side.
+//
+// The arrow sits OFF the runner column (offset ~11% right of viewport
+// centre) so avatars never sit on top of it. The stem splits around
+// the rotated number so the two markings share the same X band
+// without visually clashing.
+
+/// Fraction of viewport width the cobblestone road is offset from
+/// the arena PNG's horizontal centre. The Blender render was set up
+/// with `camera.location.x = -1.0` and `ortho_scale = 130` on a
+/// 1080 × 4320 portrait frame — that puts the road (world X=0)
+/// about `1 / 32.5 ≈ 3.1 %` to the RIGHT of image centre. Every
+/// arena element that should sit ON the road (avatars, step-gap
+/// arrow, indicator text) shifts by this fraction of viewport width
+/// so it lands on the road's actual centre, not the viewport's.
+const double _kRoadOffsetFrac = 0.031;
+
+/// Neutral grey "ink" for the arrow markings. Applied at gradient
+/// alpha values (~0.25 near the user end to ~1.0 near the arrowhead)
+/// so the arrow fades in from the tail and solidifies toward the
+/// leader — visually reinforces "you're chasing that direction".
+const Color _kArrowGrey = Color(0xFF606060);
+
+/// Alpha at the arrowhead / leader end. Fully painted.
+const double _kArrowAlphaTop = 1.00;
+
+/// Alpha at the stem-tail / user end. Faint — dissolves into the road.
+const double _kArrowAlphaBottom = 0.25;
+
+class _StepGapIndicator extends StatelessWidget {
+  final _AvatarPos leaderPos;
+
+  /// The runner-up (2nd place) position. Renamed from `userPos` in
+  /// 1.1.6+27 — previously this was the CURRENT user's position and
+  /// the indicator only rendered on the trailer's device. Now it's
+  /// anchored between #1 and #2 so both devices in a 1v1 see the
+  /// same on-road arrow + gap number.
+  final _AvatarPos trailerPos;
+  final int gapSteps;
+  final double viewportWidth;
+
+  const _StepGapIndicator({
+    required this.leaderPos,
+    required this.trailerPos,
+    required this.gapSteps,
+    required this.viewportWidth,
+  });
+
+  /// Linear alpha at a Y in the [spanTop, spanBottom] range —
+  /// [_kArrowAlphaTop] at the top edge, [_kArrowAlphaBottom] at the
+  /// bottom edge. Used so every arrow segment can pick up the correct
+  /// slice of the overall gradient (no manual shader continuity).
+  double _alphaAtY(double y, double spanTop, double spanBottom) {
+    if (spanBottom <= spanTop) return _kArrowAlphaTop;
+    final t = ((y - spanTop) / (spanBottom - spanTop)).clamp(0.0, 1.0);
+    return _kArrowAlphaTop + (_kArrowAlphaBottom - _kArrowAlphaTop) * t;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    // Buffer keeps the arrow's tip / stem's tail off the sprite outlines.
+    const double endBuffer = 10;
+    // Shift by _kRoadOffsetFrac to sit on the cobblestone's true centre —
+    // aligns with the runners, who use the same shift.
+    final arrowCentreX =
+        viewportWidth / 2 + viewportWidth * _kRoadOffsetFrac;
+
+    final spanTop = leaderPos.top + leaderPos.size + endBuffer;
+    final spanBottom = trailerPos.top - endBuffer;
+    final spanHeight = spanBottom - spanTop;
+
+    if (spanHeight <= 0) return const SizedBox.shrink();
+
+    // Marking dimensions — scaled to the arena's viewport so the arrow
+    // reads roughly the same physical size on every device.
+    final stemWidth = viewportWidth * 0.020; // ~8 px on 400-px viewport
+    final arrowHeight = viewportWidth * 0.060; // ~24 px
+    final arrowWidth = viewportWidth * 0.070; // ~28 px
+    final textFontSize = viewportWidth * 0.045; // ~18 px
+
+    final numText = gapSteps.toString(); // no comma per spec
+    final midY = (spanTop + spanBottom) / 2;
+
+    // Measure the rotated text block. Rotated 90° CCW → the original
+    // text WIDTH becomes the rotated widget's HEIGHT (space taken along
+    // the road), and the original text HEIGHT becomes the rotated
+    // widget's WIDTH (space across the road).
+    final textStyle = TextStyle(
+      color: Colors.white,
+      fontFamily: 'Manrope',
+      fontSize: textFontSize,
+      fontWeight: FontWeight.w900,
+      letterSpacing: 1.5,
+      height: 1.0,
+      shadows: [
+        Shadow(
+          color: Colors.black.withValues(alpha: 0.65),
+          blurRadius: 3,
+          offset: const Offset(0, 1),
+        ),
+      ],
+    );
+    final tp = TextPainter(
+      text: TextSpan(text: numText, style: textStyle),
+      textDirection: TextDirection.ltr,
+    )..layout();
+    final rotatedTextWidth = tp.height;
+    final rotatedTextHeight = tp.width;
+
+    // When the span is too small to fit arrow + rotated-text + both
+    // stems, fall back to just the text at midpoint.
+    const stemTextPad = 6.0;
+    final minForFull =
+        arrowHeight + rotatedTextHeight + stemTextPad * 2 + 8;
+
+    Widget rotatedText() => RotatedBox(
+          quarterTurns: 3, // 90° CCW — first digit at bottom, last at top
+          child: Text(numText, style: textStyle),
+        );
+
+    if (spanHeight < minForFull) {
+      return Positioned(
+        top: midY - rotatedTextHeight / 2,
+        left: arrowCentreX - rotatedTextWidth / 2,
+        width: rotatedTextWidth,
+        height: rotatedTextHeight,
+        child: rotatedText(),
+      );
+    }
+
+    final arrowTop = spanTop;
+    final upperStemTop = arrowTop + arrowHeight;
+    final upperStemBottom = midY - rotatedTextHeight / 2 - stemTextPad;
+    final lowerStemTop = midY + rotatedTextHeight / 2 + stemTextPad;
+    final lowerStemBottom = spanBottom;
+
+    // Precompute the alpha at each segment boundary so every piece
+    // renders its correct slice of the overall arrow gradient.
+    final aArrowTop = _alphaAtY(arrowTop, spanTop, spanBottom);
+    final aArrowBottom =
+        _alphaAtY(arrowTop + arrowHeight, spanTop, spanBottom);
+    final aUpperTop = _alphaAtY(upperStemTop, spanTop, spanBottom);
+    final aUpperBottom = _alphaAtY(upperStemBottom, spanTop, spanBottom);
+    final aLowerTop = _alphaAtY(lowerStemTop, spanTop, spanBottom);
+    final aLowerBottom = _alphaAtY(lowerStemBottom, spanTop, spanBottom);
+
+    LinearGradient stemGradient(double topAlpha, double bottomAlpha) =>
+        LinearGradient(
+          begin: Alignment.topCenter,
+          end: Alignment.bottomCenter,
+          colors: [
+            _kArrowGrey.withValues(alpha: topAlpha),
+            _kArrowGrey.withValues(alpha: bottomAlpha),
+          ],
+        );
+
+    return Stack(
+      children: [
+        // Arrowhead — pointing UP toward the leader, near-solid alpha.
+        Positioned(
+          top: arrowTop,
+          left: arrowCentreX - arrowWidth / 2,
+          width: arrowWidth,
+          height: arrowHeight,
+          child: CustomPaint(
+            painter: _ArrowheadPainter(
+              color: _kArrowGrey,
+              topAlpha: aArrowTop,
+              bottomAlpha: aArrowBottom,
+            ),
+          ),
+        ),
+        // Upper stem — takes its slice of the overall gradient.
+        if (upperStemBottom > upperStemTop)
+          Positioned(
+            top: upperStemTop,
+            left: arrowCentreX - stemWidth / 2,
+            width: stemWidth,
+            height: upperStemBottom - upperStemTop,
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                gradient: stemGradient(aUpperTop, aUpperBottom),
+              ),
+            ),
+          ),
+        // Rotated number — white, running along the road.
+        Positioned(
+          top: midY - rotatedTextHeight / 2,
+          left: arrowCentreX - rotatedTextWidth / 2,
+          width: rotatedTextWidth,
+          height: rotatedTextHeight,
+          child: rotatedText(),
+        ),
+        // Lower stem — fades toward the tail near the user.
+        if (lowerStemBottom > lowerStemTop)
+          Positioned(
+            top: lowerStemTop,
+            left: arrowCentreX - stemWidth / 2,
+            width: stemWidth,
+            height: lowerStemBottom - lowerStemTop,
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                gradient: stemGradient(aLowerTop, aLowerBottom),
+              ),
+            ),
+          ),
+      ],
+    );
+  }
+}
+
+/// Filled triangle apex-up — the arrowhead atop the road-marking
+/// stem. Rendered with a linear alpha gradient so it sits inside the
+/// overall arrow-opacity ramp (top-alpha near the apex, bottom-alpha
+/// where the arrowhead meets the stem).
+class _ArrowheadPainter extends CustomPainter {
+  final Color color;
+  final double topAlpha;
+  final double bottomAlpha;
+
+  _ArrowheadPainter({
+    required this.color,
+    required this.topAlpha,
+    required this.bottomAlpha,
+  });
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final rect = Rect.fromLTWH(0, 0, size.width, size.height);
+    final paint = Paint()
+      ..style = PaintingStyle.fill
+      ..isAntiAlias = true
+      ..shader = LinearGradient(
+        begin: Alignment.topCenter,
+        end: Alignment.bottomCenter,
+        colors: [
+          color.withValues(alpha: topAlpha),
+          color.withValues(alpha: bottomAlpha),
+        ],
+      ).createShader(rect);
+    final path = Path()
+      ..moveTo(size.width / 2, 0) // apex
+      ..lineTo(0, size.height) // bottom-left
+      ..lineTo(size.width, size.height) // bottom-right
+      ..close();
+    canvas.drawPath(path, paint);
+  }
+
+  @override
+  bool shouldRepaint(covariant _ArrowheadPainter old) =>
+      old.color != color ||
+      old.topAlpha != topAlpha ||
+      old.bottomAlpha != bottomAlpha;
+}
+
+/// Full-viewport shimmer used while the arena is loading. Fills the
+/// entire Scaffold body (over the black backdrop) so the whole
+/// battleground area reads as loading rather than a floating card in
+/// the middle.
+class _ArenaShimmer extends StatelessWidget {
+  const _ArenaShimmer();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      color: Colors.black,
+      child: LayoutBuilder(
+        builder: (_, constraints) => ShimmerLoader(
+          width: constraints.maxWidth,
+          height: constraints.maxHeight,
+          borderRadius: 0,
+        ),
       ),
     );
   }

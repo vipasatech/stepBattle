@@ -123,7 +123,7 @@ class _PendingRowState extends ConsumerState<_PendingRow> {
     final waitingCount = battle.invitedUserIds
         .where((id) => !battle.acceptedUserIds.contains(id))
         .length;
-    final typeLabel = battle.type == BattleType.oneVsOne ? '1v1' : 'Group';
+    final typeLabel = battle.type == BattleType.oneVsOne ? '1v1' : 'Multi';
 
     return GlassCard(
       padding: const EdgeInsets.all(16),
@@ -153,7 +153,7 @@ class _PendingRowState extends ConsumerState<_PendingRow> {
                     ),
                     const SizedBox(height: 4),
                     Text(
-                      '$typeLabel \u00b7 ${battle.durationDays}-day \u00b7 +${battle.xpReward} XP',
+                      '$typeLabel \u00b7 ${battle.durationDays}-day \u00b7 +${battle.stakeXp} XP',
                       style: theme.textTheme.bodySmall
                           ?.copyWith(color: AppColors.onSurfaceVariant),
                     ),

@@ -208,8 +208,13 @@ abstract final class AppColors {
   static const _darkTertiaryContainer = Color(0xFFC084FC);
   static const _darkTertiaryDim = Color(0xFFA78BFA);
 
-  static const _darkGlassBackground = Color(0x99252528); // surfaceVariant @ 60%
-  static const _darkGlassGlow = Color(0x14A855F7);       // primary @ 8%
+  // Fully opaque now (was 0x99 = 60% during the BackdropFilter era).
+  // Without a live blur behind the card, transparency is just showing
+  // the scaffold background through — visually flat, and it forces the
+  // compositor to blend the card against the layer beneath on every
+  // paint. Opaque unlocks Flutter's fast "no-blend" path per card.
+  static const _darkGlassBackground = Color(0xFF252528);
+  static const _darkGlassGlow = Color(0x14A855F7); // primary @ 8%
 
   // ===========================================================================
   // LIGHT palette constants — counterparts.
@@ -245,7 +250,8 @@ abstract final class AppColors {
   static const _lightTertiaryContainer = Color(0xFFEDE4FE);
   static const _lightTertiaryDim = Color(0xFFA78BFA);
 
-  static const _lightGlassBackground = Color(0xCCFFFFFF);
+  // Fully opaque — same rationale as `_darkGlassBackground`.
+  static const _lightGlassBackground = Color(0xFFFFFFFF);
   static const _lightGlassGlow = Color(0x147C3AED); // primary @ 8%
 
   // ===========================================================================
@@ -284,4 +290,14 @@ abstract final class AppColors {
   static const lightErrorContainer = Color(0xFFFFD9DA);
   static const lightSuccess = Color(0xFF2E8B43);
   static const lightAmber = Color(0xFFD97706);
+
+  // ── Streak surface colours ────────────────────────────────────────────────
+  // Theme-invariant per product spec — the flame reads the same on both
+  // light and dark surfaces. Streak orange matches [lightAmber]; kept as
+  // a separate constant so a future re-brand doesn't couple streak to
+  // the amber semantic role. Previously duplicated as `_streakOrange` /
+  // `_streakGrey` in streak_strip.dart AND profile_stats_strip.dart —
+  // now single source.
+  static const streakActive = Color(0xFFD97706);
+  static const streakGrey = Color(0xFF9CA3AF);
 }

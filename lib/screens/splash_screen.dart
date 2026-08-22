@@ -61,6 +61,20 @@ class _SplashScreenState extends ConsumerState<SplashScreen>
     });
 
     _ceilingTimer = Timer(_maxDisplay, _forceRoute);
+
+    // MediaWarmup used to fire here (arena PNG preload + WebView
+    // engine prime). Both did real disk / cold-start work in the
+    // exact window when Flutter is trying to first-paint Home, so
+    // the transition off the splash was stealing cycles from the
+    // most sensitive frame in the whole session.
+    //
+    // The warmup now happens post-first-frame:
+    //   • Arena PNG preload → HomeScreen initState (idle time
+    //     immediately after Home paints)
+    //   • WebView engine prime → BattlesScreen initState (only
+    //     needed when the user is close to opening the arena)
+    // See `preloadArenaAfterFirstFrame` / `primeWebViewIdle` on the
+    // respective screens.
   }
 
   @override

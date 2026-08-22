@@ -1,6 +1,7 @@
 import 'package:health/health.dart';
 import 'package:permission_handler/permission_handler.dart';
 import '../utils/app_logger.dart';
+import '../utils/permission_coordinator.dart';
 
 /// Central permission manager.
 /// - Health Connect (steps, calories) — via `health` package
@@ -15,18 +16,28 @@ class PermissionService {
   ];
 
   /// Check all required permissions. Returns map of what's granted.
+  ///
+  /// Health Connect availability is checked SEPARATELY from grant state.
+  /// Some devices (older MIUI/HyperOS, some tablets, Nothing) don't have
+  /// Health Connect installable at all. On those we can't grant it, so
+  /// including it in the "missing" set would trigger the permission
+  /// dialog on every foreground with no way to satisfy it — exactly the
+  /// nag testers reported.
   Future<PermissionSummary> checkAll() async {
-    final health = await _checkHealth();
+    final healthAvailable = await _healthConnectAvailable();
+    final health = healthAvailable ? await _checkHealth() : false;
     final notifications = await Permission.notification.isGranted;
     final activity = await Permission.activityRecognition.isGranted;
 
     final summary = PermissionSummary(
       health: health,
+      healthConnectAvailable: healthAvailable,
       notifications: notifications,
       activityRecognition: activity,
     );
     AppLogger.permission.i('checkAll', fields: {
       'health': health,
+      'healthConnectAvailable': healthAvailable,
       'notifications': notifications,
       'activityRecognition': activity,
       'allGranted': summary.allGranted,
@@ -34,19 +45,55 @@ class PermissionService {
     return summary;
   }
 
+  /// Whether the device even has Health Connect available to grant.
+  /// Uses `getHealthConnectSdkStatus()` from the `health` package.
+  /// Returns false if the SDK reports unavailable / needs update / any
+  /// error — matching the "there's nothing to grant here" cases.
+  Future<bool> _healthConnectAvailable() async {
+    try {
+      final status = await _health.getHealthConnectSdkStatus();
+      // Only `sdkAvailable` is truly grantable. `sdkUnavailable` and
+      // `sdkUnavailableProviderUpdateRequired` both mean Health Connect
+      // isn't usable right now — we shouldn't treat those as "missing
+      // permission" and nag the user.
+      return status == HealthConnectSdkStatus.sdkAvailable;
+    } catch (_) {
+      // Any error path — plugin not initialised, platform unsupported,
+      // etc. — is treated as "not available."
+      return false;
+    }
+  }
+
   /// Request all permissions in sequence. Shows native OS dialogs.
+  ///
+  /// Every request goes through [PermissionCoordinator] so it can't
+  /// collide with a parallel request from elsewhere (main-shell's
+  /// notification-permission fire on login was the historical culprit —
+  /// Android drops one of two concurrent dialogs with "Can request only
+  /// one set of permissions at a time" and the dropped one's Future
+  /// never resolves, hanging the UI). The coordinator's dedupe means a
+  /// second caller for the same permission piggybacks on the same OS
+  /// dialog rather than firing a duplicate.
   Future<PermissionSummary> requestAll() async {
     AppLogger.permission.i('requestAll:start');
     // 1. Activity recognition (Android 10+) — required for steps
     if (!await Permission.activityRecognition.isGranted) {
-      final status = await Permission.activityRecognition.request();
+      final status = await PermissionCoordinator.instance.enqueue(
+        tag: 'activityRecognition',
+        priority: PermissionPriority.activityRecognition,
+        action: () => Permission.activityRecognition.request(),
+      );
       AppLogger.permission
           .i('activityRecognition:request', fields: {'status': status.name});
     }
 
     // 2. Notifications (Android 13+)
     if (!await Permission.notification.isGranted) {
-      final status = await Permission.notification.request();
+      final status = await PermissionCoordinator.instance.enqueue(
+        tag: 'notification',
+        priority: PermissionPriority.notification,
+        action: () => Permission.notification.request(),
+      );
       AppLogger.permission
           .i('notification:request', fields: {'status': status.name});
     }
@@ -70,9 +117,18 @@ class PermissionService {
     try {
       final permissions =
           _healthTypes.map((_) => HealthDataAccess.READ).toList();
-      final granted = await _health.requestAuthorization(
-        _healthTypes,
-        permissions: permissions,
+      // Serialize through the coordinator so a Health Connect dialog
+      // can't overlap with an activity/notification dialog. Health
+      // Connect launches its own screen (not a native OS dialog) but
+      // still counts against Android's "one permission flow at a time"
+      // budget in some device flavours.
+      final granted = await PermissionCoordinator.instance.enqueue(
+        tag: 'health',
+        priority: PermissionPriority.health,
+        action: () => _health.requestAuthorization(
+          _healthTypes,
+          permissions: permissions,
+        ),
       );
       AppLogger.permission
           .i('health:request', fields: {'granted': granted});
@@ -140,17 +196,38 @@ enum RunLocationStatus {
 /// Snapshot of all permission states.
 class PermissionSummary {
   final bool health;
+  /// Whether Health Connect is installable on this device at all.
+  /// When false, [health] is meaningless and should not gate the
+  /// permission dialog — see [allGranted].
+  final bool healthConnectAvailable;
   final bool notifications;
   final bool activityRecognition;
 
   const PermissionSummary({
     required this.health,
+    required this.healthConnectAvailable,
     required this.notifications,
     required this.activityRecognition,
   });
 
-  /// All critical permissions granted?
-  bool get allGranted => health && activityRecognition;
+  /// Only ACTIVITY_RECOGNITION is compulsory. Health Connect and
+  /// Notifications are nice-to-haves that used to gate the dialog and
+  /// nag users on every foreground return:
+  ///
+  ///   • Health Connect — the hardware pedometer already covers step
+  ///     tracking. HC only adds value when an OEM app feeds it; the
+  ///     Home "From pedometer · tap to set up sync" hint + the
+  ///     `/profile/health-setup` guide are the discoverable path for
+  ///     users who want richer data. Nagging on every foreground
+  ///     because HC isn't connected wasted user attention.
+  ///
+  ///   • Notifications — desirable for battle invites / reminders but
+  ///     never blocks core functionality. Users who denied
+  ///     notifications shouldn't see the "Almost ready!" dialog again.
+  ///
+  /// Trade-off: if activity recognition itself is denied, the dialog
+  /// still fires — without it we can't count steps at all.
+  bool get allGranted => activityRecognition;
 
   /// Any permissions missing?
   bool get anyMissing => !allGranted;

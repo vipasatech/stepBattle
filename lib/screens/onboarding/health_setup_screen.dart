@@ -1,12 +1,13 @@
 ﻿import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:hive/hive.dart';
+import 'package:url_launcher/url_launcher.dart';
 import '../../config/colors.dart';
 import '../../providers/step_provider.dart';
 import '../../services/health_setup_advice.dart';
 import '../../services/native_step_service.dart';
+import '../../widgets/shimmer_loader.dart';
 
 /// Detects the device's OEM and walks the user through the exact toggle
 /// they need to flip to get Health Connect receiving step data.
@@ -102,8 +103,16 @@ class _HealthSetupScreenState extends ConsumerState<HealthSetupScreen> {
                 ?.copyWith(fontWeight: FontWeight.w700)),
       ),
       body: advice == null
-          ? Center(
-              child: CircularProgressIndicator(color: AppColors.primary))
+          ? ListView(
+              padding: const EdgeInsets.fromLTRB(20, 12, 20, 32),
+              children: const [
+                ShimmerLoader(height: 100, borderRadius: 20),
+                SizedBox(height: 12),
+                ShimmerCard(),
+                SizedBox(height: 12),
+                ShimmerCard(),
+              ],
+            )
           : ListView(
               padding: const EdgeInsets.fromLTRB(20, 12, 20, 32),
               children: [
@@ -334,14 +343,28 @@ class _InstallCard extends StatelessWidget {
   });
 
   Future<void> _open(BuildContext context) async {
-    // We don't have url_launcher in deps yet — copy URL to clipboard +
-    // toast so user can paste in Play Store. Avoids adding a package
-    // just for this one flow.
-    await Clipboard.setData(ClipboardData(text: url));
-    if (!context.mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Play Store URL copied to clipboard')),
-    );
+    // Play Store URLs already do the right thing — if the target app is
+    // installed the store surfaces its "Open" button; if not, "Install".
+    // No need for a market:// scheme.
+    //
+    // Previous version copied the URL to clipboard because "url_launcher
+    // isn't in deps" — that stopped being true when subscriptions shipped
+    // and shipped this button as a no-op on Motorola / Xiaomi / Nothing.
+    final uri = Uri.parse(url);
+    try {
+      final ok = await launchUrl(uri, mode: LaunchMode.externalApplication);
+      if (!ok && context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Could not open Play Store.')),
+        );
+      }
+    } catch (_) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Could not open Play Store.')),
+        );
+      }
+    }
   }
 
   @override

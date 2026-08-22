@@ -25,7 +25,10 @@ class DailyMissionCard extends StatelessWidget {
     final hasProgress = progress != null && progress!.currentValue > 0;
     final isLocked = !isComplete && !hasProgress && mission.category == MissionCategory.battle;
 
-    return GestureDetector(
+    // RepaintBoundary — the progress bar animates independently on each
+    // card. Without this, a step-tick that advances one mission's bar
+    // repaints the entire missions list.
+    return RepaintBoundary(child: GestureDetector(
       onTap: onTap,
       child: Opacity(
         opacity: isLocked ? 0.5 : 1.0,
@@ -155,7 +158,7 @@ class DailyMissionCard extends StatelessWidget {
           ),
         ),
       ),
-    );
+    ));
   }
 
   IconData _categoryIcon(MissionCategory cat) => switch (cat) {

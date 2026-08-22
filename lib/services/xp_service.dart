@@ -3,6 +3,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../config/constants.dart';
 import '../utils/app_logger.dart';
+import 'xp_celebration_bus.dart';
 
 /// XP awards on the Supabase `profiles` table.
 ///
@@ -26,9 +27,15 @@ class XPService {
       : _supabase = supabase ?? Supabase.instance.client;
 
   /// Award XP to a user. Returns true if user levelled up.
+  ///
+  /// [reason] is a short human label shown under the "+X XP" number
+  /// in the celebration popup ("Sign-up bonus", "7-day streak",
+  /// "Keep Streak Alive"). Purely cosmetic — the actual XP is stored
+  /// as a monotonic total on the profile row.
   Future<bool> awardXP({
     required String userId,
     required int amount,
+    String? reason,
   }) async {
     if (amount <= 0) {
       AppLogger.xp.t('awardXP:noop',
@@ -79,6 +86,12 @@ class XPService {
         'leveledUp': leveledUp,
         'xpEarnedTodayBefore': existingToday,
       });
+      // Surface the award to the UI celebration overlay. Queued so
+      // rapid back-to-back awards (streak + mission on the same
+      // sync) each play their own animation instead of merging.
+      XPCelebrationBus.instance.enqueue(
+        XPAwardEvent(amount: amount, reason: reason),
+      );
       return leveledUp;
     } catch (e, s) {
       AppLogger.xp.e('awardXP:failed',
@@ -89,21 +102,89 @@ class XPService {
     }
   }
 
-  /// Calculate XP earned from steps (10 XP per 1000 steps).
-  int xpFromSteps(int steps) {
-    return (steps ~/ 1000) * AppConstants.xpPer1000Steps;
-  }
-
-  /// Check if daily step goal was reached and award bonus XP. Idempotent
-  /// because step XP gating happens upstream in [StepService._awardStepXP].
-  Future<bool> checkDailyGoalXP({
+  /// Streak-based XP awards — called after the daily streak counter
+  /// has been persisted. Two payouts:
+  ///
+  ///   • First-ever 7-day streak → +50 XP (once per user, guarded by
+  ///     `profiles.has_awarded_7day_streak`).
+  ///   • Every 30-day milestone (30, 60, 90, …) crossed by the user's
+  ///     bestStreak → +100 XP per new milestone. Guarded by
+  ///     `profiles.last_awarded_30day_milestone` so a broken-then-
+  ///     rebuilt streak never re-pays milestones the user already
+  ///     received.
+  ///
+  /// Returns the total XP awarded in this call (0 if nothing new).
+  Future<int> checkStreakMilestones({
     required String userId,
-    required int todaySteps,
-    required int dailyGoal,
+    required int currentStreak,
+    required int bestStreak,
   }) async {
-    if (todaySteps >= dailyGoal) {
-      return awardXP(userId: userId, amount: AppConstants.xpDailyGoalReached);
+    if (currentStreak <= 0 && bestStreak <= 0) return 0;
+    try {
+      final row = await _supabase
+          .from('profiles')
+          .select(
+              'has_awarded_7day_streak, last_awarded_30day_milestone')
+          .eq('id', userId)
+          .maybeSingle();
+      if (row == null) return 0;
+
+      final has7DayFlag =
+          (row['has_awarded_7day_streak'] as bool?) ?? false;
+      final last30Milestone =
+          (row['last_awarded_30day_milestone'] as num?)?.toInt() ?? 0;
+
+      int totalAwarded = 0;
+      final updates = <String, dynamic>{};
+
+      // 7-day: once ever, first time bestStreak reaches 7. Never
+      // re-fires after a streak break.
+      if (!has7DayFlag && bestStreak >= 7) {
+        await awardXP(
+          userId: userId,
+          amount: AppConstants.xpFirst7DayStreak,
+          reason: '7-day streak',
+        );
+        totalAwarded += AppConstants.xpFirst7DayStreak;
+        updates['has_awarded_7day_streak'] = true;
+      }
+
+      // 30-day: every milestone the user's bestStreak has crossed
+      // that we haven't paid out yet. `(bestStreak ~/ 30) * 30` is the
+      // highest completed milestone; the diff from what we last paid
+      // is how many +100 payouts we owe.
+      final currentMilestone = (bestStreak ~/ 30) * 30;
+      if (currentMilestone > last30Milestone) {
+        final milestonesOwed =
+            (currentMilestone - last30Milestone) ~/ 30;
+        for (var i = 0; i < milestonesOwed; i++) {
+          final milestoneReached =
+              last30Milestone + (i + 1) * 30;
+          await awardXP(
+            userId: userId,
+            amount: AppConstants.xp30DayStreakMilestone,
+            reason: '$milestoneReached-day streak',
+          );
+          totalAwarded += AppConstants.xp30DayStreakMilestone;
+        }
+        updates['last_awarded_30day_milestone'] = currentMilestone;
+      }
+
+      if (updates.isNotEmpty) {
+        await _supabase.from('profiles').update(updates).eq('id', userId);
+        AppLogger.xp.i('checkStreakMilestones:awarded', fields: {
+          'userId': userId,
+          'currentStreak': currentStreak,
+          'bestStreak': bestStreak,
+          'totalAwarded': totalAwarded,
+          ...updates,
+        });
+      }
+      return totalAwarded;
+    } catch (e, s) {
+      AppLogger.xp.e('checkStreakMilestones:failed',
+          fields: {'userId': userId}, error: e, stack: s);
+      return 0;
     }
-    return false;
   }
 }

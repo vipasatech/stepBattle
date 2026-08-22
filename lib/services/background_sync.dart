@@ -12,10 +12,12 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:workmanager/workmanager.dart';
 
 import '../utils/app_logger.dart';
+import '../utils/cross_isolate_kv.dart';
 import 'google_fit_service.dart';
 import 'health_service.dart';
 import 'mission_service.dart';
 import 'native_step_service.dart';
+import 'observability_service.dart';
 import 'persistent_notifications.dart';
 import 'step_service.dart';
 import 'step_source_aggregator.dart';
@@ -40,26 +42,32 @@ const _periodicTaskName = 'stepbattle-step-sync';
 const _periodicTaskTag = 'stepSync';
 const _foregroundServiceId = 4401;
 
-/// Hive key (in the existing `step_tracker` box) storing the millisecond
-/// timestamp of the foreground service's last tick. Used by the WorkManager
-/// dispatcher to skip work while the always-on service is keeping things
-/// fresh on its own. Stale beyond [_fgAliveTtl] (e.g., after a swipe-kill),
-/// the WorkManager fallback re-engages.
-const _fgAliveKey = 'fg_alive_at_ms';
+/// SharedPreferences-hosted timestamp of the foreground service's last
+/// tick. Used by the WorkManager dispatcher to skip work while the
+/// always-on service is keeping things fresh on its own. Stale beyond
+/// [_fgAliveTtl] (e.g., after a swipe-kill), the WorkManager fallback
+/// re-engages.
+///
+/// Storage moved from Hive → SharedPreferences in the Level B refactor
+/// so the FGS isolate and the WorkManager isolate coordinate through
+/// a process-safe primitive instead of racing over the same Hive file.
 const _fgAliveTtl = Duration(minutes: 10);
 
-void _markForegroundAlive() {
+Future<void> _markForegroundAlive() async {
   try {
-    Hive.box(NativeStepService.boxName)
-        .put(_fgAliveKey, DateTime.now().millisecondsSinceEpoch);
+    await CrossIsolateKV.setInt(
+      CrossIsolateKV.fgAliveAtMs,
+      DateTime.now().millisecondsSinceEpoch,
+    );
   } catch (_) {}
 }
 
-bool _foregroundRecentlyAlive() {
+Future<bool> _foregroundRecentlyAlive() async {
   try {
-    final ms = Hive.box(NativeStepService.boxName).get(_fgAliveKey);
-    if (ms is! int) return false;
-    return DateTime.now().millisecondsSinceEpoch - ms < _fgAliveTtl.inMilliseconds;
+    final ms = await CrossIsolateKV.getInt(CrossIsolateKV.fgAliveAtMs);
+    if (ms == null) return false;
+    return DateTime.now().millisecondsSinceEpoch - ms <
+        _fgAliveTtl.inMilliseconds;
   } catch (_) {
     return false;
   }
@@ -74,15 +82,23 @@ bool _supabaseReadyInThisIsolate = false;
 // Shared entrypoint — runs in whatever background isolate calls it.
 // =============================================================================
 
-/// Initialize the background isolate (Hive + dotenv + Supabase) and return the
-/// signed-in user id, or null if env/session is unavailable. Idempotent per
-/// isolate.
+/// Initialize the background isolate (Hive + dotenv + Supabase + KV) and
+/// return the signed-in user id, or null if env/session is unavailable.
+/// Idempotent per isolate.
+///
+/// The BG isolate opens its own [NativeStepService.backgroundBoxName]
+/// box, NOT the main-isolate `boxName` — that separation is the Level B
+/// fix that eliminates the two-isolates-on-one-file-handle race that
+/// was flooding Diagnostics with `FileSystemException: File closed`.
 Future<String?> _ensureBackgroundInitAndUid() async {
   WidgetsFlutterBinding.ensureInitialized();
-  if (!Hive.isBoxOpen(NativeStepService.boxName)) {
+  if (!Hive.isBoxOpen(NativeStepService.backgroundBoxName)) {
     await Hive.initFlutter();
-    await Hive.openBox(NativeStepService.boxName);
+    await Hive.openBox(NativeStepService.backgroundBoxName);
   }
+  // Warm the SharedPreferences singleton for this isolate — sync
+  // reads (e.g. _renderTrack) rely on the cached instance.
+  await CrossIsolateKV.init();
   if (!dotenv.isInitialized) {
     await dotenv.load(fileName: '.env');
   }
@@ -119,19 +135,36 @@ Future<DateTime?> _soonestActiveBattleEnd(String uid) async {
 /// self-contained (no Riverpod, no widget tree) so it works from a WorkManager
 /// callback or a foreground-service isolate. Never throws.
 Future<void> headlessStepSync() async {
+  final stopwatch = Stopwatch()..start();
+  ObservabilityService.breadcrumb('headless.start', category: 'bg.stepSync');
   try {
     final uid = await _ensureBackgroundInitAndUid();
     if (uid == null) {
       AppLogger.step.w('headlessSync:noSessionOrEnv');
+      ObservabilityService.breadcrumb(
+        'headless.skip',
+        category: 'bg.stepSync',
+        data: {'reason': 'noSessionOrEnv'},
+      );
       return;
     }
 
     // Read steps. Give the native pedometer stream a moment to emit its
     //    first reading; Health Connect reads async and is the preferred source
     //    anyway, so we still get a value even if native is cold.
-    final native = NativeStepService();
+    //
+    // BG-isolate services use the background-scoped Hive box — NOT the
+    // main-isolate box — so we don't collide with the main isolate over
+    // one file handle. See NativeStepService.backgroundBoxName.
+    //
+    // GoogleFitService also needs the box passed explicitly; without
+    // it, its constructor defaults to `Hive.box(boxName)` which throws
+    // `HiveError: Box not found` in the bg isolate (that box is never
+    // opened here). HealthService is Hive-free so it needs no arg.
+    final bgBox = Hive.box(NativeStepService.backgroundBoxName);
+    final native = NativeStepService(box: bgBox);
     final hc = HealthService();
-    final fit = GoogleFitService();
+    final fit = GoogleFitService(box: bgBox);
     final aggregator = StepSourceAggregator(
       native: native,
       healthService: hc,
@@ -141,7 +174,13 @@ Future<void> headlessStepSync() async {
     await Future<void>.delayed(const Duration(seconds: 2));
     final reading = await aggregator.readWithDebug();
     if (reading.aggregate <= 0) {
-      AppLogger.step.i('headlessSync:noSteps', fields: {'uid': uid});
+      AppLogger.step.i('headlessSync:noSteps',
+          fields: {'uid': uid, 'ms': stopwatch.elapsedMilliseconds});
+      ObservabilityService.breadcrumb(
+        'headless.noSteps',
+        category: 'bg.stepSync',
+        data: {'ms': stopwatch.elapsedMilliseconds},
+      );
       return;
     }
 
@@ -162,10 +201,20 @@ Future<void> headlessStepSync() async {
     //    is the important bit; widget freshness is best-effort.
     await _pushHomeWidget(uid: uid, steps: reading.aggregate);
 
-    AppLogger.step.i('headlessSync:done',
-        fields: {'uid': uid, 'steps': reading.aggregate, 'source': source});
+    AppLogger.step.i('headlessSync:done', fields: {
+      'uid': uid,
+      'steps': reading.aggregate,
+      'source': source,
+      'ms': stopwatch.elapsedMilliseconds,
+    });
+    ObservabilityService.breadcrumb('headless.done', category: 'bg.stepSync', data: {
+      'steps': reading.aggregate,
+      'source': source,
+      'ms': stopwatch.elapsedMilliseconds,
+    });
   } catch (e, s) {
-    AppLogger.step.e('headlessSync:failed', error: e, stack: s);
+    AppLogger.step.e('headlessSync:failed',
+        fields: {'ms': stopwatch.elapsedMilliseconds}, error: e, stack: s);
   }
 }
 
@@ -206,16 +255,31 @@ Future<void> _pushHomeWidget({required String uid, required int steps}) async {
 void backgroundSyncDispatcher() {
   Workmanager().executeTask((task, inputData) async {
     WidgetsFlutterBinding.ensureInitialized();
-    // Open the box so we can read the foreground-alive flag.
-    if (!Hive.isBoxOpen(NativeStepService.boxName)) {
+    // Open the BG-scoped box (never the main box — see backgroundBoxName
+    // docs). The fg-alive flag now lives in SharedPreferences, but we
+    // still need the box open for headlessStepSync's NativeStepService.
+    if (!Hive.isBoxOpen(NativeStepService.backgroundBoxName)) {
       try {
         await Hive.initFlutter();
-        await Hive.openBox(NativeStepService.boxName);
+        await Hive.openBox(NativeStepService.backgroundBoxName);
       } catch (_) {}
     }
-    if (_foregroundRecentlyAlive()) {
+    // Warm the SharedPreferences singleton so the fg-alive check reads
+    // the current value, not null.
+    await CrossIsolateKV.init();
+    ObservabilityService.breadcrumb(
+      'workmanager.tick',
+      category: 'bg.stepSync',
+      data: {'task': task},
+    );
+    if (await _foregroundRecentlyAlive()) {
       // Always-on foreground service is keeping things fresh; skip duplicate work.
       AppLogger.step.t('headlessSync:skipped_fg_alive');
+      ObservabilityService.breadcrumb(
+        'workmanager.skip',
+        category: 'bg.stepSync',
+        data: {'reason': 'fg_alive'},
+      );
       return true;
     }
     await headlessStepSync();
@@ -400,11 +464,23 @@ Future<_BattleNotifContent?> _renderBattle(String uid) async {
       final oppSteps = (opp['current_steps'] as int?) ?? 0;
       final delta = mySteps - oppSteps;
 
-      final relationLine = delta > 0
-          ? "You're ahead by ${_fmtNumber(delta)} steps"
-          : delta < 0
-              ? "You're behind by ${_fmtNumber(-delta)} steps"
-              : "You're tied";
+      // Four branches, ordered by specificity:
+      //   1. Fresh battle (both scores 0) → "First move takes the lead"
+      //      pre-1.1.6+34 this fell through to `delta == 0 → "You're
+      //      tied"`, which read as if we'd been competing but actually
+      //      neither user has moved yet.
+      //   2. Genuine tie at non-zero → "Tied at N — push ahead"
+      //      previously also "You're tied" — now names the score so
+      //      the user sees the competitive standoff explicitly.
+      //   3. Ahead — unchanged copy.
+      //   4. Behind — unchanged copy.
+      final relationLine = (mySteps == 0 && oppSteps == 0)
+          ? 'First move takes the lead'
+          : delta > 0
+              ? "You're ahead by ${_fmtNumber(delta)} steps"
+              : delta < 0
+                  ? "You're behind by ${_fmtNumber(-delta)} steps"
+                  : 'Tied at ${_fmtNumber(mySteps)} — push ahead';
 
       body = '$relationLine$remainingStr';
       bigText = 'You vs $oppName\n'
@@ -423,7 +499,14 @@ Future<_BattleNotifContent?> _renderBattle(String uid) async {
       final gap = leaderSteps - mySteps;
 
       String rankLine;
-      if (myRank == 1) {
+      // Fresh battle: leaderSteps == 0 means every accepted participant
+      // is at 0. Sort order among 0s is planner-arbitrary, so "myRank"
+      // and "Leading by 0" are meaningless. Say what's actually true:
+      // the battle just started.
+      if (leaderSteps == 0) {
+        rankLine =
+            'Battle just started · ${participants.length} players at the line';
+      } else if (myRank == 1) {
         // Lead vs the second place.
         final second = participants.length > 1
             ? participants[1]['current_steps'] as int
@@ -459,15 +542,15 @@ Future<_BattleNotifContent?> _renderBattle(String uid) async {
 
 /// Content for the TRACK notification. Just elapsed time for now; the live
 /// session screen owns the rich UI. Returns null when no Track is active.
+///
+/// Reads from SharedPreferences (via [CrossIsolateKV]) rather than Hive so
+/// the main-isolate writes in [RunTrackingService] and this BG-isolate
+/// read never collide on the shared Hive file handle.
 ({String title, String body, String bigText})? _renderTrack() {
   try {
-    // Hive keys mirror `RunTrackingService.activeTrack*Key` — kept as
-    // literals here because importing across the background-service
-    // isolate boundary tends to break the plugin's entry-point
-    // registration.
-    final box = Hive.box(NativeStepService.boxName);
-    final startedMs = box.get('active_track_started_at');
-    if (startedMs is! int) return null;
+    final startedMs =
+        CrossIsolateKV.getIntSync(CrossIsolateKV.activeTrackStartedAt);
+    if (startedMs == null) return null;
 
     final started = DateTime.fromMillisecondsSinceEpoch(startedMs);
     final elapsed = DateTime.now().difference(started);
@@ -476,11 +559,13 @@ Future<_BattleNotifContent?> _renderBattle(String uid) async {
     // Read the mirror set. Missing values render as "—" so a race
     // between `start()` and the first `_emit()` doesn't crash the
     // notification with a NaN.
-    final steps = (box.get('active_track_steps') as num?)?.toInt() ?? 0;
+    final steps =
+        CrossIsolateKV.getIntSync(CrossIsolateKV.activeTrackSteps) ?? 0;
     final distanceM =
-        (box.get('active_track_distance_m') as num?)?.toDouble() ?? 0.0;
+        CrossIsolateKV.getDoubleSync(CrossIsolateKV.activeTrackDistanceM) ??
+            0.0;
     final paceSecKm =
-        (box.get('active_track_pace_sec_km') as num?)?.toDouble();
+        CrossIsolateKV.getDoubleSync(CrossIsolateKV.activeTrackPaceSecKm);
 
     final distanceStr = _fmtDistance(distanceM);
     final paceStr = _fmtPace(paceSecKm);
@@ -555,21 +640,34 @@ class _StepSyncTaskHandler extends TaskHandler {
 
   @override
   Future<void> onStart(DateTime timestamp, TaskStarter starter) async {
-    _markForegroundAlive();
+    unawaited(_markForegroundAlive());
     // This isolate gets a fresh PersistentNotifications instance — initialize
     // with a no-op tap callback (the MAIN isolate's init owns tap routing).
     await PersistentNotifications.instance.init(onTap: (_) {});
     await headlessStepSync();
     await _scheduleFinalSync();
     await _refreshAll(force: true);
+    // 30s heartbeat exists SOLELY to re-issue the secondary battle /
+    // track notifications quickly if the user swipe-dismisses them
+    // (the FGS summary self-heals through `onNotificationDismissed`
+    // and doesn't need this). Gate the poll on whether either
+    // secondary is currently posted — when the user has no active
+    // battle and no live Track session, this is pure waste and the
+    // 5-minute `onRepeatEvent` is the right cadence for the summary.
+    //
+    // Before this gate, the timer fired ~6 Supabase reads/minute
+    // for every signed-in Android user regardless of state; now
+    // idle sessions do zero periodic reads from this timer.
     _notifTimer = Timer.periodic(const Duration(seconds: 30), (_) {
+      final pn = PersistentNotifications.instance;
+      if (!pn.isBattlePosted && !pn.isTrackPosted) return;
       _refreshAll(force: true);
     });
   }
 
   @override
   void onRepeatEvent(DateTime timestamp) {
-    _markForegroundAlive();
+    unawaited(_markForegroundAlive());
     // Fire-and-forget: the interface is synchronous.
     headlessStepSync();
     _scheduleFinalSync();
@@ -793,6 +891,50 @@ class BackgroundSync {
         AppLogger.battle.i('backgroundSync:fgServiceStopped');
       }
     } catch (_) {}
+  }
+
+  /// Force-restart the foreground service. Used by the "Live tracking
+  /// paused" banner on Home when the FGS heartbeat has gone stale.
+  ///
+  /// The regular [startService] early-returns when
+  /// `FlutterForegroundTask.isRunningService` is true — which reflects
+  /// the plugin's INTERNAL record of "we called startService and
+  /// haven't called stopService," NOT whether the service is actually
+  /// ticking. When Doze / OEM battery-savers / an isolate crash have
+  /// silently killed the service's periodic callback, isRunningService
+  /// stays true, [startService] no-ops, and the Resume button becomes
+  /// a dead click. This method bypasses the guard: it stops
+  /// unconditionally (wrapped in try/catch — "not running" throws) and
+  /// starts fresh.
+  static Future<void> restartService() async {
+    if (!_supported) return;
+    try {
+      // Stop unconditionally. If it wasn't actually running, this
+      // throws harmlessly — the try/catch above swallows it.
+      try {
+        await FlutterForegroundTask.stopService();
+      } catch (_) {}
+      // Give the plugin's internal state a beat to settle so the
+      // subsequent startService doesn't collide with the shutdown.
+      await Future<void>.delayed(const Duration(milliseconds: 300));
+      // Start fresh — call the plugin directly so we're not stopped by
+      // startService()'s "already running" guard (which may still be
+      // stuck at true after the stop above, depending on plugin
+      // version).
+      await FlutterForegroundTask.startService(
+        serviceId: _foregroundServiceId,
+        notificationTitle: 'StepBattle',
+        notificationText: 'Tracking your steps',
+        notificationIcon: const NotificationIcon(
+          metaDataName: 'com.stepbattle.notification.icon',
+        ),
+        callback: foregroundTaskStartCallback,
+      );
+      AppLogger.battle.i('backgroundSync:fgServiceRestarted');
+    } catch (e, s) {
+      AppLogger.battle.e('backgroundSync:fgServiceRestartFailed',
+          error: e, stack: s);
+    }
   }
 
   /// Nudge the running foreground service to immediately refresh its

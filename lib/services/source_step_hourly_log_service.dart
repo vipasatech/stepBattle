@@ -3,6 +3,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../models/source_step_hourly_log_model.dart';
 import '../utils/app_logger.dart';
+import '../utils/hive_lifecycle.dart';
 import 'device_info_service.dart';
 import 'native_step_service.dart';
 import 'step_source_aggregator.dart';
@@ -105,9 +106,22 @@ class SourceStepHourlyLogService {
           .from('source_step_hourly')
           .upsert(row, onConflict: 'user_id,hour_start');
 
-      await _box.put(_kLastWrittenHourKey, hourKey);
-      await _box.put(_kLastWrittenAtMs, now.millisecondsSinceEpoch);
+      // Persist last-written markers via the live shared box. The
+      // captured [_box] handle can go stale after a WorkManager
+      // background isolate takes over; falling through to
+      // safeSharedBox() re-fetches the current handle each call.
+      final box = safeSharedBox() ?? _box;
+      try {
+        await box.put(_kLastWrittenHourKey, hourKey);
+        await box.put(_kLastWrittenAtMs, now.millisecondsSinceEpoch);
+      } catch (e) {
+        // Skip the marker write on a benign close race — the Supabase
+        // upsert above already succeeded, so we won't double-write on
+        // the next tick even without the throttle marker.
+        if (!isBenignBoxClosed(e)) rethrow;
+      }
     } catch (e, s) {
+      if (isBenignBoxClosed(e)) return;
       AppLogger.step.e('sourceHourly:writeFailed',
           fields: {'userId': userId}, error: e, stack: s);
       rethrow;

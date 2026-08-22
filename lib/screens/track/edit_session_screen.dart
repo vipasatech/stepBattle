@@ -10,6 +10,8 @@ import '../../models/run_session_model.dart';
 import '../../providers/auth_provider.dart';
 import '../../providers/run_session_provider.dart';
 import '../../utils/app_logger.dart';
+import '../../widgets/app_network_image.dart';
+import '../../widgets/shimmer_loader.dart';
 
 /// Edit an already-saved Track session.
 ///
@@ -236,8 +238,16 @@ class _EditSessionScreenState extends ConsumerState<EditSessionScreen> {
         ],
       ),
       body: sessionAsync.when(
-        loading: () =>
-            const Center(child: CircularProgressIndicator()),
+        loading: () => ListView(
+          padding: const EdgeInsets.fromLTRB(20, 16, 20, 32),
+          children: const [
+            ShimmerLoader(height: 56),
+            SizedBox(height: 12),
+            ShimmerLoader(height: 56),
+            SizedBox(height: 12),
+            ShimmerCard(),
+          ],
+        ),
         error: (e, _) => Center(
           child: Padding(
             padding: const EdgeInsets.all(24),
@@ -394,33 +404,11 @@ class _ExistingThumb extends StatelessWidget {
       child: Stack(
         clipBehavior: Clip.none,
         children: [
-          ClipRRect(
+          AppNetworkImage(
+            url: url,
+            width: 88,
+            height: 88,
             borderRadius: BorderRadius.circular(14),
-            child: Image.network(
-              url,
-              width: 88,
-              height: 88,
-              fit: BoxFit.cover,
-              loadingBuilder: (_, child, progress) {
-                if (progress == null) return child;
-                return Container(
-                  color: AppColors.surfaceContainerHigh,
-                  alignment: Alignment.center,
-                  child: const SizedBox(
-                    width: 18,
-                    height: 18,
-                    child:
-                        CircularProgressIndicator(strokeWidth: 2),
-                  ),
-                );
-              },
-              errorBuilder: (_, __, ___) => Container(
-                color: AppColors.surfaceContainerHigh,
-                alignment: Alignment.center,
-                child: Icon(Icons.broken_image_outlined,
-                    color: AppColors.onSurfaceVariant, size: 22),
-              ),
-            ),
           ),
           Positioned(
             top: -6,

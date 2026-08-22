@@ -5,7 +5,6 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../models/friend_relationship_model.dart';
 import '../models/user_model.dart';
 import '../providers/friend_provider.dart';
-import '../providers/notification_provider.dart';
 import 'friend_request_toast.dart';
 
 /// Wraps the navigation shell so a non-blocking friend-request toast can
@@ -90,16 +89,33 @@ class _FriendRequestToastHostState
 
   Future<void> _markFriendRequestNotificationRead(
       String uid, FriendRelationship rel) async {
-    final notifications = ref.read(notificationsProvider).valueOrNull ?? [];
-    for (final n in notifications) {
-      if (n.read) continue;
-      // Supabase writers stamp snake_case (`relationship_id`); legacy
-      // camelCase fallback covers any pre-migration rows.
-      final relId = n.data['relationship_id'] ?? n.data['relationshipId'];
-      if (relId == rel.relationshipId) {
-        await markNotificationRead(n.id);
-        break;
-      }
+    // Direct Supabase update — no need to hold `notificationsProvider`
+    // open just to find one row. `contains('data', {...})` matches on
+    // the JSONB `data` payload; combined with `user_id = uid` and
+    // `read = false` this narrows to the exact row the writer stamped
+    // when the friend-request notification was created. No-op if no
+    // matching row exists (older row already read, or writer used the
+    // legacy `relationshipId` camelCase key).
+    final supabase = Supabase.instance.client;
+    try {
+      await supabase
+          .from('notifications')
+          .update({'read': true})
+          .eq('user_id', uid)
+          .eq('read', false)
+          .contains('data', {'relationship_id': rel.relationshipId});
+      // Legacy camelCase key — older writers used `relationshipId`;
+      // one extra update covers that migration tail. Cheap when there
+      // is no matching row (returns 0-affected).
+      await supabase
+          .from('notifications')
+          .update({'read': true})
+          .eq('user_id', uid)
+          .eq('read', false)
+          .contains('data', {'relationshipId': rel.relationshipId});
+    } catch (_) {
+      // Non-critical — the toast dismissal doesn't block on the
+      // notification's read state being persisted.
     }
   }
 

@@ -1,5 +1,6 @@
 import 'dart:math';
-import 'package:cloud_firestore/cloud_firestore.dart';
+
+import 'subscription_model.dart' show SubscriptionTier;
 
 /// Gender — captured during the mandatory onboarding survey. Used as one
 /// of three inputs into the personalized step-goal formula (see
@@ -69,6 +70,21 @@ class UserModel {
   final int dailyStepGoal;
   final int totalStepsAllTime;
 
+  /// Activity Score — migration 0050. Derived from wins + losses +
+  /// missions completed (formula: 10W + 3L + 3M). Server trigger
+  /// recomputes on every completed battle / mission complete and
+  /// applies a monotonic level = greatest(level, level_from_score).
+  /// The client displays it for the level-progress bar; nothing else
+  /// depends on it. Defaults to 0 for legacy rows / brand-new users.
+  final int activityScore;
+
+  /// Denormalized counters that back [activityScore]. Kept on the
+  /// model so UI can show "3 wins · 12 played · 47 missions" without
+  /// a second query. Server trigger keeps them in sync.
+  final int battlesWonCount;
+  final int battlesPlayedCount;
+  final int missionsCompletedCount;
+
   /// Last step threshold (in thousands) we awarded XP for today.
   /// E.g. `3` means we already awarded XP for crossing 1k, 2k, 3k today.
   /// Resets to 0 at midnight (via Cloud Function or client check on new day).
@@ -92,6 +108,19 @@ class UserModel {
   final String? clanId;
   final DateTime createdAt;
   final DateTime lastActiveAt;
+
+  // ── Notification preferences (migration 0033) ─────────────────────────────
+  /// Master switch — false silences ALL FCM push notifications app-wide.
+  final bool notifPush;
+
+  /// Master switch for email notifications (weekly recap, receipts, etc.).
+  final bool notifEmail;
+
+  /// Battle-invite and battle-result push events.
+  final bool notifBattles;
+
+  /// Friend-request and friend-accepted push events.
+  final bool notifFriends;
 
   // ── Home location (used for geo-scoped leaderboards + map) ────────────────
   // Set once at signup or via Profile → Edit district. ISO 3166-1 alpha-2
@@ -151,12 +180,11 @@ class UserModel {
   /// See migration 0027 and `lib/models/character_3d.dart`.
   final String? character3dId;
 
-  /// Bitmoji-style character avatar spec — a JSON blob produced by the
-  /// `fluttermoji` package's customizer (face / hair / eyes / mouth /
-  /// outfit / accessory ids). Nullable — a user without one still
-  /// renders via [avatarURL] or the initials fallback. Set from the
-  /// full-screen avatar-customizer sheet triggered on Create Battle
-  /// and Map entry (migration 0026).
+  /// Legacy character-avatar JSON spec (migration 0026). No longer
+  /// read or written by the app — the fluttermoji customizer was
+  /// removed. Column stays in the DB and the field stays on the model
+  /// for backward compatibility with rows that already have data.
+  /// Safe to drop in a future migration.
   final Map<String, dynamic>? avatarConfig;
 
   // ── Streak recovery state (migration 0016) ────────────────────────────────
@@ -175,6 +203,28 @@ class UserModel {
   /// last_streak_milestone_awarded`.
   final int lastStreakMilestoneAwarded;
 
+  // ── Subscription (migration 0031) ─────────────────────────────────────────
+  /// Current entitlement level — Free (default), Pro, or Family.
+  final SubscriptionTier subscriptionTier;
+
+  /// Timestamp the paid plan lapses. NULL for Free. Nightly cron
+  /// (`refresh_expired_subscriptions`) reverts the tier back to Free
+  /// once this is in the past.
+  final DateTime? subscriptionExpiresAt;
+
+  /// Billing cadence — "monthly" or "yearly". NULL for Free.
+  final String? subscriptionBillingPeriod;
+
+  /// Self-FK. Non-null when this user is a MEMBER of a family plan
+  /// (accepted an invite). Family owners have `subscriptionTier = family`
+  /// but `familyOwnerId = null`.
+  final String? familyOwnerId;
+
+  /// `yyyy-mm` of the last calendar month the user was paid the
+  /// monthly-streak XP bonus (200/500/1000 XP by tier). Prevents
+  /// double-payout.
+  final String? lastPerfectMonthAwarded;
+
   const UserModel({
     required this.userId,
     required this.userCode,
@@ -190,6 +240,10 @@ class UserModel {
     this.rank = 0,
     this.dailyStepGoal = 8000,
     this.totalStepsAllTime = 0,
+    this.activityScore = 0,
+    this.battlesWonCount = 0,
+    this.battlesPlayedCount = 0,
+    this.missionsCompletedCount = 0,
     this.lastStepXPThreshold = 0,
     this.lastStepXPDate = '',
     this.dailyGoalXPAwardedDate,
@@ -199,6 +253,10 @@ class UserModel {
     this.clanId,
     required this.createdAt,
     required this.lastActiveAt,
+    this.notifPush = true,
+    this.notifEmail = true,
+    this.notifBattles = true,
+    this.notifFriends = true,
     this.countryCode,
     this.countryName,
     this.stateName,
@@ -217,6 +275,11 @@ class UserModel {
     this.streakRecoveryStartedAt,
     this.streakUsedRecoveryInCurrentRun = false,
     this.lastStreakMilestoneAwarded = 0,
+    this.subscriptionTier = SubscriptionTier.basic,
+    this.subscriptionExpiresAt,
+    this.subscriptionBillingPeriod,
+    this.familyOwnerId,
+    this.lastPerfectMonthAwarded,
   });
 
   /// Name to render in friendly UI surfaces (leaderboard rows,
@@ -300,6 +363,13 @@ class UserModel {
       dailyStepGoal: (data['daily_step_goal'] as num?)?.toInt() ?? 8000,
       totalStepsAllTime:
           (data['total_steps_all_time'] as num?)?.toInt() ?? 0,
+      activityScore: (data['activity_score'] as num?)?.toInt() ?? 0,
+      battlesWonCount:
+          (data['battles_won_count'] as num?)?.toInt() ?? 0,
+      battlesPlayedCount:
+          (data['battles_played_count'] as num?)?.toInt() ?? 0,
+      missionsCompletedCount:
+          (data['missions_completed_count'] as num?)?.toInt() ?? 0,
       lastStepXPThreshold:
           (data['last_step_xp_threshold'] as num?)?.toInt() ?? 0,
       lastStepXPDate: data['last_step_xp_date'] as String? ?? '',
@@ -310,6 +380,10 @@ class UserModel {
       clanId: data['clan_id'] as String?,
       createdAt: parseTs(data['created_at']) ?? DateTime.now(),
       lastActiveAt: parseTs(data['last_active_at']) ?? DateTime.now(),
+      notifPush: data['notif_push'] as bool? ?? true,
+      notifEmail: data['notif_email'] as bool? ?? true,
+      notifBattles: data['notif_battles'] as bool? ?? true,
+      notifFriends: data['notif_friends'] as bool? ?? true,
       countryCode: data['country_code'] as String?,
       countryName: data['country_name'] as String?,
       stateName: data['state_name'] as String?,
@@ -333,12 +407,20 @@ class UserModel {
           data['streak_used_recovery_in_current_run'] as bool? ?? false,
       lastStreakMilestoneAwarded:
           (data['last_streak_milestone_awarded'] as num?)?.toInt() ?? 0,
+      subscriptionTier:
+          SubscriptionTier.fromWire(data['subscription_tier'] as String?),
+      subscriptionExpiresAt: parseTs(data['subscription_expires_at']),
+      subscriptionBillingPeriod:
+          data['subscription_billing_period'] as String?,
+      familyOwnerId: data['family_owner_id'] as String?,
+      lastPerfectMonthAwarded:
+          data['last_perfect_month_awarded'] as String?,
     );
   }
 
-  /// Mirror of [toFirestore] for Supabase. Returns the payload the
-  /// `public.profiles` table expects (snake_case columns, ISO timestamps,
-  /// no `friends` array).
+  /// Serializes to the payload the `public.profiles` table expects
+  /// (snake_case columns, ISO timestamps, no `friends` array — friends
+  /// are derived from `friend_relationships`, not stored inline).
   Map<String, dynamic> toSupabaseRow() {
     String? iso(DateTime? d) => d?.toUtc().toIso8601String();
     return {
@@ -348,7 +430,7 @@ class UserModel {
       'preferred_name': preferredName,
       'avatar_url': avatarURL,
       'email': email,
-      // phone: no column on profiles yet; UserModel.phone stays null
+      'phone': phone,
       'level': level,
       'total_xp': totalXP,
       'current_streak': currentStreak,
@@ -360,6 +442,10 @@ class UserModel {
       'daily_goal_xp_awarded_date': dailyGoalXPAwardedDate,
       'xp_earned_today': xpEarnedToday,
       'xp_earned_today_date': xpEarnedTodayDate,
+      'notif_push': notifPush,
+      'notif_email': notifEmail,
+      'notif_battles': notifBattles,
+      'notif_friends': notifFriends,
       'clan_id': clanId,
       'created_at': iso(createdAt),
       'last_active_at': iso(lastActiveAt),
@@ -384,82 +470,14 @@ class UserModel {
       'streak_recovery_started_at':
           iso(streakRecoveryStartedAt)?.split('T').first,
       'streak_used_recovery_in_current_run': streakUsedRecoveryInCurrentRun,
+      'subscription_tier': subscriptionTier.wire,
+      'subscription_expires_at': iso(subscriptionExpiresAt),
+      'subscription_billing_period': subscriptionBillingPeriod,
+      'family_owner_id': familyOwnerId,
+      'last_perfect_month_awarded': lastPerfectMonthAwarded,
       'last_streak_milestone_awarded': lastStreakMilestoneAwarded,
     };
   }
-
-  factory UserModel.fromFirestore(DocumentSnapshot<Map<String, dynamic>> doc) {
-    final data = doc.data()!;
-    return UserModel(
-      userId: doc.id,
-      userCode: data['userCode'] as String? ?? '',
-      displayName: data['displayName'] as String? ?? '',
-      preferredName: data['preferredName'] as String?,
-      avatarURL: data['avatarURL'] as String?,
-      email: data['email'] as String? ?? '',
-      phone: data['phone'] as String?,
-      level: data['level'] as int? ?? 1,
-      totalXP: data['totalXP'] as int? ?? 0,
-      currentStreak: data['currentStreak'] as int? ?? 0,
-      bestStreak: data['bestStreak'] as int? ?? 0,
-      rank: data['rank'] as int? ?? 0,
-      dailyStepGoal: data['dailyStepGoal'] as int? ?? 8000,
-      totalStepsAllTime: data['totalStepsAllTime'] as int? ?? 0,
-      lastStepXPThreshold: data['lastStepXPThreshold'] as int? ?? 0,
-      lastStepXPDate: data['lastStepXPDate'] as String? ?? '',
-      dailyGoalXPAwardedDate: data['dailyGoalXPAwardedDate'] as String?,
-      xpEarnedToday: data['xpEarnedToday'] as int? ?? 0,
-      xpEarnedTodayDate: data['xpEarnedTodayDate'] as String? ?? '',
-      friends: List<String>.from(data['friends'] as List? ?? []),
-      clanId: data['clanId'] as String?,
-      createdAt: (data['createdAt'] as Timestamp?)?.toDate() ?? DateTime.now(),
-      lastActiveAt:
-          (data['lastActiveAt'] as Timestamp?)?.toDate() ?? DateTime.now(),
-      countryCode: data['countryCode'] as String?,
-      countryName: data['countryName'] as String?,
-      stateName: data['stateName'] as String?,
-      districtName: data['districtName'] as String?,
-      homeLat: (data['homeLat'] as num?)?.toDouble(),
-      homeLng: (data['homeLng'] as num?)?.toDouble(),
-      homeSetAt: (data['homeSetAt'] as Timestamp?)?.toDate(),
-    );
-  }
-
-  Map<String, dynamic> toFirestore() {
-    return {
-      'userCode': userCode,
-      'displayName': displayName,
-      'preferredName': preferredName,
-      'avatarURL': avatarURL,
-      'email': email,
-      'phone': phone,
-      'level': level,
-      'totalXP': totalXP,
-      'currentStreak': currentStreak,
-      'bestStreak': bestStreak,
-      'rank': rank,
-      'dailyStepGoal': dailyStepGoal,
-      'totalStepsAllTime': totalStepsAllTime,
-      'lastStepXPThreshold': lastStepXPThreshold,
-      'lastStepXPDate': lastStepXPDate,
-      'dailyGoalXPAwardedDate': dailyGoalXPAwardedDate,
-      'xpEarnedToday': xpEarnedToday,
-      'xpEarnedTodayDate': xpEarnedTodayDate,
-      'friends': friends,
-      'clanId': clanId,
-      'createdAt': Timestamp.fromDate(createdAt),
-      'lastActiveAt': Timestamp.fromDate(lastActiveAt),
-      'countryCode': countryCode,
-      'countryName': countryName,
-      'stateName': stateName,
-      'districtName': districtName,
-      'homeLat': homeLat,
-      'homeLng': homeLng,
-      'homeSetAt':
-          homeSetAt == null ? null : Timestamp.fromDate(homeSetAt!),
-    };
-  }
-
   UserModel copyWith({
     String? displayName,
     String? preferredName,
@@ -472,6 +490,10 @@ class UserModel {
     int? rank,
     int? dailyStepGoal,
     int? totalStepsAllTime,
+    int? activityScore,
+    int? battlesWonCount,
+    int? battlesPlayedCount,
+    int? missionsCompletedCount,
     int? lastStepXPThreshold,
     String? lastStepXPDate,
     String? dailyGoalXPAwardedDate,
@@ -499,6 +521,17 @@ class UserModel {
     bool? streakUsedRecoveryInCurrentRun,
     int? lastStreakMilestoneAwarded,
     bool clearStreakRecovery = false,
+    bool? notifPush,
+    bool? notifEmail,
+    bool? notifBattles,
+    bool? notifFriends,
+    SubscriptionTier? subscriptionTier,
+    DateTime? subscriptionExpiresAt,
+    String? subscriptionBillingPeriod,
+    String? familyOwnerId,
+    String? lastPerfectMonthAwarded,
+    bool clearSubscription = false,
+    bool clearFamilyOwner = false,
   }) {
     return UserModel(
       userId: userId,
@@ -515,6 +548,11 @@ class UserModel {
       rank: rank ?? this.rank,
       dailyStepGoal: dailyStepGoal ?? this.dailyStepGoal,
       totalStepsAllTime: totalStepsAllTime ?? this.totalStepsAllTime,
+      activityScore: activityScore ?? this.activityScore,
+      battlesWonCount: battlesWonCount ?? this.battlesWonCount,
+      battlesPlayedCount: battlesPlayedCount ?? this.battlesPlayedCount,
+      missionsCompletedCount:
+          missionsCompletedCount ?? this.missionsCompletedCount,
       lastStepXPThreshold: lastStepXPThreshold ?? this.lastStepXPThreshold,
       lastStepXPDate: lastStepXPDate ?? this.lastStepXPDate,
       dailyGoalXPAwardedDate:
@@ -549,6 +587,24 @@ class UserModel {
           streakUsedRecoveryInCurrentRun ?? this.streakUsedRecoveryInCurrentRun,
       lastStreakMilestoneAwarded:
           lastStreakMilestoneAwarded ?? this.lastStreakMilestoneAwarded,
+      notifPush: notifPush ?? this.notifPush,
+      notifEmail: notifEmail ?? this.notifEmail,
+      notifBattles: notifBattles ?? this.notifBattles,
+      notifFriends: notifFriends ?? this.notifFriends,
+      subscriptionTier: clearSubscription
+          ? SubscriptionTier.basic
+          : (subscriptionTier ?? this.subscriptionTier),
+      subscriptionExpiresAt: clearSubscription
+          ? null
+          : (subscriptionExpiresAt ?? this.subscriptionExpiresAt),
+      subscriptionBillingPeriod: clearSubscription
+          ? null
+          : (subscriptionBillingPeriod ?? this.subscriptionBillingPeriod),
+      familyOwnerId: (clearSubscription || clearFamilyOwner)
+          ? null
+          : (familyOwnerId ?? this.familyOwnerId),
+      lastPerfectMonthAwarded:
+          lastPerfectMonthAwarded ?? this.lastPerfectMonthAwarded,
     );
   }
 }

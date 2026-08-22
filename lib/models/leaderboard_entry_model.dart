@@ -1,5 +1,3 @@
-import 'package:cloud_firestore/cloud_firestore.dart';
-
 class LeaderboardEntry {
   final String userId;
   final String displayName;
@@ -39,20 +37,6 @@ class LeaderboardEntry {
     if (trimmed != null && trimmed.isNotEmpty) return trimmed;
     return displayName;
   }
-
-  factory LeaderboardEntry.fromFirestore(
-      DocumentSnapshot<Map<String, dynamic>> doc) {
-    final d = doc.data()!;
-    return LeaderboardEntry(
-      userId: doc.id,
-      displayName: d['displayName'] as String? ?? '',
-      avatarURL: d['avatarURL'] as String?,
-      totalXP: d['totalXP'] as int? ?? 0,
-      rank: d['rank'] as int? ?? 0,
-      updatedAt: (d['updatedAt'] as Timestamp?)?.toDate() ?? DateTime.now(),
-    );
-  }
-
   /// Build from a Supabase row. Accepted shapes:
   ///   • `profile_earned_xp` view — has both `earned_xp` and `total_xp`;
   ///     leaderboard reads use this and `totalXP` gets the *earned* value.
@@ -87,13 +71,4 @@ class LeaderboardEntry {
           DateTime.tryParse(d['updated_at']?.toString() ?? '') ??
               DateTime.now(),
     );
-  }
-
-  Map<String, dynamic> toFirestore() => {
-        'displayName': displayName,
-        'avatarURL': avatarURL,
-        'totalXP': totalXP,
-        'rank': rank,
-        'updatedAt': Timestamp.fromDate(updatedAt),
-      };
-}
+  }}

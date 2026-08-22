@@ -19,7 +19,11 @@ pluginManagement {
 plugins {
     id "dev.flutter.flutter-plugin-loader" version "1.0.0"
     id "com.android.application" version "8.2.2" apply false
-    id "org.jetbrains.kotlin.android" version "1.9.22" apply false
+    // Bumped 1.9.22 → 2.1.0 so posthog_flutter 4.11.0 (compiled against
+    // Kotlin 2.1.0 metadata) resolves. Older Flutter plugins compiled for
+    // Kotlin 1.9 are forward-compatible with the 2.x compiler — the
+    // Kotlin team maintains binary compat one major version back.
+    id "org.jetbrains.kotlin.android" version "2.1.0" apply false
     id "com.google.gms.google-services" version "4.4.2" apply false
 }
 

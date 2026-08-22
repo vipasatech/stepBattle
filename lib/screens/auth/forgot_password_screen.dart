@@ -117,6 +117,21 @@ class _ForgotPasswordScreenState extends ConsumerState<ForgotPasswordScreen> {
       body: SafeArea(
         child: Stack(
           children: [
+            Positioned(
+              top: 4,
+              left: 4,
+              child: IconButton(
+                icon: const Icon(Icons.arrow_back),
+                tooltip: 'Back',
+                onPressed: () {
+                  if (context.canPop()) {
+                    context.pop();
+                  } else {
+                    context.go('/welcome');
+                  }
+                },
+              ),
+            ),
             SingleChildScrollView(
               padding: const EdgeInsets.fromLTRB(24, 80, 24, 24),
               physics: const ClampingScrollPhysics(),

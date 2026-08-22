@@ -1,44 +1,26 @@
 /// Battleground arena art selection.
 ///
-/// The forest pack was retired — city is now the only shipped pack. The
-/// [ArenaPack] enum is kept as an extension point in case future packs
-/// (stadium, mountain, night-city, etc.) land later. Time-of-day still
-/// picks between morning/afternoon/evening/night lighting variants of
-/// the same pack from the device clock at build time.
+/// The arena is a portrait PNG (rendered from Blender, one per TOD)
+/// shown inside an `InteractiveViewer` in [battle_ground_screen.dart].
+/// This file holds:
+///
+///   • [ArenaPack] — user's scenery preference (currently only `city`
+///     ships; `forest` remains as a path-routing constant used by
+///     [battleground_path.dart] for the vertical waypoint order).
+///   • [BattlegroundTimeOfDay] — device-clock bucket used to pick the
+///     TOD variant of the arena PNG
+///     (`assets/images/battleground/cityView/arena_{tod}.png`).
 library;
 
 /// Which scenery the user wants in the battle arena.
 ///
-/// Portrait 1:2 tiles named `morningView.png` / `afternoonView.png` /
-/// `eveningView.png` / `nightView.png`, living in a pack-specific
-/// subfolder under `assets/images/battleground/`. Tiles stack vertically
-/// at render time; the 14% top/bottom crop in `battle_ground_screen.dart`
-/// hides the seam that the generator's empty-sidewalk edges would
-/// otherwise create.
-///
-///   • city → `assets/images/battleground/cityView/*.png`
-///
 /// [forest] is retained as an INTERNAL value — the forest tile art was
 /// retired, but `battleground_path.dart` still uses this enum value to
 /// select the vertical path routing (`_forestWaypoints`, top→bottom) that
-/// the arena's vertical scroll view depends on. Do NOT expose forest as a
-/// user-pickable pack; `assetFor` would fail. It's kept solely as a
-/// routing constant.
+/// the arena's vertical scroll view depends on.
 enum ArenaPack {
   city,
   forest;
-
-  /// Returns the asset path for this pack + time-of-day combination.
-  /// Only defined for shipped packs (city). [forest] is a routing-only
-  /// value and calling this on it throws.
-  String assetFor(BattlegroundTimeOfDay tod) {
-    final folder = switch (this) {
-      ArenaPack.city => 'cityView',
-      ArenaPack.forest =>
-        throw StateError('forest is a routing-only value; no tile asset'),
-    };
-    return 'assets/images/battleground/$folder/${tod.name}View.png';
-  }
 
   /// True when this pack is wider than tall. Currently always false —
   /// kept as an extension point in case a future pack ships as landscape.

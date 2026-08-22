@@ -1,6 +1,12 @@
-import 'package:cloud_firestore/cloud_firestore.dart';
-
 /// In-app notification types. Used for rendering the right icon + action.
+///
+/// Daily-series lifecycle types (`dailySeriesDropped`, `dailySeriesEnded`)
+/// were added when migration 0046 introduced the recurring-daily flow —
+/// the server emits these when a user is auto-dropped for insufficient
+/// XP or when the series ends because <2 active participants remain.
+/// Without them, these notifications fell through to `.other` and
+/// silently landed under the generic bell — user couldn't tell why
+/// their series stopped.
 enum NotificationType {
   friendRequest,
   friendAccepted,
@@ -8,6 +14,8 @@ enum NotificationType {
   battleStarted,
   battleRejected,
   battleResult,
+  dailySeriesDropped,
+  dailySeriesEnded,
   clanInvite,
   levelUp,
   missionReset,
@@ -34,22 +42,6 @@ class NotificationModel {
     this.read = false,
     required this.createdAt,
   });
-
-  factory NotificationModel.fromFirestore(
-      DocumentSnapshot<Map<String, dynamic>> doc) {
-    final d = doc.data()!;
-    return NotificationModel(
-      id: doc.id,
-      userId: d['userId'] as String? ?? '',
-      type: _parseType(d['type'] as String? ?? 'other'),
-      title: d['title'] as String? ?? '',
-      body: d['body'] as String? ?? '',
-      data: Map<String, dynamic>.from(d['data'] as Map? ?? {}),
-      read: d['read'] as bool? ?? false,
-      createdAt: (d['createdAt'] as Timestamp?)?.toDate() ?? DateTime.now(),
-    );
-  }
-
   /// Build from a Supabase `public.notifications` row.
   factory NotificationModel.fromSupabaseRow(Map<String, dynamic> d) {
     return NotificationModel(
@@ -74,6 +66,8 @@ class NotificationModel {
         'battle_started' => NotificationType.battleStarted,
         'battle_rejected' => NotificationType.battleRejected,
         'battle_result' => NotificationType.battleResult,
+        'daily_series_dropped' => NotificationType.dailySeriesDropped,
+        'daily_series_ended' => NotificationType.dailySeriesEnded,
         'clan_invite' => NotificationType.clanInvite,
         'level_up' => NotificationType.levelUp,
         'mission_reset' => NotificationType.missionReset,
@@ -81,8 +75,16 @@ class NotificationModel {
       };
 
   /// Is this an actionable request (needs Accept/Reject)?
+  ///
+  /// Gated on `!read` — once the user has accepted or declined we
+  /// mark the notification as read, so the Accept/Decline buttons
+  /// disappear on the next stream emit. Without this gate the
+  /// buttons stayed visible even after a successful accept, letting
+  /// the user tap them a second time and hitting the
+  /// "already resolved" no-op path on the server.
   bool get isActionable =>
-      type == NotificationType.friendRequest ||
-      type == NotificationType.battleInvite ||
-      type == NotificationType.clanInvite;
+      !read &&
+      (type == NotificationType.friendRequest ||
+          type == NotificationType.battleInvite ||
+          type == NotificationType.clanInvite);
 }

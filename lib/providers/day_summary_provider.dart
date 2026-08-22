@@ -58,7 +58,7 @@ class DaySummaryData {
 /// four. Any individual failure surfaces as an empty value for that
 /// section so the screen still renders the parts that succeeded.
 final daySummaryProvider =
-    FutureProvider.family<DaySummaryData, String>((ref, dateIso) async {
+    FutureProvider.autoDispose.family<DaySummaryData, String>((ref, dateIso) async {
   final user = ref.watch(authStateProvider).valueOrNull;
   if (user == null) {
     return DaySummaryData(

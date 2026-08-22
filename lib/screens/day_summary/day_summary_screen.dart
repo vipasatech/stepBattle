@@ -8,8 +8,10 @@ import '../../models/run_session_model.dart';
 import '../../providers/auth_provider.dart';
 import '../../providers/day_summary_provider.dart';
 import '../../widgets/glass_card.dart';
+import '../../widgets/shimmer_loader.dart';
 import '../track/track_session_detail_screen.dart';
 import 'widgets/day_summary_battle_card.dart';
+import '../battles/widgets/battle_card.dart';
 
 /// Per-day summary screen.
 ///
@@ -55,8 +57,15 @@ class DaySummaryScreen extends ConsumerWidget {
         ),
       ),
       body: asyncData.when(
-        loading: () => Center(
-          child: CircularProgressIndicator(color: AppColors.primary),
+        loading: () => ListView(
+          padding: const EdgeInsets.fromLTRB(20, 16, 20, 32),
+          children: const [
+            ShimmerLoader(height: 120, borderRadius: 20),
+            SizedBox(height: 16),
+            ShimmerCard(),
+            SizedBox(height: 12),
+            ShimmerCard(),
+          ],
         ),
         error: (e, _) => Center(
           child: Padding(
@@ -114,13 +123,12 @@ class _DayBody extends ConsumerWidget {
           _SectionHeader(label: 'BATTLES'),
           const SizedBox(height: 10),
           if (data.hasBattles)
-            // Same cards the Battles tab shows for live / completed
-            // battles — read-only here (no arena button, no tap-to-
-            // open). Non-live/completed statuses (pending, scheduled,
-            // cancelled) still use the compact tile because the big
-            // cards need per-user step deltas that only exist once a
-            // battle is live.
-            ..._buildBattleCards(data.battles, uid)
+            // Cancelled battles are hidden here. Completed battles
+            // (all types) render as the shared BattleCard from the
+            // Battles tab. Live 1v1s keep the DaySummaryBattleCard
+            // split-score layout. Live group/team + pending/scheduled
+            // fall through to the shared BattleCard too.
+            ..._buildBattleCards(context, data.battles, uid)
           else
             const _EmptyBanner(text: 'No battle data recorded'),
           const SizedBox(height: 20),
@@ -143,46 +151,64 @@ class _DayBody extends ConsumerWidget {
 
   /// Build the ordered widget list for the BATTLES section.
   ///
-  /// 1v1 battles (active + completed with a known opponent) render as
-  /// the rich [DaySummaryBattleCard]. If the user played MULTIPLE
-  /// qualifying 1v1s on this date, the cards stack into a swipeable
-  /// [_BattleCarousel] with page dots. Group / team / cancelled /
-  /// pending battles fall back to the compact [_BattleTile] since
-  /// "You vs X" and single-opponent step deltas don't map cleanly.
-  List<Widget> _buildBattleCards(List<BattleModel> battles, String uid) {
-    final rich = <BattleModel>[];
-    final fallback = <BattleModel>[];
+  /// Rules (in order of priority):
+  ///   1. Cancelled battles are HIDDEN — they're noise on a "here's
+  ///      what happened today" recap. Nothing landed, nothing lost.
+  ///   2. Completed battles (any type) use the shared [BattleCard]
+  ///      from the Battles tab so the visual matches everywhere the
+  ///      user sees a completed battle.
+  ///   3. Live 1v1 battles use the pretty [DaySummaryBattleCard] with
+  ///      the split score. Multiple live 1v1s stack into a
+  ///      [_BattleCarousel].
+  ///   4. Anything else (live group/team, pending, scheduled) uses the
+  ///      shared [BattleCard] which already handles those states.
+  List<Widget> _buildBattleCards(
+    BuildContext context,
+    List<BattleModel> battles,
+    String uid,
+  ) {
+    // Filter cancelled up front — no need to render them at all.
+    final visible = battles
+        .where((b) => b.status != BattleStatus.cancelled)
+        .toList();
+    if (visible.isEmpty) return const [];
 
-    for (final b in battles) {
-      final isRichEligible = b.type == BattleType.oneVsOne &&
-          (b.status == BattleStatus.active ||
-              b.status == BattleStatus.completed) &&
+    final richLive = <BattleModel>[]; // live 1v1 → DaySummaryBattleCard
+    final shared = <BattleModel>[];    // completed + live group/team → BattleCard
+
+    for (final b in visible) {
+      final isRichLive1v1 = b.type == BattleType.oneVsOne &&
+          b.status == BattleStatus.active &&
           b.opponentFor(uid) != null;
-      if (isRichEligible) {
-        rich.add(b);
+      if (isRichLive1v1) {
+        richLive.add(b);
       } else {
-        fallback.add(b);
+        shared.add(b);
       }
     }
 
     final widgets = <Widget>[];
 
-    if (rich.length == 1) {
+    if (richLive.length == 1) {
       widgets.add(Padding(
         padding: const EdgeInsets.only(bottom: 12),
-        child: DaySummaryBattleCard(battle: rich.first, uid: uid),
+        child: DaySummaryBattleCard(battle: richLive.first, uid: uid),
       ));
-    } else if (rich.length > 1) {
+    } else if (richLive.length > 1) {
       widgets.add(Padding(
         padding: const EdgeInsets.only(bottom: 12),
-        child: _BattleCarousel(battles: rich, uid: uid),
+        child: _BattleCarousel(battles: richLive, uid: uid),
       ));
     }
 
-    for (final b in fallback) {
+    for (final b in shared) {
       widgets.add(Padding(
         padding: const EdgeInsets.only(bottom: 12),
-        child: _BattleTile(battle: b),
+        child: BattleCard(
+          battle: b,
+          currentUserId: uid,
+          onTap: () => context.push('/battle-status/${b.battleId}'),
+        ),
       ));
     }
 
@@ -564,168 +590,11 @@ class _EmptyBanner extends StatelessWidget {
   }
 }
 
-// =============================================================================
-// Battle tile — compact row showing the battle's outcome for this user
-// =============================================================================
-
-class _BattleTile extends ConsumerWidget {
-  final BattleModel battle;
-  const _BattleTile({required this.battle});
-
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final theme = Theme.of(context);
-    final uid =
-        ref.watch(authStateProvider).valueOrNull?.id ?? '';
-    final tone = _toneFor(battle.status, battle, uid);
-    final title = _titleFor(battle, uid);
-
-    return GestureDetector(
-      onTap: battle.status == BattleStatus.completed
-          ? () => context.push('/battle-status/${battle.battleId}')
-          : null,
-      child: Container(
-        padding: const EdgeInsets.all(14),
-        decoration: BoxDecoration(
-          color: AppColors.surfaceContainerLow,
-          borderRadius: BorderRadius.circular(14),
-          border: Border.all(
-              color: AppColors.outlineVariant.withValues(alpha: 0.3)),
-        ),
-        child: Row(
-          children: [
-            Container(
-              width: 40,
-              height: 40,
-              decoration: BoxDecoration(
-                color: tone.tint.withValues(alpha: 0.15),
-                borderRadius: BorderRadius.circular(10),
-              ),
-              child: Icon(tone.icon, color: tone.tint, size: 20),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    title,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: theme.textTheme.titleSmall
-                        ?.copyWith(fontWeight: FontWeight.w700),
-                  ),
-                  const SizedBox(height: 2),
-                  Text(
-                    tone.subtitle,
-                    style: theme.textTheme.labelSmall?.copyWith(
-                      color: AppColors.onSurfaceVariant,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            Container(
-              padding: const EdgeInsets.symmetric(
-                  horizontal: 8, vertical: 4),
-              decoration: BoxDecoration(
-                color: tone.tint.withValues(alpha: 0.18),
-                borderRadius: BorderRadius.circular(10),
-              ),
-              child: Text(
-                tone.statusLabel,
-                style: TextStyle(
-                  color: tone.tint,
-                  fontWeight: FontWeight.w800,
-                  fontSize: 10,
-                  letterSpacing: 0.6,
-                ),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  /// Battles have no name field; build a "You vs `<opponent>`" or
-  /// "Team battle (X teams)" label depending on the type.
-  String _titleFor(BattleModel b, String uid) {
-    if (b.type == BattleType.team) {
-      return '${b.teamCount ?? b.teamLabels.length}-team battle';
-    }
-    final me = b.participantFor(uid);
-    if (me == null) {
-      // Spectator-ish case — just list participants.
-      return b.participants
-          .take(3)
-          .map((p) => p.friendlyName)
-          .join(' · ');
-    }
-    final opponents = b.participants
-        .where((p) => p.userId != uid)
-        .toList();
-    if (opponents.isEmpty) return 'Solo battle';
-    if (opponents.length == 1) {
-      return 'You vs ${opponents.first.friendlyName}';
-    }
-    return 'You + ${opponents.length} others';
-  }
-
-  _BattleTone _toneFor(BattleStatus s, BattleModel b, String uid) {
-    switch (s) {
-      case BattleStatus.pending:
-        return _BattleTone(
-          tint: AppColors.onSurfaceVariant,
-          icon: Icons.hourglass_empty,
-          statusLabel: 'INV',
-          subtitle: 'Invite pending',
-        );
-      case BattleStatus.scheduled:
-        return _BattleTone(
-          tint: AppColors.amber,
-          icon: Icons.schedule,
-          statusLabel: 'SOON',
-          subtitle: 'Scheduled',
-        );
-      case BattleStatus.active:
-        return _BattleTone(
-          tint: AppColors.success,
-          icon: Icons.bolt,
-          statusLabel: 'LIVE',
-          subtitle: 'In progress that day',
-        );
-      case BattleStatus.completed:
-        final isWinner = b.winnerId != null && b.winnerId == uid;
-        return _BattleTone(
-          tint: isWinner ? AppColors.success : AppColors.primary,
-          icon: isWinner ? Icons.emoji_events : Icons.flag,
-          statusLabel: isWinner ? 'WON' : 'DONE',
-          subtitle: 'Completed',
-        );
-      case BattleStatus.cancelled:
-        return _BattleTone(
-          tint: AppColors.error,
-          icon: Icons.close,
-          statusLabel: 'CXL',
-          subtitle: 'Cancelled',
-        );
-    }
-  }
-}
-
-class _BattleTone {
-  final Color tint;
-  final IconData icon;
-  final String statusLabel;
-  final String subtitle;
-  const _BattleTone({
-    required this.tint,
-    required this.icon,
-    required this.statusLabel,
-    required this.subtitle,
-  });
-}
+// Old `_BattleTile` (compact CXL/DONE/WON row) removed — the Day
+// Summary now uses the shared [BattleCard] from the Battles tab for
+// every status except live-1v1 (which uses [DaySummaryBattleCard]),
+// and cancelled battles are filtered out entirely in
+// [DaySummaryScreen._buildBattleCards].
 
 // Track-session rendering moved to [_DaySummarySessionCard] (near the
 // top of the file), which wraps SessionDetailBody so the Day Summary

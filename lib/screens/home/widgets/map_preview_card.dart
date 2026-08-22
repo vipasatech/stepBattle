@@ -1,13 +1,17 @@
+import 'dart:async';
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:go_router/go_router.dart';
 import 'package:latlong2/latlong.dart';
 
 import '../../../config/colors.dart';
 import '../../../models/user_model.dart';
 import '../../../providers/user_provider.dart';
 import '../../../sheets/set_home_sheet.dart';
+import '../../../utils/home_map_snapshot.dart';
+import '../../../widgets/coming_soon_sheet.dart';
 import '../../../widgets/glass_card.dart';
 import '../../../widgets/map_tile_layer.dart';
 
@@ -46,8 +50,13 @@ class MapPreviewCard extends ConsumerWidget {
           child: InkWell(
             borderRadius: BorderRadius.circular(20),
             onTap: () {
+              // v1 gate — "Who's Leading Near You" is Coming Soon. The
+              // whole card taps into the same fade-out toast as the
+              // Clan tab. Falls back to the Set-Home sheet only when
+              // the user still needs to set their district (that's an
+              // onboarding step, not the Leading-Near-You feature).
               if (hasHome) {
-                context.push('/map');
+                showComingSoonSheet(context, title: "Who's Leading Near You");
               } else {
                 _openSetHomeSheet(context);
               }
@@ -60,81 +69,25 @@ class MapPreviewCard extends ConsumerWidget {
                 child: Stack(
                   fit: StackFit.expand,
                   children: [
-                    // Real OSM map when the user has a home location
-                    // pinned — same tile source as the Track screen.
-                    // Falls back to the stylised gradient + dots when
-                    // no home is set (map at world zoom would just be
-                    // a featureless tile).
+                    // Home location pinned → static PNG snapshot
+                    // (cached to app documents on first capture). The
+                    // background widget renders the live FlutterMap
+                    // only ONCE per home location, captures its pixels
+                    // via RepaintBoundary, then swaps to Image.file
+                    // for every subsequent Home visit. Tap opens the
+                    // Coming-Soon sheet, so a static frame is all we
+                    // need for the preview.
+                    //
+                    // No home yet → stylised gradient + dot placeholder
+                    // (the same fallback the map background widget
+                    // shows during its brief cache-lookup gap).
                     if (hasHome && user?.homeLat != null && user?.homeLng != null)
-                      // IgnorePointer keeps taps flowing to the outer
-                      // InkWell instead of getting eaten by FlutterMap's
-                      // internal gesture detectors.
-                      IgnorePointer(
-                        child: ClipRRect(
-                          borderRadius: BorderRadius.circular(20),
-                          child: FlutterMap(
-                            options: MapOptions(
-                              initialCenter: LatLng(
-                                user!.homeLat!,
-                                user.homeLng!,
-                              ),
-                              initialZoom: 12,
-                              interactionOptions: const InteractionOptions(
-                                flags: InteractiveFlag.none,
-                              ),
-                            ),
-                            children: [
-                              osmTileLayer(context),
-                              MarkerLayer(
-                                markers: [
-                                  Marker(
-                                    point: LatLng(
-                                      user.homeLat!,
-                                      user.homeLng!,
-                                    ),
-                                    width: 22,
-                                    height: 22,
-                                    child: const _HomePin(),
-                                  ),
-                                ],
-                              ),
-                            ],
-                          ),
-                        ),
+                      _HomeMapBackground(
+                        lat: user!.homeLat!,
+                        lng: user.homeLng!,
                       )
-                    else ...[
-                      Container(
-                        decoration: BoxDecoration(
-                          borderRadius: BorderRadius.circular(20),
-                          gradient: RadialGradient(
-                            center: Alignment.center,
-                            radius: 1.2,
-                            colors: [
-                              AppColors.amber.withValues(alpha: 0.12),
-                              AppColors.surfaceContainerLowest,
-                            ],
-                          ),
-                        ),
-                      ),
-                      CustomPaint(painter: _MapDotsPainter()),
-                      Center(
-                        child: Container(
-                          width: 14,
-                          height: 14,
-                          decoration: BoxDecoration(
-                            color: AppColors.amber,
-                            shape: BoxShape.circle,
-                            boxShadow: [
-                              BoxShadow(
-                                color: AppColors.amber.withValues(alpha: 0.55),
-                                blurRadius: 16,
-                                spreadRadius: 6,
-                              ),
-                            ],
-                          ),
-                        ),
-                      ),
-                    ],
+                    else
+                      const _FallbackGradient(),
 
                     // Bottom info bar
                     Positioned(
@@ -287,4 +240,287 @@ class _MapDotsPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
+}
+
+/// Painted stand-in for the map preview when we don't have (yet) a
+/// cached PNG of the user's home. Also serves as the "no home set"
+/// state background, so both callers get the exact same visual.
+/// Cheap — no network, no widget tree beyond a Container + one
+/// CustomPaint + a glow dot.
+class _FallbackGradient extends StatelessWidget {
+  const _FallbackGradient();
+
+  @override
+  Widget build(BuildContext context) {
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        Container(
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(20),
+            gradient: RadialGradient(
+              center: Alignment.center,
+              radius: 1.2,
+              colors: [
+                AppColors.amber.withValues(alpha: 0.12),
+                AppColors.surfaceContainerLowest,
+              ],
+            ),
+          ),
+        ),
+        CustomPaint(painter: _MapDotsPainter()),
+        Center(
+          child: Container(
+            width: 14,
+            height: 14,
+            decoration: BoxDecoration(
+              color: AppColors.amber,
+              shape: BoxShape.circle,
+              boxShadow: [
+                BoxShadow(
+                  color: AppColors.amber.withValues(alpha: 0.55),
+                  blurRadius: 16,
+                  spreadRadius: 6,
+                ),
+              ],
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+/// Map preview background for the "Who's Leading Near You" card.
+///
+/// Flow:
+///   1. On mount, check [HomeMapSnapshot] for a cached PNG at the
+///      given lat/lng bucket.
+///   2. If a cached file exists → render it via `Image.file`. Zero
+///      tile downloads, zero FlutterMap widget cost. This is the
+///      steady-state after the first successful capture.
+///   3. If nothing is cached → render a live [FlutterMap] wrapped in
+///      a `RepaintBoundary`, then after a delay long enough for OSM
+///      tiles to land, capture the boundary and persist it. The
+///      widget then swaps itself over to `Image.file` for the rest
+///      of its lifetime.
+///
+/// Dependencies on `widget.lat`/`widget.lng` are re-evaluated in
+/// [didUpdateWidget] so a user updating their home location kicks
+/// off a fresh capture instead of continuing to serve the previous
+/// location's PNG.
+class _HomeMapBackground extends StatefulWidget {
+  final double lat;
+  final double lng;
+
+  const _HomeMapBackground({required this.lat, required this.lng});
+
+  @override
+  State<_HomeMapBackground> createState() => _HomeMapBackgroundState();
+}
+
+class _HomeMapBackgroundState extends State<_HomeMapBackground> {
+  /// Anchors the [RepaintBoundary] we capture pixels from. Recreated
+  /// whenever we drop back to the live-map path (which shouldn't
+  /// normally happen twice per widget lifetime, but keeping the key
+  /// stable across state resets is what makes the capture reliable).
+  final GlobalKey _boundaryKey = GlobalKey();
+
+  /// The captured PNG on disk. Non-null → we render `Image.file`.
+  File? _cached;
+
+  /// True once the async cache-existence check has completed. Before
+  /// that we render the same fallback gradient the "no home" branch
+  /// uses, so the card doesn't flash blank on very first mount before
+  /// the cache resolves.
+  bool _checkedCache = false;
+
+  /// Scheduled capture timer. Cancelled on dispose and on lat/lng
+  /// change so we never capture a boundary the user has moved past.
+  Timer? _captureTimer;
+
+  /// Brightness we last resolved a cache for. Kept in state so a
+  /// theme toggle can be detected in [didChangeDependencies] and the
+  /// snapshot swapped over without waiting for a lat/lng change. `null`
+  /// before the first `didChangeDependencies` fires.
+  Brightness? _lastBrightness;
+
+  /// Delay before capturing. Bumped from 2.5 s → 3.5 s because the
+  /// earlier value sometimes fired while OSM tiles were still landing,
+  /// resulting in PNGs with white gutters where the tile grid hadn't
+  /// covered yet. The user sees the live FlutterMap during this
+  /// window, so a longer wait is a UX no-op — the map is already on
+  /// screen the whole time.
+  static const Duration _captureDelay = Duration(milliseconds: 3500);
+
+  /// If a capture fails (network was slow, boundary hadn't painted),
+  /// retry once after this longer delay. If it fails again we give
+  /// up and re-attempt on the next Home mount — the widget is small
+  /// enough that we shouldn't spin here.
+  static const Duration _captureRetryDelay = Duration(seconds: 3);
+
+  Brightness get _brightness => Theme.of(context).brightness;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final now = _brightness;
+    if (_lastBrightness == now) return;
+    _lastBrightness = now;
+    // First run (transitions null → light|dark) OR a theme toggle at
+    // runtime. Either way, invalidate whatever we had loaded and
+    // resolve fresh for the new brightness.
+    _captureTimer?.cancel();
+    _captureTimer = null;
+    _cached = null;
+    _checkedCache = false;
+    _loadCacheThenMaybeSchedule();
+  }
+
+  @override
+  void didUpdateWidget(covariant _HomeMapBackground old) {
+    super.didUpdateWidget(old);
+    // Meaningful move? Cache is keyed by rounded lat/lng, so tiny
+    // GPS jitter reuses the existing snapshot; a real home move
+    // produces a different filename and needs a fresh capture.
+    if (old.lat != widget.lat || old.lng != widget.lng) {
+      _captureTimer?.cancel();
+      _captureTimer = null;
+      setState(() {
+        _cached = null;
+        _checkedCache = false;
+      });
+      _loadCacheThenMaybeSchedule();
+    }
+  }
+
+  Future<void> _loadCacheThenMaybeSchedule() async {
+    final b = _lastBrightness ?? _brightness;
+    final f = await HomeMapSnapshot.readCached(widget.lat, widget.lng, b);
+    if (!mounted) return;
+    setState(() {
+      _cached = f;
+      _checkedCache = true;
+    });
+    if (f == null) {
+      _captureTimer = Timer(_captureDelay, _capture);
+    }
+  }
+
+  Future<void> _capture() async {
+    if (!mounted) return;
+    final pixelRatio = MediaQuery.of(context).devicePixelRatio;
+    final brightness = _brightness;
+    final saved = await HomeMapSnapshot.capture(
+      boundaryKey: _boundaryKey,
+      lat: widget.lat,
+      lng: widget.lng,
+      brightness: brightness,
+      pixelRatio: pixelRatio,
+    );
+    if (!mounted) return;
+    if (saved != null) {
+      // Only accept the capture if the brightness we started with
+      // still matches what's on screen — a mid-capture theme toggle
+      // would otherwise overwrite the new theme's slot with the old
+      // theme's pixels.
+      if (brightness == _brightness) {
+        setState(() => _cached = saved);
+      }
+    } else {
+      // One retry with a longer delay in case tiles hadn't arrived
+      // by the first attempt. After that we give up until next mount.
+      _captureTimer = Timer(_captureRetryDelay, () async {
+        if (!mounted) return;
+        final retryBrightness = _brightness;
+        final retry = await HomeMapSnapshot.capture(
+          boundaryKey: _boundaryKey,
+          lat: widget.lat,
+          lng: widget.lng,
+          brightness: retryBrightness,
+          pixelRatio: pixelRatio,
+        );
+        if (mounted &&
+            retry != null &&
+            retryBrightness == _brightness) {
+          setState(() => _cached = retry);
+        }
+      });
+    }
+  }
+
+  @override
+  void dispose() {
+    _captureTimer?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (!_checkedCache) return const _FallbackGradient();
+
+    final cached = _cached;
+    if (cached != null) {
+      // Backing `Container` with an opaque theme background so any
+      // rounding artefacts or aspect-ratio delta between the PNG and
+      // the current layout size resolve against a colour that
+      // matches the ambient card — never a white flash.
+      // `gaplessPlayback` keeps the previous frame visible during a
+      // hot-restart-triggered rebuild instead of flashing empty.
+      return ClipRRect(
+        borderRadius: BorderRadius.circular(20),
+        child: Container(
+          color: AppColors.background,
+          child: Image.file(
+            cached,
+            fit: BoxFit.cover,
+            gaplessPlayback: true,
+          ),
+        ),
+      );
+    }
+
+    // First-time render for this brightness/location: live
+    // FlutterMap, wrapped so we can screenshot it. The
+    // RepaintBoundary is what `boundary.toImage()` reads pixels from
+    // in the capture step. The Container behind the ClipRRect gives
+    // the FlutterMap an OPAQUE theme-coloured backdrop so any pixel
+    // the OSM tile grid hasn't covered at capture time (edges of the
+    // rounded rect, tile-load gaps) is baked as background, not
+    // white — the source of the "white gutters" in the earlier
+    // snapshots.
+    return RepaintBoundary(
+      key: _boundaryKey,
+      child: Container(
+        color: AppColors.background,
+        child: IgnorePointer(
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(20),
+            child: FlutterMap(
+              options: MapOptions(
+                initialCenter: LatLng(widget.lat, widget.lng),
+                initialZoom: 12,
+                interactionOptions: const InteractionOptions(
+                flags: InteractiveFlag.none,
+              ),
+            ),
+            children: [
+              osmTileLayer(context),
+              MarkerLayer(
+                markers: [
+                  Marker(
+                    point: LatLng(widget.lat, widget.lng),
+                    width: 22,
+                    height: 22,
+                    child: const _HomePin(),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+        ),
+      ),
+    );
+  }
 }

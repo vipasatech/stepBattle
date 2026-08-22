@@ -8,6 +8,7 @@ import 'package:intl/intl.dart' hide TextDirection;
 import '../../../config/colors.dart';
 import '../../../providers/profile_trend_provider.dart';
 import '../../../sheets/calendar_picker_sheet.dart';
+import '../../../widgets/shimmer_loader.dart';
 
 /// Profile → "This Week" trendline chart.
 ///
@@ -123,15 +124,14 @@ class _ThisWeekTrendChartState extends ConsumerState<ThisWeekTrendChart>
               selected: _selected,
               revealController: _revealController,
             ),
-            loading: () => Center(
-              child: SizedBox(
-                width: 22,
-                height: 22,
-                child: CircularProgressIndicator(
-                  strokeWidth: 2.4,
-                  color: AppColors.primary,
-                ),
-              ),
+            // Full-width chart-shaped shimmer so the section reserves
+            // its final height (170 dp) and doesn't collapse the layout
+            // beneath while data resolves. Rounded corners keep the
+            // skeleton visually consistent with the other section
+            // shimmers on the profile page.
+            loading: () => const Padding(
+              padding: EdgeInsets.only(left: 24, right: 4),
+              child: ShimmerLoader(height: 170, borderRadius: 16),
             ),
             error: (e, _) => Center(
               child: Text(
@@ -151,11 +151,20 @@ class _ThisWeekTrendChartState extends ConsumerState<ThisWeekTrendChart>
 
 // =============================================================================
 // Chart body — GestureDetector wraps CustomPaint. Horizontal drag maps
-// to the reveal controller; the painter reads its value to fade the
-// distance + calorie overlays in and out.
+// to the reveal controller AND to the scrub index; the painter reads
+// both to fade the distance + calorie overlays in AND to draw a
+// vertical crosshair + snapped-day tooltip.
+//
+// Scrub (added 1.1.6+29): touch-drag on mobile / mouse-hover on
+// desktop-web snaps a vertical guide to the nearest day marker and
+// pops a small tooltip showing that day's exact step count and date.
+// The scrub index is the integer position within [plotted], not a
+// pixel — snapping to the nearest of N equally-spaced x-positions
+// removes the "between two days" ambiguity the user would otherwise
+// have to guess at.
 // =============================================================================
 
-class _ChartBody extends StatelessWidget {
+class _ChartBody extends StatefulWidget {
   final List<DailyMetricPoint> points;
   final List<DateTime> selected;
   final AnimationController revealController;
@@ -167,43 +176,131 @@ class _ChartBody extends StatelessWidget {
   });
 
   @override
-  Widget build(BuildContext context) {
-    // Filter provider's 28-entry list down to the selected days,
-    // preserving chronological order.
-    final selectedSet = selected.toSet();
-    final plotted = points
-        .where((p) => selectedSet.contains(_normalize(p.date)))
-        .toList();
+  State<_ChartBody> createState() => _ChartBodyState();
+}
 
-    return GestureDetector(
-      behavior: HitTestBehavior.opaque,
-      // Horizontal-only detector so vertical scrolls on the surrounding
-      // page still land on the outer ListView.
-      onHorizontalDragStart: (_) => revealController.forward(),
-      onHorizontalDragEnd: (_) => revealController.reverse(),
-      onHorizontalDragCancel: () => revealController.reverse(),
-      child: AnimatedBuilder(
-        animation: revealController,
-        builder: (context, _) {
-          return CustomPaint(
-            painter: _TrendChartPainter(
-              points: plotted,
-              revealProgress: revealController.value,
-              stepsColor: AppColors.primary,
-              distanceColor: const Color(0xFF22C55E),
-              caloriesColor: AppColors.amber,
-              axisColor: AppColors.onSurfaceVariant.withValues(alpha: 0.35),
-              labelColor: AppColors.onSurfaceVariant,
-            ),
-            size: Size.infinite,
-          );
-        },
-      ),
-    );
+class _ChartBodyState extends State<_ChartBody> {
+  /// Currently-highlighted day index within `plotted`, or null when
+  /// the user isn't actively scrubbing / hovering.
+  int? _scrubIndex;
+
+  /// Mirrors _TrendChartPainter's layout constants (padLeft = 12,
+  /// padRight = 44) so the snap math matches the marker positions
+  /// exactly. Kept in sync via a code comment on the painter — if
+  /// those change there, change here too.
+  static const double _padLeft = 12;
+  static const double _padRight = 44;
+
+  /// Snap the pointer's local x to the nearest day-marker index.
+  /// Reproduces `_TrendChartPainter._xPositions` so the crosshair
+  /// aligns pixel-perfectly with the painted markers.
+  int _snapIndex(double localX, double width, int count) {
+    if (count <= 1) return 0;
+    final chartWidth = width - _padLeft - _padRight;
+    if (chartWidth <= 0) return 0;
+    final clamped = localX.clamp(_padLeft, _padLeft + chartWidth);
+    final step = chartWidth / (count - 1);
+    return ((clamped - _padLeft) / step).round().clamp(0, count - 1);
   }
 
-  static DateTime _normalize(DateTime d) =>
-      DateTime(d.year, d.month, d.day);
+  void _updateScrub(double localX, double width, int count) {
+    final idx = _snapIndex(localX, width, count);
+    if (idx != _scrubIndex) {
+      setState(() => _scrubIndex = idx);
+    }
+  }
+
+  void _clearScrub() {
+    if (_scrubIndex != null) {
+      setState(() => _scrubIndex = null);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    // Iterate `selected` (not `points`) so `plotted.length` always
+    // equals `selected.length` — previously we filtered `points` by
+    // DateTime-set containment which silently dropped a day when the
+    // two sides' instants differed by a hair (DST edge, non-IST tz,
+    // or `Duration`-arithmetic wobble on a leap-second day). Missing
+    // days now surface as 0-step points so all 7 dots + labels render.
+    final byKey = <String, DailyMetricPoint>{
+      for (final p in widget.points) _key(p.date): p,
+    };
+    final plotted = <DailyMetricPoint>[
+      for (final d in widget.selected)
+        byKey[_key(d)] ??
+            DailyMetricPoint(
+              date: d,
+              steps: 0,
+              distanceMeters: 0,
+              calories: 0,
+            ),
+    ];
+
+    return LayoutBuilder(builder: (context, constraints) {
+      final width = constraints.maxWidth;
+      return GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        // Horizontal-only detector so vertical scrolls on the
+        // surrounding page still land on the outer ListView. Drag
+        // now serves two purposes: forward the reveal controller
+        // (existing behaviour) AND update the scrub crosshair (new).
+        onHorizontalDragStart: (d) {
+          widget.revealController.forward();
+          _updateScrub(d.localPosition.dx, width, plotted.length);
+        },
+        onHorizontalDragUpdate: (d) {
+          _updateScrub(d.localPosition.dx, width, plotted.length);
+        },
+        onHorizontalDragEnd: (_) {
+          widget.revealController.reverse();
+          _clearScrub();
+        },
+        onHorizontalDragCancel: () {
+          widget.revealController.reverse();
+          _clearScrub();
+        },
+        // MouseRegion handles hover for desktop / web builds. Touch
+        // devices never fire onHover (Flutter converts them to drag
+        // events, which the outer GestureDetector already covers).
+        child: MouseRegion(
+          onHover: (event) =>
+              _updateScrub(event.localPosition.dx, width, plotted.length),
+          onExit: (_) => _clearScrub(),
+          child: AnimatedBuilder(
+            animation: widget.revealController,
+            builder: (context, _) {
+              return CustomPaint(
+                painter: _TrendChartPainter(
+                  points: plotted,
+                  revealProgress: widget.revealController.value,
+                  scrubIndex: _scrubIndex,
+                  stepsColor: AppColors.primary,
+                  distanceColor: const Color(0xFF22C55E),
+                  caloriesColor: AppColors.amber,
+                  axisColor:
+                      AppColors.onSurfaceVariant.withValues(alpha: 0.35),
+                  labelColor: AppColors.onSurfaceVariant,
+                  tooltipBg: Theme.of(context).colorScheme.surface,
+                  tooltipFg: Theme.of(context).colorScheme.onSurface,
+                  tooltipMuted:
+                      Theme.of(context).colorScheme.onSurfaceVariant,
+                ),
+                size: Size.infinite,
+              );
+            },
+          ),
+        ),
+      );
+    });
+  }
+
+  /// String key for map lookup — sidesteps DateTime equality which is
+  /// microsecond-exact (and can wobble across DST / tz arithmetic).
+  static String _key(DateTime d) =>
+      '${d.year}-${d.month.toString().padLeft(2, '0')}'
+      '-${d.day.toString().padLeft(2, '0')}';
 }
 
 // =============================================================================
@@ -218,20 +315,39 @@ class _TrendChartPainter extends CustomPainter {
   /// calorie overlays are at their peak opacity (0.4).
   final double revealProgress;
 
+  /// Index within [points] that the user is currently hovering /
+  /// scrubbing over, or null when idle. When set, the painter draws
+  /// a vertical guide + a highlighted marker + a tooltip showing
+  /// that day's exact step count and short date label.
+  final int? scrubIndex;
+
   final Color stepsColor;
   final Color distanceColor;
   final Color caloriesColor;
   final Color axisColor;
   final Color labelColor;
 
+  /// Tooltip surface + text colours, sourced from the ambient
+  /// ColorScheme so light/dark themes both read cleanly. The chart
+  /// itself uses AppColors constants for its trace so brand colour
+  /// stays fixed, but the tooltip needs to blend with the current
+  /// theme's surface.
+  final Color tooltipBg;
+  final Color tooltipFg;
+  final Color tooltipMuted;
+
   _TrendChartPainter({
     required this.points,
     required this.revealProgress,
+    required this.scrubIndex,
     required this.stepsColor,
     required this.distanceColor,
     required this.caloriesColor,
     required this.axisColor,
     required this.labelColor,
+    required this.tooltipBg,
+    required this.tooltipFg,
+    required this.tooltipMuted,
   });
 
   @override
@@ -242,12 +358,16 @@ class _TrendChartPainter extends CustomPainter {
     }
 
     // ---- Layout ------------------------------------------------------
-    // padLeft = 5 — leftmost marker (5-px radius) sits flush without
-    // clipping. padRight = 44 leaves room for the 12-px halo around
-    // the rightmost data point + the 16-px label offset so the
-    // number never draws on top of the glow (was 34, halo overlapped
-    // the label by ~11 px).
-    const double padLeft = 5;
+    // padLeft = 12 — leftmost marker (5-px radius) + its date label
+    // (~14 px wide when centred under the marker) both need to sit
+    // fully inside the canvas. At 5 px the leftmost label's centre
+    // was at x=5, which the paint code clamped to 0 to keep it on-
+    // screen — on narrow phones that visually swallowed the label.
+    // 12 px keeps everything crisply inside without eating chart width.
+    // padRight = 44 leaves room for the 12-px halo around the
+    // rightmost data point + the 16-px label offset so the number
+    // never draws on top of the glow.
+    const double padLeft = 12;
     const double padRight = 44;
     const double padTop = 16;
     const double padBottom = 22;
@@ -295,6 +415,15 @@ class _TrendChartPainter extends CustomPainter {
 
     // ---- X-axis day labels -------------------------------------------
     _paintDayLabels(canvas, chartRect, size);
+
+    // ---- Scrub crosshair + tooltip (last, so it sits on top) ---------
+    // Guarded on scrubIndex bounds because `points` can shrink between
+    // frames (day picker change while the user is mid-drag).
+    if (scrubIndex != null &&
+        scrubIndex! >= 0 &&
+        scrubIndex! < points.length) {
+      _paintScrub(canvas, chartRect, stepsNorm, size);
+    }
   }
 
   // -------------------------------------------------------------------
@@ -566,9 +695,160 @@ class _TrendChartPainter extends CustomPainter {
     return '${k.round()}K';
   }
 
+  // -------------------------------------------------------------------
+  // Scrub crosshair + tooltip
+  //
+  // Painted on top of everything else so the guide/tooltip never gets
+  // clipped by the trace, markers, or overlay lines. Layout order per
+  // frame:
+  //   1. dashed vertical guide from chart top to bottom at xs[index]
+  //   2. accent ring + inner dot on the primary trace at that x
+  //   3. tooltip bubble anchored above the marker (flips below if it
+  //      would clip the chart top, and shifts horizontally to stay
+  //      inside the canvas).
+  // -------------------------------------------------------------------
+  void _paintScrub(
+      Canvas canvas, Rect chart, List<double> stepsNorm, Size size) {
+    final i = scrubIndex!;
+    final xs = _xPositions(chart, points.length);
+    final x = xs[i];
+    final y = chart.bottom - stepsNorm[i].clamp(0.0, 1.0) * chart.height;
+    final point = points[i];
+
+    // 1. Dashed vertical guide — subtle so the trace + tooltip stay
+    // the primary read.
+    final guidePaint = Paint()
+      ..color = stepsColor.withValues(alpha: 0.35)
+      ..strokeWidth = 1.2
+      ..strokeCap = StrokeCap.round;
+    const dashLen = 3.0;
+    const gapLen = 3.0;
+    for (double yy = chart.top; yy < chart.bottom; yy += dashLen + gapLen) {
+      final endY = (yy + dashLen).clamp(chart.top, chart.bottom);
+      canvas.drawLine(Offset(x, yy), Offset(x, endY), guidePaint);
+    }
+
+    // 2. Highlighted marker on the trace — a filled circle with a
+    // white/theme ring around it so it reads clearly against the
+    // primary-tinted fill underneath.
+    canvas.drawCircle(
+      Offset(x, y),
+      7,
+      Paint()..color = tooltipBg,
+    );
+    canvas.drawCircle(
+      Offset(x, y),
+      5,
+      Paint()..color = stepsColor,
+    );
+
+    // 3. Tooltip bubble. Two lines of text — steps big, date muted —
+    // laid out in a rounded surface-coloured rectangle with a hair
+    // of shadow so it lifts off the trace.
+    final stepsTp = TextPainter(
+      text: TextSpan(
+        text: _fmtStepsFull(point.steps),
+        style: TextStyle(
+          color: tooltipFg,
+          fontFamily: 'Manrope',
+          fontSize: 13,
+          fontWeight: FontWeight.w800,
+          fontFeatures: const [FontFeature.tabularFigures()],
+        ),
+      ),
+      textDirection: TextDirection.ltr,
+    )..layout();
+    final dateTp = TextPainter(
+      text: TextSpan(
+        text: _fmtTooltipDate(point.date),
+        style: TextStyle(
+          color: tooltipMuted,
+          fontFamily: 'Manrope',
+          fontSize: 10,
+          fontWeight: FontWeight.w700,
+        ),
+      ),
+      textDirection: TextDirection.ltr,
+    )..layout();
+
+    const hPad = 10.0;
+    const vPad = 7.0;
+    const gap = 2.0; // vertical gap between the two text lines
+    final contentW = stepsTp.width > dateTp.width ? stepsTp.width : dateTp.width;
+    final boxW = contentW + hPad * 2;
+    final boxH = stepsTp.height + dateTp.height + gap + vPad * 2;
+
+    // Prefer above-the-marker; flip below if it would clip.
+    const markerGap = 12.0;
+    double boxTop = y - markerGap - boxH;
+    if (boxTop < chart.top - 6) {
+      boxTop = y + markerGap;
+    }
+    // Centre horizontally on the marker, then shift into the canvas
+    // if either edge would clip.
+    double boxLeft = x - boxW / 2;
+    if (boxLeft < 4) boxLeft = 4;
+    if (boxLeft + boxW > size.width - 4) boxLeft = size.width - 4 - boxW;
+
+    final boxRect = Rect.fromLTWH(boxLeft, boxTop, boxW, boxH);
+    final boxRRect = RRect.fromRectAndRadius(boxRect, const Radius.circular(10));
+
+    // Soft shadow under the tooltip. drawShadow would need a Path;
+    // a translated blurred fill is cheaper and reads the same at
+    // this size.
+    final shadowPaint = Paint()
+      ..color = Colors.black.withValues(alpha: 0.18)
+      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 6);
+    canvas.drawRRect(boxRRect.shift(const Offset(0, 2)), shadowPaint);
+    canvas.drawRRect(boxRRect, Paint()..color = tooltipBg);
+    // Subtle stroke so the bubble reads as a card on both themes.
+    canvas.drawRRect(
+      boxRRect,
+      Paint()
+        ..color = tooltipMuted.withValues(alpha: 0.18)
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1,
+    );
+
+    // Paint the two lines. Steps sits on top so it reads first.
+    stepsTp.paint(
+      canvas,
+      Offset(boxLeft + hPad + (contentW - stepsTp.width) / 2, boxTop + vPad),
+    );
+    dateTp.paint(
+      canvas,
+      Offset(
+        boxLeft + hPad + (contentW - dateTp.width) / 2,
+        boxTop + vPad + stepsTp.height + gap,
+      ),
+    );
+  }
+
+  /// Comma-grouped full step count for the tooltip. The main trace's
+  /// y-axis labels compact to "5K / 10K" but the tooltip is where
+  /// the user goes for the EXACT number, so no shortening here.
+  String _fmtStepsFull(int n) {
+    final abs = n.abs();
+    final s = abs.toString();
+    final buf = StringBuffer();
+    for (int i = 0; i < s.length; i++) {
+      if (i > 0 && (s.length - i) % 3 == 0) buf.write(',');
+      buf.write(s[i]);
+    }
+    final formatted = buf.toString();
+    return n < 0 ? '-$formatted steps' : '$formatted steps';
+  }
+
+  /// "Mon · 12 Aug" — weekday first for at-a-glance context, day+month
+  /// second so a Jun→Jul crossover on the strip is unambiguous.
+  String _fmtTooltipDate(DateTime d) {
+    return '${DateFormat('EEE').format(d)} · ${DateFormat('d MMM').format(d)}';
+  }
+
   @override
   bool shouldRepaint(_TrendChartPainter oldDelegate) {
     return oldDelegate.points != points ||
-        oldDelegate.revealProgress != revealProgress;
+        oldDelegate.revealProgress != revealProgress ||
+        oldDelegate.scrubIndex != scrubIndex;
   }
 }

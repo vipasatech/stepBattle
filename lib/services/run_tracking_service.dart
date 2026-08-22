@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io' show Platform;
 import 'dart:math' as math;
 import 'dart:typed_data';
 
@@ -8,8 +9,10 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../models/run_session_model.dart';
 import '../utils/app_logger.dart';
+import '../utils/cross_isolate_kv.dart';
 import 'background_sync.dart';
 import 'native_step_service.dart';
+import 'supabase_api_client.dart';
 
 /// Trust state of the in-flight session. Drives the live-screen pill and
 /// determines which accumulator any new step-delta lands in.
@@ -28,6 +31,42 @@ enum _TrackState { indoor, gpsSteady, gpsStationary, estimated }
 /// subscribes to. Only one session at a time. The active state is also
 /// mirrored to Hive so the foreground service can switch its notification to
 /// the TRACK layout.
+/// LocationSettings for a Track session. On Android returns
+/// AndroidSettings with a foregroundNotificationConfig — this spins
+/// up a location-typed foreground service so GPS keeps flowing while
+/// the app is backgrounded or the screen is off. Non-Android callers
+/// (currently unused; iOS still runs foreground-only Track) get plain
+/// LocationSettings.
+LocationSettings _androidTrackLocationSettings() {
+  if (!Platform.isAndroid) {
+    return const LocationSettings(
+      accuracy: LocationAccuracy.bestForNavigation,
+      distanceFilter: 5,
+    );
+  }
+  return AndroidSettings(
+    accuracy: LocationAccuracy.bestForNavigation,
+    distanceFilter: 5,
+    // Deliver an update at least every 5 seconds even if the user is
+    // stationary — keeps the foreground service tick alive and matches
+    // the periodic snapshot cadence in _onTick.
+    intervalDuration: const Duration(seconds: 5),
+    foregroundNotificationConfig: const ForegroundNotificationConfig(
+      notificationTitle: 'Recording your Track',
+      notificationText: 'GPS is on so your route stays continuous',
+      notificationIcon: AndroidResource(
+        name: 'ic_stat_logo',
+        defType: 'drawable',
+      ),
+      // Keep the notification visible until the service ends. Users can
+      // tap it to return to the Track screen (handled by Android's
+      // default launch-intent behaviour).
+      enableWakeLock: true,
+      setOngoing: true,
+    ),
+  );
+}
+
 class RunTrackingService {
   final SupabaseClient _client;
   final NativeStepService _native;
@@ -148,19 +187,32 @@ class RunTrackingService {
     _state = _TrackState.indoor;
     _path.clear();
 
+    // Mirror session-start into SharedPreferences so the foreground-
+    // service isolate can render its Strava-style Track notification
+    // without racing the main-isolate Hive file. See CrossIsolateKV.
     try {
-      await Hive.box(NativeStepService.boxName)
-          .put(_kActiveStartedAt, _startedAt!.millisecondsSinceEpoch);
+      await CrossIsolateKV.setInt(
+        CrossIsolateKV.activeTrackStartedAt,
+        _startedAt!.millisecondsSinceEpoch,
+      );
     } catch (_) {}
 
     // Subscribe to GPS. If permission isn't granted yet the stream throws;
     // we still let the session run as pedometer-only.
     try {
+      // Use AndroidSettings (not the base LocationSettings) so we can
+      // wire in the foreground-service notification. Without this, GPS
+      // stops delivering updates the moment the app is backgrounded or
+      // the screen turns off — Track sessions get gaps in the route.
+      //
+      // AndroidSettings.foregroundNotificationConfig is what tells the
+      // OS "start a location-typed foreground service with THIS
+      // notification" — the notification stays visible for the whole
+      // Track session, and location updates keep flowing regardless
+      // of app state. Requires FOREGROUND_SERVICE_LOCATION permission
+      // in the manifest (see AndroidManifest.xml).
       _gpsSub = Geolocator.getPositionStream(
-        locationSettings: const LocationSettings(
-          accuracy: LocationAccuracy.bestForNavigation,
-          distanceFilter: 5,
-        ),
+        locationSettings: _androidTrackLocationSettings(),
       ).listen(_onPosition, onError: (e) {
         AppLogger.track.w('runTracking:gpsError', fields: {'error': e.toString()});
       });
@@ -296,16 +348,15 @@ class RunTrackingService {
       // pendingKey row stays in Hive — `syncPending` will retry.
     }
 
+    // Clearing every SharedPreferences key that made the notification
+    // "live" — the background isolate's render helper treats any-missing
+    // as "session inactive" and cancels the notification.
     try {
-      final box = Hive.box(NativeStepService.boxName);
-      // Clearing every key that made the notification "live" — the
-      // background isolate's render helper treats any-missing as
-      // "session inactive" and cancels the notification.
-      await box.delete(_kActiveStartedAt);
-      await box.delete(_kActiveTrackSteps);
-      await box.delete(_kActiveTrackDistanceM);
-      await box.delete(_kActiveTrackPaceSecKm);
-      await box.delete(_kActiveTrackCalories);
+      await CrossIsolateKV.remove(CrossIsolateKV.activeTrackStartedAt);
+      await CrossIsolateKV.remove(CrossIsolateKV.activeTrackSteps);
+      await CrossIsolateKV.remove(CrossIsolateKV.activeTrackDistanceM);
+      await CrossIsolateKV.remove(CrossIsolateKV.activeTrackPaceSecKm);
+      await CrossIsolateKV.remove(CrossIsolateKV.activeTrackCalories);
     } catch (_) {}
 
     final saved = RunSession(
@@ -368,32 +419,61 @@ class RunTrackingService {
   /// URLs in the same order as the input — empty when nothing
   /// uploaded. Throws on transport failure so the caller can keep the
   /// user on the Save Activity page instead of half-saving the run.
+  ///
+  /// Upload budget cap: photos exceeding [_maxUploadBytes] are rejected
+  /// with a friendly error. OS-level pick-time downscale (max 1920 px
+  /// long edge, JPEG q85) normally produces 300-500 KB files, so 3 MB
+  /// is a comfortable ceiling — anything larger came through a picker
+  /// that ignored the size hints (some third-party camera apps do).
+  ///
+  /// Each per-photo upload flows through [SupabaseApiClient.run] so a
+  /// transient socket drop is retried with backoff instead of erroring
+  /// the whole batch. `upsert: false` means a duplicate upload attempt
+  /// would 409 — but the timestamped path means duplicates only happen
+  /// if the same batch retries after a partial success; the API client
+  /// discriminates by Postgrest code and won't re-run a 409.
+  static const int _maxUploadBytes = 3 * 1024 * 1024;
+
   Future<List<String>> uploadTrackMedia({
     required String userId,
     required List<List<int>> photoBytes,
   }) async {
     if (photoBytes.isEmpty) return const [];
+    for (var i = 0; i < photoBytes.length; i++) {
+      if (photoBytes[i].length > _maxUploadBytes) {
+        AppLogger.track.w('runTracking:mediaTooLarge', fields: {
+          'index': i,
+          'bytes': photoBytes[i].length,
+          'limit': _maxUploadBytes,
+        });
+        throw StateError(
+            'Photo ${i + 1} is too large (${(photoBytes[i].length / (1024 * 1024)).toStringAsFixed(1)} MB). '
+            'Max is ${(_maxUploadBytes / (1024 * 1024)).toStringAsFixed(0)} MB — try a different photo.');
+      }
+    }
     final urls = <String>[];
     final stamp = DateTime.now().millisecondsSinceEpoch;
     for (var i = 0; i < photoBytes.length; i++) {
       // Path shape: `<uid>/<millis>_<i>.jpg`. RLS in migration 0022
       // forces the first folder to equal `auth.uid()`.
       final path = '$userId/${stamp}_$i.jpg';
-      try {
-        await _client.storage.from('track-media').uploadBinary(
-              path,
-              Uint8List.fromList(photoBytes[i]),
-              fileOptions: const FileOptions(
-                contentType: 'image/jpeg',
-                upsert: false,
-              ),
-            );
-        urls.add(_client.storage.from('track-media').getPublicUrl(path));
-      } catch (e, s) {
-        AppLogger.track.e('runTracking:mediaUploadFailed',
-            fields: {'index': i, 'path': path}, error: e, stack: s);
-        rethrow;
-      }
+      await SupabaseApiClient.instance.run<void>(
+        () async {
+          await _client.storage.from('track-media').uploadBinary(
+                path,
+                Uint8List.fromList(photoBytes[i]),
+                fileOptions: const FileOptions(
+                  contentType: 'image/jpeg',
+                  upsert: false,
+                ),
+              );
+        },
+        category: LogCategory.track,
+        name: 'trackMedia.upload',
+        fields: {'uid': userId, 'index': i, 'bytes': photoBytes[i].length},
+        timeout: const Duration(seconds: 30),
+      );
+      urls.add(_client.storage.from('track-media').getPublicUrl(path));
     }
     return urls;
   }
@@ -469,6 +549,55 @@ class RunTrackingService {
       }
     }
     return out;
+  }
+
+  /// Fetch just today's most-recent completed session for [userId], or
+  /// null when the user hasn't tracked anything today. Used by the
+  /// Home-tab peek card so it doesn't force the full history provider
+  /// to stay hot (~20 rows) just to render one card.
+  ///
+  /// Filters by `started_at >= todayStart` server-side; pending local
+  /// sessions from today are merged from the same source as
+  /// [getHistory] so a just-finished run shows up before the server
+  /// upload lands.
+  Future<RunSession?> getTodaysSession({required String userId}) async {
+    final now = DateTime.now();
+    final todayStart = DateTime(now.year, now.month, now.day);
+    final todayStartUtcIso = todayStart.toUtc().toIso8601String();
+
+    // Local pending queue may have a today's session that hasn't
+    // synced yet; keep the same "pending first, then merge" contract
+    // as `getHistory` so the visible card doesn't flicker as a run
+    // uploads.
+    final pending = getPendingSessions(userId: userId)
+        .where((s) => !s.startedAt.toLocal().isBefore(todayStart))
+        .toList();
+
+    RunSession? synced;
+    try {
+      final row = await _client
+          .from('track_sessions')
+          .select()
+          .eq('user_id', userId)
+          .not('ended_at', 'is', null)
+          .gte('started_at', todayStartUtcIso)
+          .order('started_at', ascending: false)
+          .limit(1)
+          .maybeSingle();
+      if (row != null) {
+        synced = RunSession.fromSupabaseRow(row);
+      }
+    } catch (e, s) {
+      AppLogger.track.e('runTracking:todayFetchFailed', error: e, stack: s);
+    }
+
+    final merged = <RunSession>[
+      ...pending,
+      if (synced != null) synced,
+    ];
+    if (merged.isEmpty) return null;
+    merged.sort((a, b) => b.startedAt.compareTo(a.startedAt));
+    return merged.first;
   }
 
   Future<List<RunSession>> getHistory({required String userId, int limit = 20}) async {
@@ -656,23 +785,21 @@ class RunTrackingService {
     );
     if (!_stateController.isClosed) _stateController.add(_latest!);
 
-    // Mirror the four notification metrics into Hive so the
-    // foreground-service isolate (see background_sync._renderTrack)
+    // Mirror the four notification metrics into SharedPreferences so
+    // the foreground-service isolate (see background_sync._renderTrack)
     // can render a Strava-style lock-screen notification without
-    // cross-isolate messaging. Best-effort — a Hive write hiccup
+    // racing the main-isolate Hive file. Best-effort — a write hiccup
     // shouldn't affect the live UI.
-    try {
-      final box = Hive.box(NativeStepService.boxName);
-      box.put(_kActiveTrackSteps, _currentSteps);
-      box.put(_kActiveTrackDistanceM, totalDistance);
-      // Store null-as-null so the notification can distinguish
-      // "warming up, no pace yet" from "pace = 0".
-      box.put(_kActiveTrackPaceSecKm, pace);
-      box.put(
-        _kActiveTrackCalories,
-        _latest!.calories,
-      );
-    } catch (_) {/* ignore transient Hive errors */}
+    unawaited(CrossIsolateKV.setInt(
+      CrossIsolateKV.activeTrackSteps, _currentSteps).catchError((_) {}));
+    unawaited(CrossIsolateKV.setDouble(
+      CrossIsolateKV.activeTrackDistanceM, totalDistance).catchError((_) {}));
+    // Store null-as-null (via key removal) so the notification can
+    // distinguish "warming up, no pace yet" from "pace = 0".
+    unawaited(CrossIsolateKV.setNullableDouble(
+      CrossIsolateKV.activeTrackPaceSecKm, pace).catchError((_) {}));
+    unawaited(CrossIsolateKV.setInt(
+      CrossIsolateKV.activeTrackCalories, _latest!.calories).catchError((_) {}));
   }
 
   String _computeSource() {
@@ -843,28 +970,32 @@ class EndResult {
   });
 }
 
-/// Whether a Track session is currently active, derived from the Hive flag
-/// that the service writes. Reading from Hive lets the FAB show its active
-/// state even before the service is in memory (e.g., immediately after a
-/// cold launch with a prior session still running on the foreground isolate).
+/// Whether a Track session is currently active, derived from the
+/// SharedPreferences flag that the service writes on start / clears on
+/// end. Reading synchronously lets the FAB show its active state even
+/// before the service is in memory (e.g., immediately after a cold
+/// launch with a prior session still active on the foreground isolate).
+///
+/// Function name kept for API compatibility with existing callers; the
+/// underlying store moved from Hive → SharedPreferences in the Level B
+/// isolation refactor.
 bool isTrackActiveFromHive() {
   try {
-    final ms = Hive.box(NativeStepService.boxName)
-        .get(RunTrackingService._kActiveStartedAt);
-    return ms is int;
+    return CrossIsolateKV.getIntSync(CrossIsolateKV.activeTrackStartedAt) !=
+        null;
   } catch (_) {
     return false;
   }
 }
 
-/// Read the start time of an active session straight from Hive (used by the
-/// notification renderer in [background_sync.dart] without needing the
-/// service instance).
+/// Read the start time of an active session (used by callers that want
+/// the full DateTime, not just the boolean flag). Name kept for API
+/// compatibility — reads SharedPreferences now, not Hive.
 DateTime? activeTrackStartedAtFromHive() {
   try {
-    final ms = Hive.box(NativeStepService.boxName)
-        .get(RunTrackingService._kActiveStartedAt);
-    if (ms is int) {
+    final ms =
+        CrossIsolateKV.getIntSync(CrossIsolateKV.activeTrackStartedAt);
+    if (ms != null) {
       return DateTime.fromMillisecondsSinceEpoch(ms);
     }
   } catch (_) {}

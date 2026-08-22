@@ -8,6 +8,7 @@ import '../providers/auth_provider.dart';
 import '../providers/friend_provider.dart';
 import '../widgets/avatar_circle.dart';
 import '../widgets/bottom_sheet_handle.dart';
+import '../widgets/shimmer_loader.dart';
 
 /// Behavior of the Add Friends sheet.
 enum FriendsSheetMode {
@@ -34,6 +35,15 @@ class AddFriendsSheet extends ConsumerStatefulWidget {
   final int initialTab;
   final void Function(List<UserModel> selected)? onConfirm;
 
+  /// Instant-invite mode. When set, tapping the `+` chip on a friend
+  /// row fires this callback IMMEDIATELY (no selection queue, no
+  /// bottom confirm button). The row transitions to a loading spinner
+  /// while the future is in flight, then to a "✓ Sent" chip on
+  /// success. The user can keep tapping + on other friends to send
+  /// more invites in the same session. Used by the team-lobby page
+  /// where per-friend invites replace the batch-select flow.
+  final Future<void> Function(UserModel)? onInviteImmediately;
+
   const AddFriendsSheet({
     super.key,
     this.mode = FriendsSheetMode.picker,
@@ -41,6 +51,7 @@ class AddFriendsSheet extends ConsumerStatefulWidget {
     this.confirmLabel = 'Confirm Selection',
     this.initialTab = 0,
     this.onConfirm,
+    this.onInviteImmediately,
   });
 
   /// Whether selection UI should be visible (picker mode + not Requests tab).
@@ -54,8 +65,39 @@ class _AddFriendsSheetState extends ConsumerState<AddFriendsSheet> {
   late int _tabIndex;
   final _searchController = TextEditingController();
   final Set<String> _selectedIds = {};
+  // Instant-invite mode: which user IDs are mid-flight (spinner) and
+  // which already completed (green ✓ Sent chip). Repopulated on every
+  // + tap of a fresh user; a completed row stays green for the rest
+  // of the sheet's lifetime so re-invites are cheap and predictable.
+  final Set<String> _sendingIds = {};
+  final Set<String> _sentIds = {};
   List<UserModel> _searchResults = [];
   bool _searching = false;
+
+  bool get _instantMode => widget.onInviteImmediately != null;
+
+  Future<void> _instantInvite(UserModel u) async {
+    final cb = widget.onInviteImmediately;
+    if (cb == null) return;
+    if (_sendingIds.contains(u.userId) || _sentIds.contains(u.userId)) {
+      return;
+    }
+    setState(() => _sendingIds.add(u.userId));
+    try {
+      await cb(u);
+      if (!mounted) return;
+      setState(() {
+        _sendingIds.remove(u.userId);
+        _sentIds.add(u.userId);
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _sendingIds.remove(u.userId));
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Invite failed: $e')),
+      );
+    }
+  }
 
   @override
   void initState() {
@@ -248,6 +290,10 @@ class _AddFriendsSheetState extends ConsumerState<AddFriendsSheet> {
                     onToggle: _toggleSelect,
                     onRemove: _removeFriend,
                     scrollController: scrollController,
+                    instantMode: _instantMode,
+                    sendingIds: _sendingIds,
+                    sentIds: _sentIds,
+                    onInstantInvite: _instantInvite,
                   ),
                 1 => _SearchTab(
                     searchController: _searchController,
@@ -275,7 +321,9 @@ class _AddFriendsSheetState extends ConsumerState<AddFriendsSheet> {
             // Bottom confirm bar — picker mode, on Friends OR Search tab
             // (the Requests tab still hides it since incoming requests are
             // resolved with their own per-row Accept/Reject actions).
-            if (widget._allowSelect && _tabIndex != 2)
+            // In instant-invite mode the bar is hidden entirely — each
+            // row is its own send action.
+            if (widget._allowSelect && _tabIndex != 2 && !_instantMode)
               Container(
                 padding: const EdgeInsets.fromLTRB(24, 12, 24, 32),
                 decoration: BoxDecoration(
@@ -394,6 +442,12 @@ class _FriendsListTab extends StatelessWidget {
   final void Function(UserModel) onToggle;
   final Future<void> Function(UserModel) onRemove;
   final ScrollController scrollController;
+  // Instant-invite mode (Batch A r3) — overrides the select-and-
+  // confirm flow so each `+` tap fires an immediate invite.
+  final bool instantMode;
+  final Set<String> sendingIds;
+  final Set<String> sentIds;
+  final Future<void> Function(UserModel) onInstantInvite;
 
   const _FriendsListTab({
     required this.friends,
@@ -404,6 +458,10 @@ class _FriendsListTab extends StatelessWidget {
     required this.onToggle,
     required this.onRemove,
     required this.scrollController,
+    this.instantMode = false,
+    this.sendingIds = const {},
+    this.sentIds = const {},
+    required this.onInstantInvite,
   });
 
   @override
@@ -428,6 +486,22 @@ class _FriendsListTab extends StatelessWidget {
       itemBuilder: (_, i) {
         final f = friends[i];
         if (f.userId == currentUid) return const SizedBox();
+        // Instant-invite mode wins over the select toggle — each
+        // row's `+` chip fires the invite immediately, and the state
+        // rotates through sending (spinner) → sent (green ✓).
+        if (instantMode) {
+          return _UserRow(
+            user: f,
+            selected: sentIds.contains(f.userId),
+            sending: sendingIds.contains(f.userId),
+            showSelect: true,
+            selectedLabel: 'Sent',
+            onTap: () => onInstantInvite(f),
+            trailing: isManageMode
+                ? _FriendKebab(onRemove: () => onRemove(f))
+                : null,
+          );
+        }
         return _UserRow(
           user: f,
           selected: selectedIds.contains(f.userId),
@@ -536,8 +610,10 @@ class _SearchTab extends StatelessWidget {
         const SizedBox(height: 12),
         Expanded(
           child: searching
-              ? Center(
-                  child: CircularProgressIndicator(color: AppColors.primary))
+              ? ListView(
+                  padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 8),
+                  children: const [ShimmerRow(), ShimmerRow(), ShimmerRow(), ShimmerRow()],
+                )
               : results.isEmpty
                   ? Center(
                       child: Padding(
@@ -612,11 +688,21 @@ class _PickerSearchTrailing extends ConsumerStatefulWidget {
 class _PickerSearchTrailingState
     extends ConsumerState<_PickerSearchTrailing> {
   bool _sendingFriend = false;
+  // Optimistic "sent" flag — flipped true the moment the send call
+  // resolves, without waiting for the realtime INSERT to propagate.
+  // Without this the button briefly reverted to its "+" state between
+  // the API round-trip finishing and Supabase realtime delivering the
+  // new row to `outgoingRequestsProvider`, which reads as "the tap
+  // did nothing." Once realtime lands the value from that provider
+  // also flips true and this local flag becomes redundant — either
+  // one keeps the sent-state visible.
+  bool _optimisticallySent = false;
 
   Future<void> _sendFriendRequest() async {
     setState(() => _sendingFriend = true);
     try {
       await widget.onSendRequest(widget.user);
+      if (mounted) setState(() => _optimisticallySent = true);
     } finally {
       if (mounted) setState(() => _sendingFriend = false);
     }
@@ -629,7 +715,7 @@ class _PickerSearchTrailingState
     final outgoing =
         ref.watch(outgoingRequestsProvider).valueOrNull ?? const [];
     final isFriend = friendIds.contains(widget.user.userId);
-    final hasPending =
+    final hasPending = _optimisticallySent ||
         outgoing.any((r) => r.toUserId == widget.user.userId);
 
     return Row(
@@ -788,8 +874,15 @@ class _RequestsTab extends ConsumerWidget {
     final outgoing = ref.watch(outgoingRequestProfilesProvider);
 
     if (incoming.isLoading || (showOutgoing && outgoing.isLoading)) {
-      return Center(
-          child: CircularProgressIndicator(color: AppColors.primary));
+      return ListView(
+        padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 8),
+        children: const [
+          ShimmerRow(),
+          ShimmerRow(),
+          ShimmerRow(),
+          ShimmerRow(),
+        ],
+      );
     }
     if (incoming.hasError || (showOutgoing && outgoing.hasError)) {
       return const Center(child: Text('Could not load requests'));
@@ -1065,6 +1158,12 @@ class _UserRow extends StatelessWidget {
   final bool showSelect;
   final VoidCallback? onTap;
   final Widget? trailing;
+  /// Instant-invite loading state — renders a spinner in place of the
+  /// `+` chip while the send RPC is in flight.
+  final bool sending;
+  /// Overrides the "Added" copy on the selected chip (defaults to
+  /// "Added" for the batch-select flow, "Sent" for instant-invite).
+  final String selectedLabel;
 
   const _UserRow({
     required this.user,
@@ -1072,6 +1171,8 @@ class _UserRow extends StatelessWidget {
     this.showSelect = true,
     this.onTap,
     this.trailing,
+    this.sending = false,
+    this.selectedLabel = 'Added',
   });
 
   @override
@@ -1112,7 +1213,9 @@ class _UserRow extends StatelessWidget {
             trailing!
           else if (showSelect)
             GestureDetector(
-              onTap: onTap,
+              // Suppress taps while the send is in flight or already
+              // resolved so a jittery double-tap can't stack requests.
+              onTap: (sending || selected) ? null : onTap,
               child: selected
                   ? Container(
                       padding: const EdgeInsets.symmetric(
@@ -1129,22 +1232,40 @@ class _UserRow extends StatelessWidget {
                           Icon(Icons.check_circle,
                               size: 16, color: AppColors.success),
                           const SizedBox(width: 4),
-                          Text('Added',
+                          Text(selectedLabel,
                               style: theme.textTheme.labelSmall?.copyWith(
                                   color: AppColors.success,
                                   fontWeight: FontWeight.w700)),
                         ],
                       ),
                     )
-                  : Container(
-                      padding: const EdgeInsets.all(10),
-                      decoration: BoxDecoration(
-                        color: AppColors.primaryBrand,
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                      child:
-                          const Icon(Icons.add, size: 18, color: Colors.white),
-                    ),
+                  : sending
+                      ? Container(
+                          padding: const EdgeInsets.all(10),
+                          decoration: BoxDecoration(
+                            color: AppColors.primaryBrand
+                                .withValues(alpha: 0.5),
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          child: const SizedBox(
+                            width: 18,
+                            height: 18,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2,
+                              valueColor: AlwaysStoppedAnimation<Color>(
+                                  Colors.white),
+                            ),
+                          ),
+                        )
+                      : Container(
+                          padding: const EdgeInsets.all(10),
+                          decoration: BoxDecoration(
+                            color: AppColors.primaryBrand,
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          child: const Icon(Icons.add,
+                              size: 18, color: Colors.white),
+                        ),
             ),
         ],
       ),
@@ -1176,11 +1297,17 @@ class _RequestButton extends ConsumerStatefulWidget {
 
 class _RequestButtonState extends ConsumerState<_RequestButton> {
   bool _processing = false;
+  // Optimistic "sent" — flipped after the send call resolves so the
+  // button jumps straight to the disabled "Sent" state instead of
+  // reverting to "Request" while realtime catches up. Same bug and
+  // same fix as `_PickerSearchTrailing` above.
+  bool _optimisticallySent = false;
 
   Future<void> _send() async {
     setState(() => _processing = true);
     try {
       await widget.onSend(widget.target);
+      if (mounted) setState(() => _optimisticallySent = true);
     } finally {
       if (mounted) setState(() => _processing = false);
     }
@@ -1245,7 +1372,7 @@ class _RequestButtonState extends ConsumerState<_RequestButton> {
       );
     }
 
-    final hasOutgoing =
+    final hasOutgoing = _optimisticallySent ||
         outgoing.any((r) => r.toUserId == widget.target.userId);
     if (hasOutgoing) {
       return FilledButton.icon(

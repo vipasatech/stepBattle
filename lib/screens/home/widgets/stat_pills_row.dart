@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../../../config/colors.dart';
+import '../../../providers/connectivity_provider.dart';
 import '../../../providers/leaderboard_provider.dart';
 import '../../../providers/step_provider.dart';
 import '../../../sheets/location_permission_sheet.dart';
@@ -27,6 +28,12 @@ class StatPillsRow extends ConsumerWidget {
     // profiles table; rank is a computed leaderboard position. Pull it
     // from myRankProvider which queries the LeaderboardService.
     final rank = ref.watch(myRankProvider).valueOrNull?.rank ?? 0;
+    // Offline detection: when the device has no network, the rank
+    // stream can never resolve to a real number → show a wifi-off
+    // icon rather than the ambiguous "--" that reads as "you have
+    // no rank".
+    final online = ref.watch(isOnlineProvider).valueOrNull ?? true;
+    final rankOffline = rank <= 0 && !online;
     // Distance derived from today's step count × default stride. No
     // separate "today's verified GPS distance" aggregate exists yet —
     // when we add one, swap this for that.
@@ -53,7 +60,11 @@ class StatPillsRow extends ConsumerWidget {
         const SizedBox(width: 8),
         Expanded(
           child: _StatPill(
-            value: rank > 0 ? '#$rank' : '--',
+            // Offline: swap the "--" placeholder for a cloud-off icon
+            // so the user sees "we can't check right now" instead of
+            // an ambiguous dash.
+            value: rankOffline ? '' : (rank > 0 ? '#$rank' : '--'),
+            valueIcon: rankOffline ? Icons.cloud_off : null,
             label: 'Global Rank',
             icon: Icons.leaderboard,
             iconColor: AppColors.primary,
@@ -81,7 +92,11 @@ class StatPillsRow extends ConsumerWidget {
               error: (_, __) => '-- km',
             ),
             label: 'Distance',
-            icon: Icons.straighten,
+            // `route` reads as "path traveled" at a glance — a
+            // stylised road with a turn. Fits step-tracking better
+            // than the ruler-like `straighten` icon we had before,
+            // which read as generic "measurement".
+            icon: Icons.route,
             iconColor: AppColors.primary,
             onTap: null,
           ),
@@ -106,11 +121,17 @@ class _StatPill extends StatelessWidget {
   final Color iconColor;
   final VoidCallback? onTap;
 
+  /// If non-null, this icon replaces the [value] text in the primary
+  /// slot. Used for the "offline" state where the rank can't be
+  /// computed — we surface a cloud-off glyph instead of a dash.
+  final IconData? valueIcon;
+
   const _StatPill({
     required this.value,
     required this.label,
     required this.icon,
     required this.iconColor,
+    this.valueIcon,
     this.onTap,
   });
 
@@ -132,12 +153,21 @@ class _StatPill extends StatelessWidget {
           children: [
             Icon(icon, color: iconColor, size: 20),
             const SizedBox(height: 8),
-            Text(
-              value,
-              style: theme.textTheme.titleMedium?.copyWith(
-                fontWeight: FontWeight.w700,
-              ),
-            ),
+            valueIcon != null
+                ? Icon(
+                    valueIcon,
+                    // Match the value-text's rendered height so the
+                    // pill's overall vertical rhythm doesn't shift
+                    // when we swap text → icon.
+                    size: 20,
+                    color: AppColors.onSurfaceVariant,
+                  )
+                : Text(
+                    value,
+                    style: theme.textTheme.titleMedium?.copyWith(
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
             const SizedBox(height: 2),
             Text(
               label,

@@ -3,6 +3,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../models/friend_relationship_model.dart';
 import '../models/user_model.dart';
 import '../utils/app_logger.dart';
+import 'supabase_api_client.dart';
 
 /// Friend graph operations on Supabase.
 ///
@@ -31,16 +32,30 @@ class FriendService {
   }
 
   /// Case-insensitive username prefix search via PostgREST's `ilike`.
+  ///
+  /// Uses a `text_pattern_ops` B-tree index on `LOWER(display_name)`
+  /// server-side (migration 0037) so this stays sub-10 ms even at 50k+
+  /// profiles. Routed through [SupabaseApiClient] for retry + timing so
+  /// a flaky network on a "type-and-Enter" search doesn't just show
+  /// empty results without a reason.
   Future<List<UserModel>> searchByUsername(String query) async {
     final q = query.trim();
     if (q.isEmpty) return [];
     try {
-      final rows = await _supabase
-          .from('profiles')
-          .select()
-          .ilike('display_name', '$q%')
-          .limit(15);
-      return (rows as List)
+      final rows = await SupabaseApiClient.instance.run<List<dynamic>>(
+        () async {
+          final data = await _supabase
+              .from('profiles_public')
+              .select()
+              .ilike('display_name', '$q%')
+              .limit(15);
+          return data;
+        },
+        category: LogCategory.friend,
+        name: 'friends.searchByUsername',
+        fields: {'qLen': q.length},
+      );
+      return rows
           .map((r) => UserModel.fromSupabaseRow(r as Map<String, dynamic>))
           .toList();
     } catch (e, s) {
@@ -52,11 +67,16 @@ class FriendService {
 
   Future<UserModel?> searchByUserCode(String userCode) async {
     try {
-      final row = await _supabase
-          .from('profiles')
-          .select()
-          .eq('user_code', userCode)
-          .maybeSingle();
+      final row = await SupabaseApiClient.instance.run<Map<String, dynamic>?>(
+        () => _supabase
+            .from('profiles_public')
+            .select()
+            .eq('user_code', userCode)
+            .maybeSingle(),
+        category: LogCategory.friend,
+        name: 'friends.searchByUserCode',
+        fields: {'code': userCode},
+      );
       if (row == null) return null;
       return UserModel.fromSupabaseRow(row);
     } catch (e, s) {
@@ -68,7 +88,7 @@ class FriendService {
 
   Future<UserModel?> searchByUserId(String userId) async {
     final row = await _supabase
-        .from('profiles')
+        .from('profiles_public')
         .select()
         .eq('id', userId)
         .maybeSingle();
@@ -201,7 +221,7 @@ class FriendService {
       final accepterId = rel['to_user_id'] as String;
       final senderId = rel['from_user_id'] as String;
       final accepter = await _supabase
-          .from('profiles')
+          .from('profiles_public')
           .select('display_name')
           .eq('id', accepterId)
           .maybeSingle();
@@ -292,7 +312,7 @@ class FriendService {
   Future<List<UserModel>> getFriends(List<String> friendIds) async {
     if (friendIds.isEmpty) return [];
     final rows = await _supabase
-        .from('profiles')
+        .from('profiles_public')
         .select()
         .inFilter('id', friendIds);
     return (rows as List)

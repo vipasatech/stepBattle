@@ -9,7 +9,9 @@ import '../../config/colors.dart';
 import '../../models/run_session_model.dart';
 import '../../providers/run_session_provider.dart';
 import '../../sheets/track_share_sheet.dart';
+import '../../widgets/app_network_image.dart';
 import '../../widgets/map_tile_layer.dart';
+import '../../widgets/shimmer_loader.dart';
 
 /// Read-only detail view for a saved Track session.
 ///
@@ -81,7 +83,14 @@ class TrackSessionDetailScreen extends ConsumerWidget {
         ],
       ),
       body: sessionAsync.when(
-        loading: () => const Center(child: CircularProgressIndicator()),
+        loading: () => ListView(
+          padding: const EdgeInsets.fromLTRB(20, 16, 20, 32),
+          children: const [
+            ShimmerLoader(height: 180, borderRadius: 20),
+            SizedBox(height: 16),
+            ShimmerCard(),
+          ],
+        ),
         error: (e, _) => Center(
           child: Padding(
             padding: const EdgeInsets.all(24),
@@ -668,49 +677,9 @@ class _PhotoSlide extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Image.network(
-      url,
-      fit: BoxFit.cover,
-      loadingBuilder: (_, child, progress) {
-        if (progress == null) return child;
-        return Container(
-          color: AppColors.surfaceContainerLow,
-          alignment: Alignment.center,
-          child: SizedBox(
-            width: 28,
-            height: 28,
-            child: CircularProgressIndicator(
-              strokeWidth: 2.5,
-              color: AppColors.primary,
-              value: progress.expectedTotalBytes == null
-                  ? null
-                  : progress.cumulativeBytesLoaded /
-                      progress.expectedTotalBytes!,
-            ),
-          ),
-        );
-      },
-      errorBuilder: (_, __, ___) {
-        return Container(
-          color: AppColors.surfaceContainerLow,
-          alignment: Alignment.center,
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(Icons.broken_image_outlined,
-                  color: AppColors.onSurfaceVariant, size: 32),
-              const SizedBox(height: 8),
-              Text(
-                'Photo unavailable',
-                style: TextStyle(
-                  color: AppColors.onSurfaceVariant,
-                  fontSize: 12,
-                ),
-              ),
-            ],
-          ),
-        );
-      },
+    return AppNetworkImage(
+      url: url,
+      placeholderColor: AppColors.surfaceContainerLow,
     );
   }
 }

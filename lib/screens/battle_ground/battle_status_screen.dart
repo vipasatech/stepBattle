@@ -1,17 +1,20 @@
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:flutter_animate/flutter_animate.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:hive_flutter/hive_flutter.dart';
 import 'package:image_picker/image_picker.dart';
 
 import '../../config/colors.dart';
+import '../../config/motion.dart';
 import '../../models/battle_model.dart';
 import '../../providers/auth_provider.dart';
 import '../../providers/battle_provider.dart';
 import '../../services/native_step_service.dart';
 import '../../sheets/battle_status_share_sheet.dart';
 import '../../widgets/battle_result_card.dart';
+import '../../widgets/shimmer_loader.dart';
 import '../../widgets/themed_battle_background.dart';
 
 /// **Battle Status** — the post-battle result page for completed
@@ -177,8 +180,15 @@ class _BattleStatusScreenState extends ConsumerState<BattleStatusScreen> {
         ],
       ),
       body: asyncBattle.when(
-        loading: () => Center(
-          child: CircularProgressIndicator(color: AppColors.primary),
+        loading: () => ListView(
+          padding: const EdgeInsets.fromLTRB(20, 16, 20, 32),
+          children: const [
+            ShimmerLoader(height: 180, borderRadius: 20),
+            SizedBox(height: 16),
+            ShimmerCard(),
+            SizedBox(height: 12),
+            ShimmerCard(),
+          ],
         ),
         error: (e, _) => Center(
           child: Text('Could not load battle: $e',
@@ -203,6 +213,13 @@ class _BattleStatusScreenState extends ConsumerState<BattleStatusScreen> {
               ),
             );
           }
+          // Content-appear on first canvas paint: scale 0.96 → 1.0 +
+          // fade, matches the scaleFade page transition timing so the
+          // page transition and the canvas contents feel like one
+          // coordinated arrival instead of a hard cut once the data
+          // resolves. flutter_animate's default one-shot behaviour
+          // means this only fires the first time the canvas paints
+          // after the battle loads — no replay on drag/settle.
           return _Canvas(
             battle: battle,
             uid: uid,
@@ -219,7 +236,18 @@ class _BattleStatusScreenState extends ConsumerState<BattleStatusScreen> {
             },
             onWordmarkSettled: () => _save(),
             onHorizontalFling: _onHorizontalFling,
-          );
+          )
+              .animate()
+              .fadeIn(
+                duration: Motion.d.slow,
+                curve: Motion.curves.standard,
+              )
+              .scale(
+                begin: const Offset(0.96, 0.96),
+                end: const Offset(1.0, 1.0),
+                duration: Motion.d.slow,
+                curve: Motion.curves.emphasized,
+              );
         },
       ),
     );

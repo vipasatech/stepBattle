@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../models/step_log_model.dart';
 import '../services/device_info_service.dart';
@@ -10,6 +11,7 @@ import '../services/source_step_hourly_log_service.dart';
 import '../services/step_service.dart';
 import '../services/step_source_aggregator.dart';
 import '../services/xp_service.dart';
+import 'app_lifecycle_provider.dart';
 import 'auth_provider.dart';
 
 /// Health service singleton.
@@ -90,7 +92,8 @@ final healthPermissionProvider = FutureProvider<bool>((ref) {
 });
 
 /// Today's step count, polled from the StepSourceAggregator.
-/// Emits immediately on subscribe, then every 60s.
+/// Emits immediately on subscribe, then every 60s **while the app is
+/// in the foreground**.
 ///
 /// The aggregator returns `max(native, healthConnect)` so:
 ///   - On Samsung with HC sharing on: usually HC wins (has full history).
@@ -101,13 +104,29 @@ final healthPermissionProvider = FutureProvider<bool>((ref) {
 /// `HealthService.getTodaySteps()` is monotonic within a day and never
 /// returns 0 once a real reading has been captured, so the UI doesn't
 /// flicker even when Health Connect blocks background reads.
+///
+/// Lifecycle gate: while the app is backgrounded/paused, the
+/// [flutter_foreground_task] service and the WorkManager fallback are
+/// authoritative for step sync; polling from the UI isolate is pure
+/// waste (battery, health-connect reads, ref.listen fan-out). The
+/// periodic tick reads [appLifecycleStateProvider] and skips the read
+/// whenever the app isn't `resumed`. On foreground return, main_shell
+/// runs its own explicit sync so the UI catches up immediately
+/// instead of waiting up to a full 60s for the next tick.
 final localTodayStepsProvider = StreamProvider<int>((ref) {
   final aggregator = ref.read(stepAggregatorProvider);
 
   Stream<int> stream() async* {
-    // Emit first value immediately (no 60s wait on cold start)
+    // Emit first value immediately (no wait on cold start).
     yield await aggregator.getTodaySteps();
-    await for (final _ in Stream.periodic(const Duration(seconds: 60))) {
+    // 10s (was 60s) — brings Home in sync with the Step Sources
+    // diagnostic screen (which polls every 5s) so users don't see a
+    // multi-minute lag between the debug card and the main hero
+    // number. Aggregator reads are cheap (~30ms) and gated by the
+    // lifecycle check below to skip while backgrounded.
+    await for (final _ in Stream.periodic(const Duration(seconds: 10))) {
+      final lifecycle = ref.read(appLifecycleStateProvider);
+      if (lifecycle != AppLifecycleState.resumed) continue;
       yield await aggregator.getTodaySteps();
     }
   }

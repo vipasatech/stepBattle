@@ -1,12 +1,17 @@
-import 'dart:ui';
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:material_design_icons_flutter/material_design_icons_flutter.dart';
 import '../../config/colors.dart';
+import '../../config/motion.dart';
+import '../../providers/app_lifecycle_provider.dart';
 import '../../providers/auth_provider.dart';
+import '../../models/notification_model.dart';
 import '../../providers/battle_provider.dart';
+import '../../providers/friend_provider.dart';
 import '../../providers/leaderboard_provider.dart';
 import '../../providers/mission_provider.dart';
 import '../../providers/notification_provider.dart';
@@ -17,9 +22,17 @@ import '../../providers/user_provider.dart';
 import '../../services/background_sync.dart';
 import '../../services/notification_service.dart';
 import '../../services/persistent_notifications.dart';
+import '../../services/alarm_wake_scheduler.dart';
 import '../../services/step_source_aggregator.dart';
+import '../../utils/hive_lifecycle.dart';
+import '../../widgets/coming_soon_sheet.dart';
+import '../../widgets/battle_invite_toast_host.dart';
 import '../../widgets/friend_request_toast_host.dart';
+import '../../widgets/team_lobby_invite_toast_host.dart';
+import '../../widgets/mission_poster_host.dart';
 import '../../widgets/permission_gate.dart';
+import '../../widgets/subscription_welcome_gate.dart';
+import '../../widgets/xp_celebration.dart';
 
 /// Main shell with 5-tab bottom nav.
 /// On first build after sign-in:
@@ -44,6 +57,20 @@ class _MainShellState extends ConsumerState<MainShell>
   /// though the indexedStack keeps the widget alive — see
   /// [homeTabFocusTickProvider].
   int? _prevShellIndex;
+
+  /// Wall-clock timestamp of the most recent `paused`/`inactive`/
+  /// `hidden` transition. Read on `resumed` so we only fire the
+  /// heavy provider-invalidate sweep when the app was actually gone
+  /// long enough to have stale data. A 3-second notification-drawer
+  /// pull that flips paused→resumed inside the same second no longer
+  /// tears down 13 realtime channels and re-subscribes them.
+  DateTime? _pausedAt;
+
+  /// Threshold for treating "we came back" as a real absence. Below
+  /// this, realtime streams reconcile themselves through their retry
+  /// wrappers; invalidation would just churn subscriptions with no
+  /// data benefit.
+  static const Duration _resumeInvalidateThreshold = Duration(minutes: 2);
 
   @override
   void initState() {
@@ -109,21 +136,91 @@ class _MainShellState extends ConsumerState<MainShell>
   }
 
   /// When the app returns to the foreground we (1) re-sync steps so the
-  /// server has fresh numbers and (2) invalidate the data providers so the
-  /// UI drops back to its shimmer skeletons and then floods in fresh values
-  /// instead of showing whatever stale data was on screen when it was paused.
+  /// server has fresh numbers and (2) — only when the pause was long
+  /// enough to plausibly have stale data — invalidate the data
+  /// providers so the UI drops back to its shimmer skeletons and then
+  /// floods in fresh values.
+  ///
+  /// Every state transition is mirrored into [appLifecycleStateProvider]
+  /// so downstream providers (e.g. the 60s pedometer tick in
+  /// [localTodayStepsProvider]) can gate their own periodic work.
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state != AppLifecycleState.resumed) return;
+    // Fan the transition out to any provider that wants to pause
+    // background work while the UI isn't on screen.
+    ref.read(appLifecycleStateProvider.notifier).state = state;
+
+    if (state != AppLifecycleState.resumed) {
+      // Any non-resumed transition is a candidate "we're leaving";
+      // stamp the timestamp so the next `resumed` can measure the
+      // absence. Overwriting on each non-resumed state is fine — we
+      // want the *most recent* transition out of foreground.
+      _pausedAt = DateTime.now();
+      // Snapshot the native pedometer's current sensor value +
+      // timestamp before Android kills the process. This is the
+      // freshest breadcrumb the missed-days backfill can use next
+      // time the app opens — the smaller the pre-termination gap,
+      // the tighter the time-proportional estimate becomes.
+      // Fire-and-forget: never block the lifecycle callback.
+      unawaited(ref.read(nativeStepServiceProvider).snapshotForShutdown());
+      return;
+    }
+
+    // ── resumed branch ────────────────────────────────────────────
+    // If the WorkManager background isolate opened the shared Hive
+    // box while we were away, our in-isolate handle can be stale —
+    // the very first write from any repository would throw
+    // `FileSystemException: File closed`. Reopen defensively before
+    // any resume-triggered writes fire. Idempotent no-op if the box
+    // is still open. See utils/hive_lifecycle.dart for the full
+    // context on this race.
+    unawaited(reopenSharedBoxIfClosed());
+
     final uid = ref.read(authStateProvider).valueOrNull?.id;
     if (uid == null) return;
 
-    _refreshOnResume();
+    // Measure how long we were away. First resume of the process has
+    // no prior pause, so treat missing-pause as "long enough" — this
+    // preserves the previous behaviour on cold-launch from a warm
+    // process (an unlikely but possible path).
+    final wasAwayFor = _pausedAt == null
+        ? _resumeInvalidateThreshold
+        : DateTime.now().difference(_pausedAt!);
+    _pausedAt = null;
 
-    // Fresh device read → server. Battle activation/completion is owned by the
-    // server-side cron (migration 0008); the invalidations above re-fetch the
-    // latest battle state so a returning user sees the result within a tick.
+    if (wasAwayFor >= _resumeInvalidateThreshold) {
+      _refreshOnResume();
+    }
+
+    // Fresh device read → server, unconditional. Even a 30-second
+    // trip out to the notification drawer might have accumulated
+    // steps that the FGS hasn't yet flushed; a manual sync on
+    // resume keeps the visible number honest without invalidating
+    // the UI.
+    //
+    // Two-shot sync pattern (fixes the "5-minute background walk"
+    // bug where the first read after resume returned the stale
+    // cached step count):
+    //
+    //   1. IMMEDIATE sync — reads whatever the aggregator has right
+    //      now. On short pauses this is fresh. On longer pauses the
+    //      Android sensor's buffered events may not have flushed
+    //      yet, so this can still emit a stale value.
+    //   2. DELAYED sync (~2.5 s) — by now the `TYPE_STEP_COUNTER`
+    //      sensor has delivered its buffered events to the resumed
+    //      isolate, so a second aggregator read picks up the real
+    //      current count. Uploading it triggers Supabase realtime
+    //      → the UI updates without needing app restart. Matches
+    //      the delay used inside `headlessStepSync`.
     _syncStepsAllSources(uid);
+    Future<void>.delayed(const Duration(milliseconds: 2500), () {
+      if (!mounted) return;
+      _syncStepsAllSources(uid);
+      // Nudge `localTodayStepsProvider` so the UI polls the
+      // aggregator immediately (its 60s cadence would otherwise
+      // sit on the stale value until the next scheduled tick).
+      ref.invalidate(localTodayStepsProvider);
+    });
   }
 
   /// Reset the read-side providers so dependent widgets re-enter their
@@ -145,6 +242,15 @@ class _MainShellState extends ConsumerState<MainShell>
     ref.invalidate(stateLeaderboardProvider);
     ref.invalidate(countryLeaderboardProvider);
     ref.invalidate(friendsLeaderboardProvider);
+    // Friend relationships — added after a tester reported friends
+    // disappearing after reinstall. The rows are still on the server
+    // (RLS-scoped to user_id), so re-invalidating force-closes the
+    // realtime channel and re-runs the initial SELECT. If the friends
+    // list is truly empty after this, the account has genuinely lost
+    // its friendships (rare — usually means a re-signup with a new
+    // uid via a different Google account).
+    ref.invalidate(allFriendRelationshipsProvider);
+    ref.invalidate(friendsListProvider);
   }
 
   /// Deep-link when the user taps a push notification. `notification`-type FCM
@@ -185,6 +291,14 @@ class _MainShellState extends ConsumerState<MainShell>
     //    Also registers the terminated-state WorkManager fallback.
     await BackgroundSync.startService();
     await BackgroundSync.registerPeriodicSync();
+    // Exact-time wake schedule — 4 fixed alarms per day that fire
+    // headlessStepSync regardless of Doze mode / OEM battery saver.
+    // Complements WorkManager (which is best-effort) so we get at
+    // most a 6-hour gap in cloud sync even in the worst case. Called
+    // here (after login) rather than at cold start so anonymous
+    // sessions don't schedule wakes. Idempotent — safe on every
+    // shell mount; existing schedule is replaced in place.
+    await AlarmWakeScheduler.scheduleDaily();
 
     if (!mounted) return;
     // 1. Force a step sync using the aggregator (max of native + HC + Fit).
@@ -192,6 +306,21 @@ class _MainShellState extends ConsumerState<MainShell>
     //    battles, clan) AND writes the per-source hourly breakdown row.
     //    Needed because ref.listen only fires on CHANGE, not on first load.
     await _syncStepsAllSources(uid);
+
+    // 1a. Missed-days backfill. If the app was terminated across one
+    //     or more calendar days, WorkManager may not have written
+    //     step_logs rows for those days (Xiaomi/Realme aggressive
+    //     battery savers). This reconciles those gaps using Google
+    //     Fit history (when enabled) or a native-pedometer time-
+    //     proportional estimate. Fire-and-forget: never block the
+    //     shell on a network round-trip for historical data.
+    if (mounted) {
+      unawaited(ref.read(stepServiceProvider).backfillMissedDays(
+            userId: uid,
+            native: ref.read(nativeStepServiceProvider),
+            googleFit: ref.read(googleFitServiceProvider),
+          ));
+    }
 
     // Battle activation + completion now runs server-side every minute
     // (supabase/migrations/0008 → pg_cron process_battle_lifecycle). The
@@ -269,6 +398,42 @@ class _MainShellState extends ConsumerState<MainShell>
     // Fans out to: step_logs, users.totalStepsAllTime,
     // user_mission_progress, active battles, clan members AND writes the
     // per-source hourly breakdown (`source_step_hourly`) for analytics.
+    // When a `friend_accepted` notification arrives, force-refresh the
+    // friend relationships stream. Without this, users who received
+    // the "X is now your friend" push saw the sheet still show "No
+    // friends yet" — the `friend_relationships` UPDATE payload
+    // (pending → accepted) sometimes fails to propagate over the
+    // shared realtime channel (transient drop, mid-transition
+    // reconnect). The notification is the authoritative signal from
+    // the server that this specific state change has landed, so
+    // treat it as a trigger to re-read the source-of-truth.
+    ref.listen<AsyncValue<List<NotificationModel>>>(
+      notificationsProvider,
+      (prev, next) {
+        final prevList = prev?.valueOrNull ?? const [];
+        final nextList = next.valueOrNull ?? const [];
+        // Cheap change detection: find IDs in `next` that weren't in
+        // `prev`. New arrivals matching `friend_accepted` are the
+        // trigger. We only look at first-seen rows, so a later read-
+        // state update on the same notification doesn't re-fire.
+        final prevIds = {for (final n in prevList) n.id};
+        final newAccepts = nextList
+            .where((n) =>
+                !prevIds.contains(n.id) &&
+                n.type == NotificationType.friendAccepted)
+            .toList(growable: false);
+        if (newAccepts.isEmpty) return;
+        // Invalidate the underlying stream first — that force-closes
+        // the existing subscription and re-opens it with a fresh
+        // initial SELECT reflecting the pending → accepted flip that
+        // realtime may have missed. `friendsListProvider` then re-
+        // runs because its `acceptedFriendIdsProvider` dependency
+        // sees the new list.
+        ref.invalidate(allFriendRelationshipsProvider);
+        ref.invalidate(friendsListProvider);
+      },
+    );
+
     ref.listen<AsyncValue<int>>(localTodayStepsProvider, (prev, next) {
       final newSteps = next.valueOrNull;
       if (newSteps == null || newSteps <= 0) return;
@@ -321,22 +486,42 @@ class _MainShellState extends ConsumerState<MainShell>
     final trackActive = ref.watch(isTrackActiveProvider);
     return PermissionGate(
       child: FriendRequestToastHost(
-        child: Scaffold(
-          body: shell,
-          extendBody: true,
-          // FAB removed: Track now lives in the bottom nav as a dedicated
-          // tab. The `trackActive` flag is still surfaced inside the Track
-          // tab itself (pulsing icon when a session is live).
-          bottomNavigationBar: _BottomNavBar(
-            trackActive: trackActive,
-            currentIndex: shell.currentIndex,
-            onTap: (index) => shell.goBranch(
-              index,
-              initialLocation: index == shell.currentIndex,
+        child: TeamLobbyInviteToastHost(
+        child: BattleInviteToastHost(
+        child: MissionPosterHost(
+          child: XPCelebrationHost(
+            child: SubscriptionWelcomeGate(
+              child: Scaffold(
+              body: shell,
+              extendBody: true,
+              // FAB removed: Track now lives in the bottom nav as a
+              // dedicated tab. The `trackActive` flag is still surfaced
+              // inside the Track tab itself (pulsing icon when a
+              // session is live).
+              bottomNavigationBar: _BottomNavBar(
+                trackActive: trackActive,
+                currentIndex: shell.currentIndex,
+                onTap: (index) {
+                  // v1 gate — Clan tab (index 3) is "Coming Soon".
+                  // Show the fade-out toast and DON'T switch tabs so
+                  // the user stays on whichever tab they were viewing.
+                  if (index == 3) {
+                    showComingSoonSheet(context, title: 'Clan');
+                    return;
+                  }
+                  shell.goBranch(
+                    index,
+                    initialLocation: index == shell.currentIndex,
+                  );
+                },
+              ),
             ),
           ),
         ),
       ),
+    ),
+    ),
+    ),
     );
   }
 }
@@ -356,169 +541,82 @@ class _BottomNavBar extends StatelessWidget {
     required this.trackActive,
   });
 
-  // Missions tab dropped in favour of Track. Order matches the
-  // StatefulShellRoute branch order in routes.dart.
-  // `final` (not `const`) because MdiIcons.swordCross resolves at
-  // runtime — one of the entries below can't be const-evaluated.
-  static final _items = [
-    const _NavItem(
-      icon: Icons.home_outlined,
-      activeIcon: Icons.home,
-      label: 'Home',
-    ),
-    // MDI `swordCross` — two zig-zag crossed swords. Not part of
-    // Flutter's built-in Material Icons, hence the extra
-    // `material_design_icons_flutter` package. Same glyph for
-    // active + inactive since the outline / filled distinction is
-    // carried by the foreground colour swap in `_NavButton`. This
-    // entry isn't `const` because MdiIcons.swordCross is a runtime
-    // getter — that's why the enclosing list dropped its `const`.
-    _NavItem(
-      icon: MdiIcons.swordCross,
-      activeIcon: MdiIcons.swordCross,
-      label: 'Battles',
-    ),
-    const _NavItem(
-      icon: Icons.directions_run_outlined,
-      activeIcon: Icons.directions_run,
-      label: 'Track',
-    ),
-    const _NavItem(
-      icon: Icons.shield_outlined,
-      activeIcon: Icons.shield,
-      label: 'Clan',
-    ),
-    const _NavItem(
-      icon: Icons.leaderboard_outlined,
-      activeIcon: Icons.leaderboard,
-      label: 'Ranks',
-    ),
-  ];
+  // Branch indices — MUST match the StatefulShellRoute branch order
+  // in routes.dart. Visual order in this bar (Ranks | Battles Home
+  // Track | Clan) is decoupled from these indices; the shell only
+  // cares which branch index we hand it.
+  static const int _kHome     = 0;
+  static const int _kBattles  = 1;
+  static const int _kTrack    = 2;
+  static const int _kClan     = 3;
+  static const int _kRanks    = 4;
 
   @override
   Widget build(BuildContext context) {
-    return ClipRRect(
-      borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
-      child: BackdropFilter(
-        filter: ImageFilter.blur(sigmaX: 20, sigmaY: 20),
-        child: Container(
-          decoration: BoxDecoration(
-            color: AppColors.background.withValues(alpha: 0.8),
-            borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
-            border: Border(
-              top: BorderSide(
-                color: AppColors.onSurface.withValues(alpha: 0.05),
-              ),
-            ),
-            boxShadow: [
-              BoxShadow(
-                color: AppColors.primaryBrand.withValues(alpha: 0.15),
-                blurRadius: 20,
-                offset: const Offset(0, -8),
-              ),
-            ],
-          ),
-          child: SafeArea(
-            top: false,
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceAround,
-                children: List.generate(_items.length, (i) {
-                  final item = _items[i];
-                  final isActive = i == currentIndex;
-                  // The Track tab (index 2) gets a small green dot
-                  // overlay when a session is live, so the user spots it
-                  // from any other tab.
-                  final showLiveDot = i == 2 && trackActive;
-                  return _NavButton(
-                    item: item,
-                    isActive: isActive,
-                    showLiveDot: showLiveDot,
-                    onTap: () => onTap(i),
-                  );
-                }),
-              ),
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class _NavButton extends StatelessWidget {
-  final _NavItem item;
-  final bool isActive;
-  final bool showLiveDot;
-  final VoidCallback onTap;
-
-  const _NavButton({
-    required this.item,
-    required this.isActive,
-    required this.onTap,
-    this.showLiveDot = false,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    // Light mode reads better with pure-black inactive icons/labels;
-    // dark mode keeps the softer grey so inactive tabs don't punch on
-    // the dark surface. Hoisted so the ternary stays terse below.
-    final Color foreground = isActive
-        ? AppColors.primary
-        : (AppColors.isLight ? Colors.black : Colors.grey);
-    return GestureDetector(
-      onTap: onTap,
-      behavior: HitTestBehavior.opaque,
+    // Three-block floating layout per the redesigned spec:
+    //   [ Ranks (circle) ] [ Battles · Home · Track (pill) ] [ Clan (circle) ]
+    //
+    // The outer container is a transparent SafeArea insetter — the
+    // actual "chrome" lives on each of the three blocks so they read
+    // as detached, machined controls rather than a monolithic bar.
+    return SafeArea(
+      top: false,
+      minimum: const EdgeInsets.only(bottom: 8),
       child: Padding(
-        // Active state is now indicated by colour-only tinting of the
-        // icon + label (no surrounding pill / glow). The padding stays
-        // so the tap target keeps the same size as before — only the
-        // visual chrome around the active tab is removed.
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.center,
           children: [
-            Stack(
-              clipBehavior: Clip.none,
-              children: [
-                Icon(
-                  isActive ? item.activeIcon : item.icon,
-                  color: foreground,
-                  size: 24,
-                ),
-                if (showLiveDot)
-                  Positioned(
-                    top: -2,
-                    right: -4,
-                    child: Container(
-                      width: 9,
-                      height: 9,
-                      decoration: BoxDecoration(
-                        color: AppColors.success,
-                        shape: BoxShape.circle,
-                        boxShadow: [
-                          BoxShadow(
-                            color: AppColors.success.withValues(alpha: 0.6),
-                            blurRadius: 6,
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-              ],
+            // LEFT — Ranks single circle.
+            _CircleNavButton(
+              icon: Icons.leaderboard_outlined,
+              activeIcon: Icons.leaderboard,
+              tooltip: 'Ranks',
+              isActive: currentIndex == _kRanks,
+              onTap: () => onTap(_kRanks),
             ),
-            const SizedBox(height: 4),
-            Text(
-              item.label,
-              style: TextStyle(
-                fontFamily: 'Manrope',
-                fontSize: 10,
-                fontWeight: FontWeight.w700,
-                letterSpacing: 0.5,
-                color: foreground,
+
+            const SizedBox(width: 10),
+
+            // CENTER — Battles | Home | Track pill. Home visually
+            // middle. Expanded so the pill fills the remaining width.
+            Expanded(
+              child: _PillNavGroup(
+                items: [
+                  _PillItem(
+                    icon: MdiIcons.swordCross,
+                    activeIcon: MdiIcons.swordCross,
+                    label: 'Battles',
+                    branchIndex: _kBattles,
+                  ),
+                  const _PillItem(
+                    icon: Icons.home_outlined,
+                    activeIcon: Icons.home,
+                    label: 'Home',
+                    branchIndex: _kHome,
+                  ),
+                  _PillItem(
+                    icon: Icons.directions_run_outlined,
+                    activeIcon: Icons.directions_run,
+                    label: 'Track',
+                    branchIndex: _kTrack,
+                    liveDot: trackActive,
+                  ),
+                ],
+                currentIndex: currentIndex,
+                onTap: onTap,
               ),
+            ),
+
+            const SizedBox(width: 10),
+
+            // RIGHT — Clan single circle.
+            _CircleNavButton(
+              icon: Icons.shield_outlined,
+              activeIcon: Icons.shield,
+              tooltip: 'Clan',
+              isActive: currentIndex == _kClan,
+              onTap: () => onTap(_kClan),
             ),
           ],
         ),
@@ -527,14 +625,277 @@ class _NavButton extends StatelessWidget {
   }
 }
 
-class _NavItem {
+/// Standalone circular nav button — used for Ranks (left) and Clan
+/// (right). Same glass-tinted surface + soft shadow as the pill so
+/// the three blocks read as a set even when detached.
+class _CircleNavButton extends StatefulWidget {
+  final IconData icon;
+  final IconData activeIcon;
+  final String tooltip;
+  final bool isActive;
+  final VoidCallback onTap;
+
+  const _CircleNavButton({
+    required this.icon,
+    required this.activeIcon,
+    required this.tooltip,
+    required this.isActive,
+    required this.onTap,
+  });
+
+  @override
+  State<_CircleNavButton> createState() => _CircleNavButtonState();
+}
+
+class _CircleNavButtonState extends State<_CircleNavButton>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _pop;
+
+  @override
+  void initState() {
+    super.initState();
+    _pop = AnimationController(vsync: this, duration: Motion.d.fast);
+  }
+
+  @override
+  void didUpdateWidget(covariant _CircleNavButton old) {
+    super.didUpdateWidget(old);
+    if (!old.isActive && widget.isActive) _pop.forward(from: 0);
+  }
+
+  @override
+  void dispose() {
+    _pop.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    // Circle chrome is IDENTICAL whether active or inactive — only the
+    // icon colour changes. Reference design ("Home / Create / Library"
+    // pill) highlights the active tab purely via a coloured icon; the
+    // surrounding chip stays the same neutral glass. Filled violet
+    // backgrounds on tap felt heavy against the split-block layout.
+    final bg = scheme.surfaceContainerHigh.withValues(alpha: 0.85);
+    final activeFg = AppColors.primary;
+    final inactiveFg =
+        AppColors.isLight ? Colors.black.withValues(alpha: 0.75) : Colors.white70;
+
+    return GestureDetector(
+      onTap: widget.onTap,
+      behavior: HitTestBehavior.opaque,
+      child: Tooltip(
+        message: widget.tooltip,
+        child: Container(
+          width: 56,
+          height: 56,
+          decoration: BoxDecoration(
+            color: bg,
+            shape: BoxShape.circle,
+            border: Border.all(
+              color: AppColors.onSurface.withValues(alpha: 0.06),
+              width: 1,
+            ),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withValues(alpha: 0.25),
+                blurRadius: 10,
+                offset: const Offset(0, 4),
+              ),
+              BoxShadow(
+                color: Colors.white.withValues(
+                    alpha: AppColors.isLight ? 0.35 : 0.06),
+                blurRadius: 0,
+                offset: const Offset(0, 1),
+                spreadRadius: -1,
+                blurStyle: BlurStyle.inner,
+              ),
+            ],
+          ),
+          alignment: Alignment.center,
+          child: AnimatedBuilder(
+            animation: _pop,
+            builder: (_, child) {
+              final t = _pop.value;
+              final pop = t == 0 ? 0.0 : 4 * t * (1 - t) * 0.15;
+              return Transform.scale(scale: 1.0 + pop, child: child);
+            },
+            // Only the icon colour transitions on active-state change.
+            child: AnimatedSwitcher(
+              duration: Motion.d.fast,
+              child: Icon(
+                widget.isActive ? widget.activeIcon : widget.icon,
+                key: ValueKey(widget.isActive),
+                color: widget.isActive ? activeFg : inactiveFg,
+                size: 24,
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Descriptor for a pill entry — Battles / Home / Track.
+class _PillItem {
   final IconData icon;
   final IconData activeIcon;
   final String label;
-
-  const _NavItem({
+  final int branchIndex;
+  final bool liveDot;
+  const _PillItem({
     required this.icon,
     required this.activeIcon,
     required this.label,
+    required this.branchIndex,
+    this.liveDot = false,
   });
 }
+
+/// Centre pill holding 3 tabs. The active tab lights up with a violet
+/// tint chip that morphs smoothly between positions via a shared
+/// AnimatedContainer background inside each cell.
+class _PillNavGroup extends StatelessWidget {
+  final List<_PillItem> items;
+  final int currentIndex;
+  final ValueChanged<int> onTap;
+
+  const _PillNavGroup({
+    required this.items,
+    required this.currentIndex,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Container(
+      height: 56,
+      padding: const EdgeInsets.all(4),
+      decoration: BoxDecoration(
+        color: scheme.surfaceContainerHigh.withValues(alpha: 0.85),
+        borderRadius: BorderRadius.circular(32),
+        border: Border.all(
+          color: AppColors.onSurface.withValues(alpha: 0.06),
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.25),
+            blurRadius: 10,
+            offset: const Offset(0, 4),
+          ),
+        ],
+      ),
+      child: Row(
+        children: items.map((item) {
+          return Expanded(
+            child: _PillCell(
+              item: item,
+              isActive: currentIndex == item.branchIndex,
+              onTap: () => onTap(item.branchIndex),
+            ),
+          );
+        }).toList(),
+      ),
+    );
+  }
+}
+
+class _PillCell extends StatefulWidget {
+  final _PillItem item;
+  final bool isActive;
+  final VoidCallback onTap;
+
+  const _PillCell({
+    required this.item,
+    required this.isActive,
+    required this.onTap,
+  });
+
+  @override
+  State<_PillCell> createState() => _PillCellState();
+}
+
+class _PillCellState extends State<_PillCell>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _pop;
+
+  @override
+  void initState() {
+    super.initState();
+    _pop = AnimationController(vsync: this, duration: Motion.d.fast);
+  }
+
+  @override
+  void didUpdateWidget(covariant _PillCell old) {
+    super.didUpdateWidget(old);
+    if (!old.isActive && widget.isActive) _pop.forward(from: 0);
+  }
+
+  @override
+  void dispose() {
+    _pop.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final activeFg = AppColors.primary;
+    final inactiveFg =
+        AppColors.isLight ? Colors.black.withValues(alpha: 0.72) : Colors.white70;
+    return GestureDetector(
+      onTap: widget.onTap,
+      behavior: HitTestBehavior.opaque,
+      // No filled violet chip on active — matches the reference nav
+      // (icon-only tint). The parent pill provides the background;
+      // the cell is a transparent tap target.
+      child: Container(
+        alignment: Alignment.center,
+        child: AnimatedBuilder(
+          animation: _pop,
+          builder: (_, child) {
+            final t = _pop.value;
+            final pop = t == 0 ? 0.0 : 4 * t * (1 - t) * 0.15;
+            return Transform.scale(scale: 1.0 + pop, child: child);
+          },
+          child: Stack(
+            clipBehavior: Clip.none,
+            children: [
+              AnimatedSwitcher(
+                duration: Motion.d.fast,
+                child: Icon(
+                  widget.isActive ? widget.item.activeIcon : widget.item.icon,
+                  key: ValueKey(widget.isActive),
+                  color: widget.isActive ? activeFg : inactiveFg,
+                  size: 24,
+                ),
+              ),
+              if (widget.item.liveDot)
+                Positioned(
+                  top: -2,
+                  right: -4,
+                  child: Container(
+                    width: 9,
+                    height: 9,
+                    decoration: BoxDecoration(
+                      color: AppColors.success,
+                      shape: BoxShape.circle,
+                      boxShadow: [
+                        BoxShadow(
+                          color: AppColors.success.withValues(alpha: 0.6),
+                          blurRadius: 6,
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
