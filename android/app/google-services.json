@@ -61,6 +61,13 @@
             {
               "client_id": "83248241496-4n9qridmt2ao0p8iohaagoprs3v2dt74.apps.googleusercontent.com",
               "client_type": 3
+            },
+            {
+              "client_id": "83248241496-t0lh1adbe7ugjnm6etg7mkctu8vn0hpf.apps.googleusercontent.com",
+              "client_type": 2,
+              "ios_info": {
+                "bundle_id": "com.vipasa.stepbattle"
+              }
             }
           ]
         }
