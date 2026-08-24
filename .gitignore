@@ -8,6 +8,7 @@
 android/app/upload-keystore.jks
 android/key.properties
 lib/firebase_options.dart
+ios/Runner/GoogleService-Info.plist
 .DS_Store
 .atom/
 .build/

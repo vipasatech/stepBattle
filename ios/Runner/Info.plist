@@ -144,9 +144,9 @@
 			<string>google.sign-in</string>
 			<key>CFBundleURLSchemes</key>
 			<array>
-				<!-- ⚠ PLACEHOLDER: replace with REVERSED_CLIENT_ID from
-				     GoogleService-Info.plist once Firebase iOS app is registered. -->
-				<string>com.googleusercontent.apps.PLACEHOLDER_REVERSED_CLIENT_ID</string>
+				<!-- REVERSED_CLIENT_ID from ios/Runner/GoogleService-Info.plist.
+				     If you rotate the Firebase iOS OAuth client, replace this. -->
+				<string>com.googleusercontent.apps.83248241496-t0lh1adbe7ugjnm6etg7mkctu8vn0hpf</string>
 			</array>
 		</dict>
 
