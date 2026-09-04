@@ -18,7 +18,12 @@ pluginManagement {
 
 plugins {
     id "dev.flutter.flutter-plugin-loader" version "1.0.0"
-    id "com.android.application" version "8.2.2" apply false
+    // AGP 8.2.2 → 8.7.0 (2026-09-04): Play Console now requires apps to
+    // target API level 36 (Android 16); compileSdk 36 needs AGP 8.6.0+.
+    // 8.7.0 is the latest stable that stays compatible with the pinned
+    // Flutter 3.27.1 + Kotlin 2.1.0 + Gradle 8.9 combo. Bumping AGP also
+    // required bumping the Gradle wrapper to 8.9 (see gradle-wrapper.properties).
+    id "com.android.application" version "8.7.0" apply false
     // Bumped 1.9.22 → 2.1.0 so posthog_flutter 4.11.0 (compiled against
     // Kotlin 2.1.0 metadata) resolves. Older Flutter plugins compiled for
     // Kotlin 1.9 are forward-compatible with the 2.x compiler — the

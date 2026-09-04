@@ -1,7 +1,7 @@
 name: stepbattle
 description: "StepBattle — Fitness gamification app"
 publish_to: 'none'
-version: 1.1.6+37
+version: 1.1.6+38
 
 environment:
   sdk: ^3.6.0
