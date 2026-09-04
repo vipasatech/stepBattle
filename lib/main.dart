@@ -39,56 +39,146 @@ Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
 /// Proactively refresh the persisted Supabase session at cold-start.
 ///
 /// Rationale: [Supabase.initialize] restores the last session from
-/// local storage, but doesn't refresh it. The refresh only happens
-/// LAZILY on the first authed request that gets a 401. If the app was
-/// terminated for longer than the JWT TTL (default 1 hour), every
-/// realtime channel + FGS-isolate Supabase client retries with the
-/// stale token, all fail, and there's no clean recovery path in the
-/// current codebase. This function fires a refresh right after init so
-/// downstream systems get a valid token from the start.
+/// local storage, but doesn't refresh it. The refresh happens LAZILY on
+/// the first authed request that gets a 401, OR proactively when we
+/// detect the persisted access token is already past its expiry.
 ///
-/// Behavior:
-///   • No session at all → no-op (user is signed out, router handles).
-///   • Session present + not expired → still call refreshSession() as
-///     a cheap health check (Supabase treats non-expired sessions as
-///     a fast no-op internally).
-///   • Session present + expired → refreshSession() uses the persisted
-///     refresh token to mint a new access token (refresh tokens live
-///     ~30 days by default).
-///   • Refresh token itself expired / revoked → refreshSession()
-///     throws AuthException → we sign out locally so the router routes
-///     to /welcome instead of leaving the user in a broken state.
+/// **Revised behavior (2026-08-30 — auth-persistence fix):**
+///
+/// The prior version called `refreshSession()` on every cold start even
+/// when the access token was still valid, treating it as a cheap health
+/// check. It's not cheap — with Supabase's refresh-token rotation
+/// (gotrue default) every call consumes and replaces the refresh token.
+/// Combined with 4 concurrent isolates each running their own
+/// Supabase client (main + FGS + WorkManager + AlarmWake), the
+/// aggressive refresh burned tokens fast enough to trigger reuse
+/// detection server-side, which invalidated the entire session family
+/// and forced sign-out after 1–2 days of light use. See ticket in
+/// PENDING_MIGRATIONS notes; root-cause chain analyzed 2026-08-30.
+///
+/// New behavior:
+///   • No session at all → no-op (router handles).
+///   • Session present + NOT expired → **no-op**. Supabase's built-in
+///     auto-refresh (single-flight on the main isolate) will handle
+///     it in-flight when the JWT actually expires.
+///   • Session present + expired → refreshSession() (only path that
+///     actually needs to fire on cold start).
+///   • On genuine "refresh token dead" errors → sign out (session is
+///     unrecoverable server-side). We keep the last-signed-in email
+///     hint in prefs so /welcome can offer a one-tap re-auth path.
+///   • On transient errors (network, 5xx) → log + skip; the SDK
+///     will retry lazily on the next authed call.
 Future<void> _refreshSessionIfStale() async {
   try {
     final client = Supabase.instance.client;
     final session = client.auth.currentSession;
     if (session == null) {
-      AppLogger.session.i('sessionRefresh:skipped', fields: {'reason': 'no_session'});
+      AppLogger.session.i('sessionRefresh:skipped',
+          fields: {'reason': 'no_session'});
       return;
     }
-    final wasExpired = session.isExpired;
-    await client.auth.refreshSession();
-    AppLogger.session.i('sessionRefresh:done', fields: {'wasExpired': wasExpired});
+    // FIX 1 — Skip the "health-check" refresh entirely when the access
+    // token is still valid. Every unnecessary refresh consumes a
+    // refresh token (rotation is on), and with 4 isolates in play any
+    // race triggers Supabase's reuse-detection and nukes the session.
+    if (!session.isExpired) {
+      AppLogger.session.i('sessionRefresh:skipped', fields: {
+        'reason': 'not_expired',
+        'expiresIn': session.expiresIn,
+      });
+      return;
+    }
+    // Access token IS expired — proactive refresh so the first authed
+    // call after boot doesn't have to eat a 401 → retry cycle.
+    final sw = Stopwatch()..start();
+    AppLogger.session.i('sessionRefresh:start', fields: {
+      'reason': 'access_token_expired',
+      'expiresIn': session.expiresIn,
+    });
+    final refreshed = await client.auth.refreshSession();
+    sw.stop();
+    AppLogger.session.i('sessionRefresh:done', fields: {
+      'ms': sw.elapsedMilliseconds,
+      'newExpiresIn': refreshed.session?.expiresIn,
+      'hasNewSession': refreshed.session != null,
+    });
   } on AuthException catch (e) {
-    // Refresh token itself is invalid — persisted session is dead.
-    // Sign the user out cleanly; the router redirect will route them
-    // to /welcome. Better than letting the app run in a broken state
-    // where every authed call fails and the user has no recovery UI.
-    AppLogger.session.w('sessionRefresh:refreshTokenDead',
-        fields: {'error': e.message});
-    try {
-      await Supabase.instance.client.auth.signOut();
-    } catch (_) {}
+    // FIX 3a — Distinguish truly-dead sessions from transient/service
+    // errors. Only sign out when Supabase says the refresh token is
+    // dead (reuse detected, expired past its 30d TTL, or explicitly
+    // revoked). Everything else stays signed-in and gets retried on
+    // the next authed call.
+    if (_isRefreshTokenTrulyDead(e)) {
+      AppLogger.session.w('sessionRefresh:refreshTokenDead', fields: {
+        'error': e.message,
+        'statusCode': e.statusCode,
+      });
+      try {
+        // Sign out via full SupabaseAuthService.signOut() semantics would
+        // require reaching into Riverpod from main() which is awkward.
+        // Directly call Supabase auth.signOut() — the router picks up the
+        // signed-out state via onAuthStateChange and routes to /welcome.
+        // The last-signed-in-email prefs entry is preserved (not cleared)
+        // so /welcome can offer a soft "Continue as <email>" one-tap
+        // re-auth path instead of a cold "sign in from scratch" UX.
+        await Supabase.instance.client.auth.signOut();
+      } catch (_) {}
+    } else {
+      // Transient AuthException (5xx from goauth, rate limit, network
+      // hiccup dressed as AuthException). Don't sign out — the next
+      // authed call will retry, and if the token is genuinely fine
+      // the request succeeds without any user-visible disruption.
+      AppLogger.session.w('sessionRefresh:transientAuthError', fields: {
+        'error': e.message,
+        'statusCode': e.statusCode,
+      });
+    }
   } catch (e, s) {
-    // Network error or other transient — log but don't sign out;
-    // the app can try again on the next authed call. This is the
-    // "your phone is offline at boot" case.
-    AppLogger.session
-        .w('sessionRefresh:transientError', fields: {'error': e.toString()});
+    // Network error or other non-AuthException failure — log but don't
+    // sign out; the app can try again on the next authed call. This is
+    // the "your phone is offline at boot" case.
+    AppLogger.session.w('sessionRefresh:transientError',
+        fields: {'error': e.toString()});
     // s intentionally unused — transient errors don't need stack trace noise.
     // ignore: unused_local_variable
     final _ = s;
   }
+}
+
+/// Returns true when the AuthException indicates the persisted refresh
+/// token is unusable server-side and re-auth is the only recovery. False
+/// for transient errors (5xx, rate limit, network) where a retry might
+/// succeed.
+///
+/// Matched against Supabase gotrue's error codes (see
+/// https://supabase.com/docs/reference/dart/auth-error-codes). We match
+/// on `code` when present and fall back to substring on `message` for
+/// older SDK versions that don't populate `code`.
+bool _isRefreshTokenTrulyDead(AuthException e) {
+  final code = e.code?.toLowerCase();
+  if (code != null) {
+    const deadCodes = {
+      'refresh_token_not_found',
+      'refresh_token_already_used',
+      'invalid_grant',
+      'session_not_found',
+      'user_not_found',
+    };
+    if (deadCodes.contains(code)) return true;
+  }
+  final msg = e.message.toLowerCase();
+  if (msg.contains('refresh token not found') ||
+      msg.contains('refresh token already used') ||
+      msg.contains('invalid grant') ||
+      msg.contains('invalid refresh token') ||
+      msg.contains('session from session_id claim in jwt does not exist')) {
+    return true;
+  }
+  // A 400 from the token endpoint with an unrecognized message is
+  // ambiguous; err on the safe side (transient) since Fix 1 + Fix 2
+  // make the truly-dead case rare and re-auth on false-positive
+  // transient is worse UX than a delayed signOut on true-dead.
+  return false;
 }
 
 void main() async {
@@ -223,6 +313,56 @@ void main() async {
     FlutterError.presentError(details);
   };
   PlatformDispatcher.instance.onError = (error, stack) {
+    // Downgrade known-transient network noise so it doesn't clog the
+    // Diagnostics screen + eat mental space during real triage. The
+    // `google_fonts` package tries to download font `.ttf` files from
+    // `fonts.gstatic.com` at first-run; when DNS is down (flaky wifi,
+    // VPN, some ISPs), the SocketException bubbles up as an uncaught
+    // async error. The package itself catches internally + falls back
+    // to system font, so nothing is actually broken — but the noise
+    // used to look like an error worth investigating. Log at debug
+    // so the trail is preserved without ranking it as ERROR-severity.
+    //
+    // Match on the exception's string form because the package throws
+    // both `ClientException` and `Exception` wrappers depending on the
+    // failure mode; a substring check covers every variant we've seen.
+    final msg = error.toString();
+    final isFontFetchNoise =
+        msg.contains('fonts.gstatic.com') ||
+        msg.contains('Failed to load font');
+    if (isFontFetchNoise) {
+      AppLogger.session.d('platformError:fontFetchFallback',
+          fields: {'msg': msg.length > 160 ? '${msg.substring(0, 160)}…' : msg});
+      return false;
+    }
+    // Also downgrade Supabase Realtime timeout noise. `supabase_flutter`
+    // auto-retries a dropped WebSocket subscription with exponential
+    // backoff; the initial timeout bubbles up here as an uncaught
+    // async error, but the channel usually resubscribes within a
+    // few seconds. Route to DEBUG so real errors aren't buried under
+    // recoverable-network-flap noise. The missed-event case (an
+    // INSERT that fires during our reconnect window) is handled
+    // separately by the lifecycle-resume invalidation on the missions
+    // + friends providers (2026-08-31 change).
+    final isRealtimeTimeoutNoise =
+        msg.contains('RealtimeSubscribeException') &&
+        msg.contains('timedOut');
+    if (isRealtimeTimeoutNoise) {
+      AppLogger.session.d('platformError:realtimeReconnect',
+          fields: {'msg': msg.length > 160 ? '${msg.substring(0, 160)}…' : msg});
+      return false;
+    }
+    // Similar treatment for the HTTP RPC connection-closed noise that
+    // rides along with WebSocket timeouts during the same network flap.
+    // A future RPC call will succeed once the connection is restored;
+    // no code-side recovery needed.
+    final isConnectionClosedNoise =
+        msg.contains('Connection closed before full header was received');
+    if (isConnectionClosedNoise) {
+      AppLogger.session.d('platformError:connectionClosed',
+          fields: {'msg': msg.length > 160 ? '${msg.substring(0, 160)}…' : msg});
+      return false;
+    }
     AppLogger.session.e('platformError', error: error, stack: stack);
     return false;
   };

@@ -234,7 +234,15 @@ class _SetHomeSheetState extends ConsumerState<SetHomeSheet>
           borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
         ),
         child: Padding(
-          padding: EdgeInsets.only(bottom: bottomInset),
+          // bottomInset = keyboard height (viewInsets.bottom); adding
+          // viewPadding.bottom on top of it clears the system nav bar
+          // on 3-button-nav devices without adding gap on gesture-nav.
+          // Prior code only handled the keyboard case, leaving the
+          // step-content's inner Save/Cancel buttons clipped by the
+          // 3-button nav bar (2026-08-31 sweep).
+          padding: EdgeInsets.only(
+            bottom: bottomInset + MediaQuery.viewPaddingOf(context).bottom,
+          ),
           child: SingleChildScrollView(
             child: Column(
               mainAxisSize: MainAxisSize.min,

@@ -100,7 +100,15 @@ class _SetGoalSheetState extends ConsumerState<SetGoalSheet> {
         ),
         child: ListView(
           controller: scrollController,
-          padding: const EdgeInsets.fromLTRB(24, 0, 24, 40),
+          // Dynamic bottom padding = fixed breathing room + system
+          // nav bar inset. On gesture-nav devices the inset is
+          // ~0-24 dp; on 3-button-nav devices ~48 dp. Fixed 40 dp
+          // alone was clipping the Save Goal button under the 3-button
+          // nav bar on some phones. Same treatment as
+          // buy_xp_sheet / upgrade_cta_sheet (2026-08-31).
+          padding: EdgeInsets.fromLTRB(
+            24, 0, 24, 40 + MediaQuery.viewPaddingOf(context).bottom,
+          ),
           children: [
             const BottomSheetHandle(),
 

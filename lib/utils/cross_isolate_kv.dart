@@ -59,6 +59,26 @@ class CrossIsolateKV {
   static const String pendingOtpMode = 'ci_pending_otp_mode';
   static const String pendingOtpSentAtMs = 'ci_pending_otp_sent_at_ms';
 
+  // Last-signed-in email — persisted after any successful sign-in so
+  // /welcome can offer a soft "Continue as <email>" one-tap re-auth
+  // path when a session dies for reasons other than an explicit user
+  // sign-out (e.g., refresh token rotated past its 30-day TTL or
+  // Supabase-side invalidation from a multi-isolate race). The key is
+  // cleared on explicit user-initiated signOut so the next open reads
+  // as a truly-fresh install-and-sign-in flow. Auth-persistence fix
+  // 2026-08-30 — see main.dart `_refreshSessionIfStale` header.
+  static const String lastSignedInEmail = 'ci_last_signed_in_email';
+
+  // Last-sign-in METHOD — one of 'google' or 'email'. Paired with
+  // [lastSignedInEmail] so /welcome's "Continue as <email>" button
+  // fires the RIGHT re-auth flow directly instead of dropping the
+  // user on the generic /login screen. Google users → open Google
+  // account picker; email-OTP users → fire sendEmailOtp + navigate
+  // straight to /verify-otp. Null when the user hasn't signed in
+  // since this key was introduced (fall back to /login prefill).
+  // 2026-09-04 fix — see welcome_screen.dart _continueAsLastUser.
+  static const String lastSignInMethod = 'ci_last_signin_method';
+
   /// Cached instance for sync reads. Populated by [init]; nulled by
   /// nothing (SharedPreferences singleton lives as long as the isolate).
   static SharedPreferences? _prefs;
@@ -192,6 +212,61 @@ class CrossIsolateKV {
       // s intentionally unused — clear failures shouldn't crash the app.
       // ignore: unused_local_variable
       final _ = s;
+    }
+  }
+
+  // ── Last-signed-in-email convenience helpers ─────────────────────
+  // See the [lastSignedInEmail] key comment for the full policy: save
+  // on any successful sign-in, clear on explicit user signOut, PRESERVE
+  // on session-death signOut (so /welcome can offer a soft one-tap
+  // re-auth). Fire-and-forget; never blocks or throws.
+
+  /// Persist the email + sign-in method from a successful sign-in.
+  /// Overwrites any prior value so a user who switches accounts on the
+  /// same device sees their most-recent email as the re-auth hint AND
+  /// the correct method fires when they tap "Continue as".
+  ///
+  /// [method] must be `'google'` or `'email'`. Null-safe on either —
+  /// unset method just means `/welcome` falls back to opening `/login`
+  /// with the email pre-filled (pre-2026-09-04 behaviour).
+  static Future<void> saveLastSignedInEmail(String? email,
+      {String? method}) async {
+    if (email == null || email.isEmpty) return;
+    try {
+      await setString(lastSignedInEmail, email);
+      if (method != null && method.isNotEmpty) {
+        await setString(lastSignInMethod, method);
+      }
+      AppLogger.auth
+          .i('lastEmail:saved', fields: {'method': method ?? 'unknown'});
+    } catch (e) {
+      AppLogger.auth.w('lastEmail:saveFailed',
+          fields: {'err': e.toString()});
+    }
+  }
+
+  /// Read the last-signed-in email hint, or null if none is stored.
+  /// Sync — safe for use from a widget build() or the router.
+  static String? getLastSignedInEmailSync() =>
+      getStringSync(lastSignedInEmail);
+
+  /// Read the last-sign-in method (`'google'` or `'email'`), or null
+  /// if none is stored. Sync — safe for use from a widget build().
+  static String? getLastSignInMethodSync() =>
+      getStringSync(lastSignInMethod);
+
+  /// Clear the last-signed-in email hint + method. Called only on
+  /// explicit user-initiated signOut — NOT on session-death signOut,
+  /// which deliberately preserves the hint so the user can
+  /// re-authenticate with one tap. Fire-and-forget.
+  static Future<void> clearLastSignedInEmail() async {
+    try {
+      await remove(lastSignedInEmail);
+      await remove(lastSignInMethod);
+      AppLogger.auth.i('lastEmail:cleared');
+    } catch (e) {
+      AppLogger.auth.w('lastEmail:clearFailed',
+          fields: {'err': e.toString()});
     }
   }
 }

@@ -673,17 +673,27 @@ class _PlayerCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
 
-    // The card body — identical shape/height whether the user is the
-    // creator or the opponent, so both cards in a Row line up pixel-for-
-    // pixel. The creator-vs-opponent distinction is signalled via a
-    // subtle border tint + a Stack-overlay corner ribbon (see below),
-    // NEITHER of which changes the card's height.
+    // The card body — pixel-identical shape / size / border / padding
+    // for BOTH the creator and the opponent, so a Row of them lines up
+    // flush with zero visual weight imbalance.
     //
-    // Previous version (before 1.1.6+31): appended a "Ready" pill below
-    // the name inside this Column when isReady=true. That extra pill +
-    // gap added ~24 px of height to the creator card only, so the
-    // opponent card looked truncated by comparison. User feedback:
-    // "the opponent and the creator card should be of same size."
+    // Revision history:
+    //   • Before 1.1.6+31 — creator had an extra "Ready" pill in its
+    //     Column, which added ~24 px only to the creator side; user
+    //     called out the height mismatch.
+    //   • 1.1.6+31–36     — height was equalised, BUT the creator card
+    //     still shipped with a heavier border (1.5 px @ 55 % alpha vs
+    //     1 px @ 20 % alpha) plus an inline "CREATOR" text ribbon at
+    //     top: 6 / right: 6 that ate visual "breathing room" above the
+    //     avatar. User feedback (2026-08-30): "cards are not of same
+    //     size and style … instead of text you can keep the home icon
+    //     as a badge."
+    //   • 2026-08-30 (this) — border weight + colour are the SAME on
+    //     both sides. Creator distinction moves to a circular home-
+    //     icon badge that extends slightly OUTSIDE the card corner
+    //     via a Stack + Positioned(top:-8, right:-8). Because Positioned
+    //     children don't contribute to the Stack's layout rect, the
+    //     card size stays exactly matched with the opponent's.
     final card = Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
@@ -692,13 +702,15 @@ class _PlayerCard extends StatelessWidget {
             : AppColors.glassBackground,
         borderRadius: BorderRadius.circular(20),
         border: Border.all(
-          // Creator card gets a stronger primary tint on the border
-          // (0.55 vs. 0.20) — subtle "who owns this battle" hint that
-          // adds ZERO layout height.
+          // Identical border on active cards (creator + opponent) —
+          // subtle primary tint that reads as "this is a battle slot"
+          // for both sides. Placeholder (empty-slot dashed look) keeps
+          // its own outlineVariant treatment so it visually reads as
+          // "waiting for someone".
           color: isPlaceholder
               ? AppColors.outlineVariant.withValues(alpha: 0.3)
-              : AppColors.primary.withValues(alpha: isReady ? 0.55 : 0.2),
-          width: isPlaceholder ? 2 : (isReady ? 1.5 : 1),
+              : AppColors.primary.withValues(alpha: 0.35),
+          width: isPlaceholder ? 2 : 1.25,
           strokeAlign: BorderSide.strokeAlignInside,
         ),
       ),
@@ -743,30 +755,46 @@ class _PlayerCard extends StatelessWidget {
       ),
     );
 
-    // Non-creator / placeholder cards render the plain card. Creator's
-    // gets a Stack overlay with the "CREATOR" corner ribbon absolutely
-    // positioned in the top-right so it doesn't push the body down.
+    // Opponent + placeholder → plain card (no badge). Creator → the
+    // same plain card with a small home-icon badge floating over its
+    // top-right corner. `isReady` continues to signal "this is the
+    // creator's card" (per the pre-2026-08-30 contract with callers).
     if (!isReady) return card;
     return Stack(
       clipBehavior: Clip.none,
       children: [
         card,
         Positioned(
-          top: 6,
-          right: 6,
-          child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-            decoration: BoxDecoration(
-              color: AppColors.primary,
-              borderRadius: BorderRadius.circular(6),
-            ),
-            child: Text(
-              'CREATOR',
-              style: theme.textTheme.labelSmall?.copyWith(
+          top: -8,
+          right: -8,
+          child: Semantics(
+            label: 'Battle creator',
+            container: true,
+            child: Container(
+              width: 26,
+              height: 26,
+              decoration: BoxDecoration(
+                color: AppColors.primary,
+                shape: BoxShape.circle,
+                border: Border.all(
+                  // Thin ring in the sheet's surface colour so the
+                  // badge reads as a floating notification-style pip,
+                  // not just a coloured dot smeared on the card edge.
+                  color: AppColors.surfaceContainer,
+                  width: 2,
+                ),
+                boxShadow: [
+                  BoxShadow(
+                    color: AppColors.primary.withValues(alpha: 0.35),
+                    blurRadius: 8,
+                    offset: const Offset(0, 2),
+                  ),
+                ],
+              ),
+              child: Icon(
+                Icons.home_rounded,
+                size: 14,
                 color: AppColors.onPrimary,
-                fontWeight: FontWeight.w900,
-                fontSize: 8,
-                letterSpacing: 0.4,
               ),
             ),
           ),

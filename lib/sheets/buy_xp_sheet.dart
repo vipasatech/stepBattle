@@ -465,8 +465,22 @@ class _BuyXpSheetState extends ConsumerState<BuyXpSheet> {
                 child: Text(_error!,
                     style: TextStyle(color: AppColors.error)),
               ),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(24, 8, 24, 24),
+            // Wrap the CTA in SafeArea(top: false) so its bottom padding
+            // stretches to clear the system nav bar on 3-button-nav
+            // devices (~48 dp) while still sitting flush on gesture-nav
+            // devices (~0-24 dp) — 2026-08-31 feedback: the Pay button
+            // was being clipped by the 3-button nav bar on some phones.
+            // `minimum` guarantees at least 16 dp of breathing room even
+            // on devices with zero system bottom inset (a plain 24 dp
+            // padding block was fine on gesture-nav; not on 3-button).
+            // SafeArea reads `viewPadding` (which measures the nav bar);
+            // it doesn't fight the outer `keyboardInset` padding because
+            // that uses `viewInsets` (the keyboard).
+            SafeArea(
+              top: false,
+              minimum: const EdgeInsets.only(bottom: 16),
+              child: Padding(
+              padding: const EdgeInsets.fromLTRB(24, 8, 24, 8),
               child: SizedBox(
                 width: double.infinity,
                 height: 56,
@@ -498,6 +512,7 @@ class _BuyXpSheetState extends ConsumerState<BuyXpSheet> {
                   ),
                 ),
               ),
+            ),
             ),
           ],
         ),

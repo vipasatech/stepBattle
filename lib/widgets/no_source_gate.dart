@@ -6,6 +6,7 @@ import 'package:go_router/go_router.dart';
 
 import '../config/colors.dart';
 import '../providers/step_provider.dart';
+import 'permission_gate.dart';
 
 /// Blocking gate that fires on Home mount when the device has NO
 /// working step source at all — hardware pedometer unavailable AND
@@ -33,6 +34,13 @@ class NoSourceGate extends ConsumerStatefulWidget {
   final Widget child;
   const NoSourceGate({super.key, required this.child});
 
+  /// True while the "No step data" hard-blocker dialog is on screen.
+  /// Other post-onboarding surfaces (currently
+  /// [DeviceConnectPromptSheet]) listen to this so they don't fire
+  /// their sheet on top of a modal the user must resolve first. Same
+  /// pattern as [PermissionGate.primerOpen].
+  static final ValueNotifier<bool> blockerOpen = ValueNotifier<bool>(false);
+
   @override
   ConsumerState<NoSourceGate> createState() => _NoSourceGateState();
 }
@@ -53,6 +61,21 @@ class _NoSourceGateState extends ConsumerState<NoSourceGate>
     // grants ACTIVITY_RECOGNITION in Settings, then swipes back) is
     // reflected quickly.
     _timer = Timer.periodic(const Duration(seconds: 15), (_) => _check());
+    // Watch the primer dialog's visibility so we can fire our own
+    // dialog the moment it closes — see fix note in [_check]. On a
+    // fresh install the primer typically shows first (activity
+    // recognition denied); when the user resolves it (Grant All →
+    // sources light up, no dialog needed; OR Later → 24h cooldown, we
+    // become the only modal wanting to show), we re-check without
+    // waiting for the 15 s tick.
+    PermissionGate.primerOpen.addListener(_onPrimerVisibilityChange);
+  }
+
+  /// Fires whenever [PermissionGate.primerOpen] changes value. We only
+  /// care about the open→closed transition (fire our own check); the
+  /// closed→open transition is handled inside [_check] itself.
+  void _onPrimerVisibilityChange() {
+    if (!PermissionGate.primerOpen.value) _check();
   }
 
   @override
@@ -66,12 +89,22 @@ class _NoSourceGateState extends ConsumerState<NoSourceGate>
   @override
   void dispose() {
     _timer?.cancel();
+    PermissionGate.primerOpen.removeListener(_onPrimerVisibilityChange);
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();
   }
 
   Future<void> _check() async {
     if (!mounted || _dialogOpen) return;
+    // Defer while the "Almost Ready!" permission primer is on screen.
+    // If we fired our own dialog now, [showDialog(useRootNavigator:true)]
+    // would stack it on top of the shell-Navigator primer — the user
+    // sees our Set up button but tapping it can't complete the route
+    // push because the primer's still-modal barrier below intercepts.
+    // The listener on PermissionGate.primerOpen re-triggers _check the
+    // moment the primer closes, so waiting is safe.
+    if (PermissionGate.primerOpen.value) return;
+
     final aggregator = ref.read(stepAggregatorProvider);
     final native = ref.read(nativeStepServiceProvider);
     final fit = ref.read(googleFitServiceProvider);
@@ -92,24 +125,30 @@ class _NoSourceGateState extends ConsumerState<NoSourceGate>
   Future<void> _showBlocker() async {
     if (!mounted || _dialogOpen) return;
     _dialogOpen = true;
-    await showDialog<void>(
-      context: context,
-      barrierDismissible: false,
-      useRootNavigator: true,
-      builder: (dialogCtx) => PopScope(
-        // Hard gate — back-button cannot pop the dialog. The only exit
-        // is the Set up button below, which dismisses the dialog before
-        // navigating so we don't stack routes.
-        canPop: false,
-        child: _NoSourceDialog(
-          onSetUp: () {
-            Navigator.of(dialogCtx).pop();
-            context.push('/profile/health-setup');
-          },
+    // Publish "blocker visible" so post-onboarding sheets defer.
+    NoSourceGate.blockerOpen.value = true;
+    try {
+      await showDialog<void>(
+        context: context,
+        barrierDismissible: false,
+        useRootNavigator: true,
+        builder: (dialogCtx) => PopScope(
+          // Hard gate — back-button cannot pop the dialog. The only exit
+          // is the Set up button below, which dismisses the dialog before
+          // navigating so we don't stack routes.
+          canPop: false,
+          child: _NoSourceDialog(
+            onSetUp: () {
+              Navigator.of(dialogCtx).pop();
+              context.push('/profile/health-setup');
+            },
+          ),
         ),
-      ),
-    );
-    _dialogOpen = false;
+      );
+    } finally {
+      _dialogOpen = false;
+      NoSourceGate.blockerOpen.value = false;
+    }
     // Re-check after the dialog closes / user returns from setup.
     // If the source is still absent the dialog fires again next tick.
     if (mounted) _check();

@@ -274,12 +274,16 @@ class _StreakStatState extends State<_StreakStat>
         }
         // Wrap the whole stat (label + number + flame) in the tooltip
         // so the tap target matches the rest of the strip. Grey path
-        // → tooltip; coloured path → history sheet.
+        // → tooltip; coloured path → history sheet directly.
+        // 2026-08-30: showActivePopup:false preserves this surface's
+        // one-tap-to-sheet UX (the home strip now uses the active-pill
+        // popup, but Profile has always fired the sheet on first tap).
         return StreakGreyTooltip(
-          enabled: widget.inRecovery,
           inRecovery: widget.inRecovery,
           todayMissionDone: widget.todayMissionDone,
-          onTapWhenDisabled: widget.onTap,
+          currentStreak: widget.currentStreak,
+          onOpenSheet: widget.onTap,
+          showActivePopup: false,
           child: _StatItem(
             label: 'Streak',
             value: '$displayDays',

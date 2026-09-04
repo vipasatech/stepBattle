@@ -19,9 +19,11 @@ import '../../providers/theme_mode_provider.dart';
 import '../../providers/user_provider.dart';
 import '../../sheets/change_email_sheet.dart';
 import '../../sheets/delete_account_sheet.dart';
+import '../../sheets/device_connect_prompt_sheet.dart';
 import '../../sheets/edit_phone_sheet.dart';
 import '../../sheets/edit_survey_sheet.dart';
 import '../../sheets/redeem_referral_sheet.dart';
+import '../../sheets/set_home_sheet.dart';
 import '../profile/widgets/subscription_section.dart';
 
 /// Full settings surface — grouped, iOS/Strava-style. Every row does
@@ -62,12 +64,28 @@ class SettingsScreen extends ConsumerWidget {
           gender: p.gender,
           fitnessLevel: p.fitnessLevel,
           preferredName: p.preferredName,
+          // Location fields — safe to bundle into the same .select
+          // record because they only change on an explicit user action
+          // (SetHomeSheet write), never on step-sync / XP-award
+          // traffic. Powers the Home location Settings row's subtitle.
+          hasHome: p.hasHome,
+          districtName: p.districtName,
+          stateName: p.stateName,
+          countryName: p.countryName,
         );
       }),
     );
     final phoneLabel = (settingsFields?.phone?.isNotEmpty ?? false)
         ? settingsFields!.phone
         : 'Not set';
+    // Location subtitle — matches the Home tab map card's copy:
+    // `<district> · <state>` when set, `Not set — tap to add` when not.
+    final locationSubtitle = (settingsFields?.hasHome ?? false)
+        ? [
+            (settingsFields?.districtName ?? '').trim(),
+            (settingsFields?.stateName ?? '').trim(),
+          ].where((s) => s.isNotEmpty).join(' · ')
+        : 'Not set — tap to add';
 
     return Scaffold(
       appBar: AppBar(
@@ -182,6 +200,44 @@ class SettingsScreen extends ConsumerWidget {
                 title: 'Step tracking setup guide',
                 subtitle: 'Tailored instructions for your phone',
                 onTap: () => context.push('/profile/health-setup'),
+              ),
+              // Post-skip discoverability for the one-shot sheet that
+              // auto-fires on first Home mount. Users who dismissed
+              // that sheet can still find the connect-a-device flow
+              // here — `manual: true` on the reopen so it doesn't
+              // rewrite the Hive shown-at flag.
+              _SettingsRow(
+                icon: Icons.watch,
+                title: 'Connect a device',
+                subtitle: 'Smartwatch · fitness band · Health Connect apps',
+                onTap: () =>
+                    DeviceConnectPromptSheet.show(context, manual: true),
+              ),
+            ],
+          ),
+
+          const _SectionSpacer(),
+
+          // Location group — dedicated section so future location-y
+          // features (Nearby Battles opt-in, background-location
+          // toggle) can land here without cluttering Step tracking.
+          _SettingsGroup(
+            title: 'Location',
+            children: [
+              _SettingsRow(
+                icon: Icons.location_on_outlined,
+                title: 'Home location',
+                subtitle: locationSubtitle,
+                // Opens the same SetHomeSheet used by onboarding and
+                // the Home-tab map card edit-pencil, so all three
+                // surfaces share one code path.
+                onTap: () => showModalBottomSheet<void>(
+                  context: context,
+                  isScrollControlled: true,
+                  useRootNavigator: true,
+                  backgroundColor: Colors.transparent,
+                  builder: (_) => const SetHomeSheet(),
+                ),
               ),
             ],
           ),

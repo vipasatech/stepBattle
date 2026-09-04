@@ -12,6 +12,7 @@ import '../../../providers/step_provider.dart';
 import '../../../providers/streak_provider.dart';
 import '../../../providers/user_provider.dart';
 import '../../../services/streak_celebration_bus.dart';
+import '../../../sheets/streak_history_sheet.dart';
 import '../../../widgets/fire_particles.dart';
 import '../../../widgets/streak_grey_tooltip.dart';
 
@@ -127,6 +128,18 @@ class _StreakStripState extends ConsumerState<StreakStrip>
         curve: Curves.easeOutCubic,
       );
     });
+  }
+
+  /// Opens the streak history bottom sheet — invoked by the
+  /// StreakGreyTooltip popup's onOpenSheet callback (either variant).
+  /// Same modal wiring the Profile stats strip uses so both surfaces
+  /// present the sheet identically.
+  void _openStreakHistory(BuildContext context) {
+    showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: Colors.transparent,
+      builder: (_) => const StreakHistorySheet(),
+    );
   }
 
   /// Monday (local midnight) of the week whose page-index is [weekIdx].
@@ -249,12 +262,14 @@ class _StreakStripState extends ConsumerState<StreakStrip>
                       ),
                     ),
                     StreakGreyTooltip(
-                      // Tap only does something when the flame is grey
-                      // (recovery mode) — the coloured flame stays
-                      // non-interactive on Home.
-                      enabled: inRecovery,
+                      // Both states now tappable (2026-08-30 revision).
+                      // Grey flame → speech-bubble tooltip; orange flame
+                      // → compact "N-day streak ›" pill. Tapping either
+                      // popup body opens the streak history sheet.
                       inRecovery: inRecovery,
                       todayMissionDone: todayMissionDone,
+                      currentStreak: streakDays,
+                      onOpenSheet: () => _openStreakHistory(context),
                       child: AnimatedBuilder(
                         animation: _tickController,
                         builder: (_, __) {

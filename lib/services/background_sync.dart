@@ -106,7 +106,33 @@ Future<String?> _ensureBackgroundInitAndUid() async {
   final key = dotenv.env['SUPABASE_ANON_KEY'];
   if (url == null || url.isEmpty || key == null || key.isEmpty) return null;
   if (!_supabaseReadyInThisIsolate) {
-    await Supabase.initialize(url: url, anonKey: key);
+    // FIX 2 (auth-persistence, 2026-08-30) — Disable SDK-side auto-refresh
+    // in background isolates. Background ticks (WorkManager, FGS,
+    // AlarmWake) all share the SAME persisted refresh_token with the
+    // main UI isolate. If any background isolate refreshes independently
+    // of the main isolate, they race on the token: whichever refreshes
+    // last invalidates the other's in-memory copy via Supabase's
+    // reuse-detection (turned on with refresh-token rotation), and the
+    // entire session family gets nuked server-side. Symptom the user
+    // reported: signed out after 1–2 days of light use, even though the
+    // 30-day refresh_token TTL should have covered them.
+    //
+    // With autoRefreshToken=false:
+    //   • Background isolates run authed calls with whatever access
+    //     token was persisted at the last main-isolate refresh.
+    //   • If a call 401s (JWT past its 1h TTL), the SDK does NOT retry
+    //     with a refresh — the request fails cleanly, this tick logs
+    //     the miss under `headlessStepSync` and returns. The next tick
+    //     (30 min – 1 h later) re-reads storage; by then the user has
+    //     likely opened the app and the main isolate has refreshed →
+    //     the background tick picks up the fresh token and succeeds.
+    //   • Only the MAIN UI isolate ever calls refreshSession(), so the
+    //     multi-isolate race is eliminated entirely.
+    await Supabase.initialize(
+      url: url,
+      anonKey: key,
+      authOptions: const FlutterAuthClientOptions(autoRefreshToken: false),
+    );
     _supabaseReadyInThisIsolate = true;
   }
   return Supabase.instance.client.auth.currentUser?.id;

@@ -1,4 +1,6 @@
 import 'dart:async';
+import 'dart:io' show Platform;
+import 'dart:ui' show ImageFilter;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_foreground_task/flutter_foreground_task.dart';
@@ -526,6 +528,72 @@ class _MainShellState extends ConsumerState<MainShell>
   }
 }
 
+/// Platform-branched decoration for the 3-chip nav bar (both the two
+/// circle buttons and the centre pill). Matches Instagram's per-
+/// platform treatment (shape / corner radius / icon layout unchanged —
+/// only fill / active-indicator / elevation / blur):
+///
+///   • **Android** — flat solid opaque fill (Instagram's Android bar is
+///     a monolithic opaque surface); no drop shadow; hairline 1-px
+///     top-border for edge definition.
+///   • **iOS**     — real UIKit-material equivalent via a
+///     BackdropFilter blur behind a translucent surface fill; no
+///     shadow; no border. Blur sigma tuned to feel like
+///     `systemUltraThinMaterial` — very subtle, content behind stays
+///     readable but softens.
+///
+/// Active-indicator policy is IDENTICAL on both platforms + matches
+/// Instagram: only the icon glyph shifts from outline to filled +
+/// tinted; chip chrome does not change. This class only supplies the
+/// chrome — the icon swap stays in [_CircleNavButton] / [_PillCell].
+class _InstagramNavStyle {
+  _InstagramNavStyle._();
+
+  /// Whether to wrap the chip in a [BackdropFilter]. Only true on iOS.
+  static bool get useBlur => Platform.isIOS;
+
+  /// Fill colour for the chip surface. Solid opaque on Android, low-
+  /// alpha translucent on iOS so the blur beneath it shows through.
+  static Color fill(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    if (Platform.isIOS) {
+      // systemUltraThinMaterial equivalent — very subtle vibrancy.
+      // 55% alpha on top of a 20-sigma blur reads as "material" rather
+      // than "translucent solid" per Apple's iOS 17 vocabulary.
+      return scheme.surface.withValues(alpha: 0.55);
+    }
+    // Android — Instagram uses solid opaque bar chrome (no material).
+    return scheme.surface;
+  }
+
+  /// Hairline outline for chip edge. Android gets a subtle border for
+  /// definition (mirrors Instagram's 1-px top rule on the bar); iOS
+  /// suppresses the border — the material itself provides separation.
+  static BoxBorder? border(BuildContext context) {
+    if (Platform.isIOS) return null;
+    final scheme = Theme.of(context).colorScheme;
+    // Match Instagram Android's divider tint: `#DBDBDB` in light / `#262626`
+    // in dark, roughly 8% onSurface. Stronger than the previous 6% so
+    // the chip reads as a distinct surface against a busy Home
+    // background — Instagram's real bar has a full-width 1-px top rule,
+    // we approximate it with a chip outline.
+    return Border.all(
+      color: scheme.onSurface.withValues(alpha: 0.08),
+      width: 1,
+    );
+  }
+
+  /// Instagram uses zero elevation shadow on both platforms. Return an
+  /// empty list so `boxShadow: _InstagramNavStyle.shadows()` reads
+  /// clearly and can be re-tuned in one place later.
+  static List<BoxShadow> shadows() => const [];
+
+  /// Blur sigma tuned for the iOS material feel. 24 is high enough to
+  /// soften typical Home content (chart lines, step numbers) without
+  /// turning the backdrop into pure gray.
+  static const double iosBlurSigma = 24.0;
+}
+
 class _BottomNavBar extends StatelessWidget {
   final int currentIndex;
   final ValueChanged<int> onTap;
@@ -671,68 +739,69 @@ class _CircleNavButtonState extends State<_CircleNavButton>
 
   @override
   Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
     // Circle chrome is IDENTICAL whether active or inactive — only the
-    // icon colour changes. Reference design ("Home / Create / Library"
-    // pill) highlights the active tab purely via a coloured icon; the
-    // surrounding chip stays the same neutral glass. Filled violet
-    // backgrounds on tap felt heavy against the split-block layout.
-    final bg = scheme.surfaceContainerHigh.withValues(alpha: 0.85);
+    // icon colour changes. Instagram's per-platform treatment lives in
+    // [_InstagramNavStyle]:
+    //   • Android → solid opaque surface, 1-px hairline border, no
+    //     shadow.
+    //   • iOS     → translucent surface over a real BackdropFilter blur
+    //     (systemUltraThinMaterial equivalent), no border, no shadow.
     final activeFg = AppColors.primary;
     final inactiveFg =
         AppColors.isLight ? Colors.black.withValues(alpha: 0.75) : Colors.white70;
+
+    Widget chip = Container(
+      width: 56,
+      height: 56,
+      decoration: BoxDecoration(
+        color: _InstagramNavStyle.fill(context),
+        shape: BoxShape.circle,
+        border: _InstagramNavStyle.border(context),
+        boxShadow: _InstagramNavStyle.shadows(),
+      ),
+      alignment: Alignment.center,
+      child: AnimatedBuilder(
+        animation: _pop,
+        builder: (_, child) {
+          final t = _pop.value;
+          final pop = t == 0 ? 0.0 : 4 * t * (1 - t) * 0.15;
+          return Transform.scale(scale: 1.0 + pop, child: child);
+        },
+        // Only the icon colour transitions on active-state change.
+        child: AnimatedSwitcher(
+          duration: Motion.d.fast,
+          child: Icon(
+            widget.isActive ? widget.activeIcon : widget.icon,
+            key: ValueKey(widget.isActive),
+            color: widget.isActive ? activeFg : inactiveFg,
+            size: 24,
+          ),
+        ),
+      ),
+    );
+
+    // iOS-only backdrop blur — real material behind the chip so
+    // content underneath softens the way Instagram's UITabBar does.
+    // ClipOval matches the chip's circular shape so the blurred region
+    // doesn't leak past the chip edge.
+    if (_InstagramNavStyle.useBlur) {
+      chip = ClipOval(
+        child: BackdropFilter(
+          filter: ImageFilter.blur(
+            sigmaX: _InstagramNavStyle.iosBlurSigma,
+            sigmaY: _InstagramNavStyle.iosBlurSigma,
+          ),
+          child: chip,
+        ),
+      );
+    }
 
     return GestureDetector(
       onTap: widget.onTap,
       behavior: HitTestBehavior.opaque,
       child: Tooltip(
         message: widget.tooltip,
-        child: Container(
-          width: 56,
-          height: 56,
-          decoration: BoxDecoration(
-            color: bg,
-            shape: BoxShape.circle,
-            border: Border.all(
-              color: AppColors.onSurface.withValues(alpha: 0.06),
-              width: 1,
-            ),
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withValues(alpha: 0.25),
-                blurRadius: 10,
-                offset: const Offset(0, 4),
-              ),
-              BoxShadow(
-                color: Colors.white.withValues(
-                    alpha: AppColors.isLight ? 0.35 : 0.06),
-                blurRadius: 0,
-                offset: const Offset(0, 1),
-                spreadRadius: -1,
-                blurStyle: BlurStyle.inner,
-              ),
-            ],
-          ),
-          alignment: Alignment.center,
-          child: AnimatedBuilder(
-            animation: _pop,
-            builder: (_, child) {
-              final t = _pop.value;
-              final pop = t == 0 ? 0.0 : 4 * t * (1 - t) * 0.15;
-              return Transform.scale(scale: 1.0 + pop, child: child);
-            },
-            // Only the icon colour transitions on active-state change.
-            child: AnimatedSwitcher(
-              duration: Motion.d.fast,
-              child: Icon(
-                widget.isActive ? widget.activeIcon : widget.icon,
-                key: ValueKey(widget.isActive),
-                color: widget.isActive ? activeFg : inactiveFg,
-                size: 24,
-              ),
-            ),
-          ),
-        ),
+        child: chip,
       ),
     );
   }
@@ -770,23 +839,18 @@ class _PillNavGroup extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    return Container(
+    // Same Instagram-adaptive chrome as [_CircleNavButton]:
+    //   • Android → solid opaque fill, hairline border, no shadow.
+    //   • iOS     → translucent fill over a real BackdropFilter blur,
+    //     no border, no shadow.
+    Widget pill = Container(
       height: 56,
       padding: const EdgeInsets.all(4),
       decoration: BoxDecoration(
-        color: scheme.surfaceContainerHigh.withValues(alpha: 0.85),
+        color: _InstagramNavStyle.fill(context),
         borderRadius: BorderRadius.circular(32),
-        border: Border.all(
-          color: AppColors.onSurface.withValues(alpha: 0.06),
-        ),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.25),
-            blurRadius: 10,
-            offset: const Offset(0, 4),
-          ),
-        ],
+        border: _InstagramNavStyle.border(context),
+        boxShadow: _InstagramNavStyle.shadows(),
       ),
       child: Row(
         children: items.map((item) {
@@ -800,6 +864,23 @@ class _PillNavGroup extends StatelessWidget {
         }).toList(),
       ),
     );
+
+    // iOS-only backdrop blur — clipped to the pill's rounded shape so
+    // the blur mask matches the chip edge.
+    if (_InstagramNavStyle.useBlur) {
+      pill = ClipRRect(
+        borderRadius: BorderRadius.circular(32),
+        child: BackdropFilter(
+          filter: ImageFilter.blur(
+            sigmaX: _InstagramNavStyle.iosBlurSigma,
+            sigmaY: _InstagramNavStyle.iosBlurSigma,
+          ),
+          child: pill,
+        ),
+      );
+    }
+
+    return pill;
   }
 }
 

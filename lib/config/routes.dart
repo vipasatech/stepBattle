@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../providers/auth_provider.dart';
+import '../providers/user_provider.dart';
 import '../services/observability_service.dart';
 import '../utils/app_logger.dart';
 import '../utils/cross_isolate_kv.dart';
@@ -33,6 +34,7 @@ import '../screens/clan_battle/join_clan_battle_screen.dart';
 // `lib/screens/map/map_screen.dart`; re-add this import and the
 // `/map` GoRoute below when the feature ships.
 // import '../screens/map/map_screen.dart';
+import '../screens/onboarding/brand_setup_screen.dart';
 import '../screens/onboarding/health_setup_screen.dart';
 import '../screens/team_lobby/team_lobby_page.dart';
 import '../screens/profile/profile_screen.dart';
@@ -103,6 +105,15 @@ final routerProvider = Provider<GoRouter>((ref) {
   final refreshNotifier = ValueNotifier<int>(0);
   ref.listen(authStateProvider, (_, __) => refreshNotifier.value++);
   ref.listen(hasCompletedOnboardingProvider, (_, __) => refreshNotifier.value++);
+  // Also re-run the redirect when the profile row lands (or disappears
+  // — delete-account race). The escape hatch at line ~216 branches on
+  // whether the profile ACTUALLY EXISTS to distinguish that race from
+  // a fresh Google sign-in whose survey isn't done yet — without this
+  // listener the router runs the redirect BEFORE the profile row's
+  // first emission and the fresh-signup path gets trapped on /signup
+  // until something else forces a refresh. See routes.dart 2026-09-04
+  // fix for the log trace showing the stuck-on-signup case.
+  ref.listen(userProfileProvider, (_, __) => refreshNotifier.value++);
   ref.onDispose(refreshNotifier.dispose);
 
   return GoRouter(
@@ -212,7 +223,27 @@ final routerProvider = Provider<GoRouter>((ref) {
           isOnWelcomePage || isOnOtpVerify;
       final isOnAuthSurfaceExceptOtp =
           isOnLoginPage || isOnSignupPage || isOnWelcomePage;
-      if (isOnAuthSurfaceExceptOtp && onboarded == false) {
+      // Whether the profile row actually EXISTS. Distinguishes two
+      // cases both of which land on `onboarded == false`:
+      //   1. Delete-account race — profile row deleted → this reads
+      //      null → escape hatch below fires → stay on auth surface
+      //      until signOut lands.
+      //   2. Fresh Google sign-in — profile row exists (created by
+      //      the on_auth_user_created DB trigger and/or by
+      //      `_ensureProfileRow` inside signInWithGoogle) but survey
+      //      fields are blank → this reads non-null → escape hatch
+      //      DOES NOT fire → falls through to the /home push below,
+      //      which the onboarding gate then redirects to /onboarding.
+      //
+      // Before this check, both cases collapsed to "trap on the auth
+      // surface" and a fresh Google sign-in from a new account got
+      // stuck on /signup indefinitely (2026-09-04 log trace showed
+      // signInWithGoogle:done firing twice with no nav after).
+      final profileExists =
+          ref.read(userProfileProvider).valueOrNull != null;
+      if (isOnAuthSurfaceExceptOtp &&
+          onboarded == false &&
+          !profileExists) {
         // Orphaned auth session — profile is gone but session hasn't
         // cleared yet. Stay on the current auth surface.
         return null;
@@ -269,10 +300,17 @@ final routerProvider = Provider<GoRouter>((ref) {
       GoRoute(
         path: '/login',
         name: 'login',
+        // `prefillEmail` query param — passed by /welcome's "Continue as
+        // <email>" one-tap CTA when a last-signed-in-email hint is
+        // stored (auth-persistence fix 2026-08-30). Pre-fills the email
+        // field so OTP users skip typing; Google users tap the Google
+        // button unchanged and the pre-fill is ignored.
         pageBuilder: (context, state) => RouteTransitions.fadeThroughPage(
           key: state.pageKey,
           name: state.name,
-          child: const LoginScreen(),
+          child: LoginScreen(
+            prefillEmail: state.uri.queryParameters['prefillEmail'],
+          ),
         ),
       ),
       GoRoute(
@@ -562,6 +600,24 @@ final routerProvider = Provider<GoRouter>((ref) {
                     child: HealthSetupScreen(isFirstRun: firstRun),
                   );
                 },
+                routes: [
+                  // Per-brand short setup guide, fired from the
+                  // device-connect prompt sheet's brand chip picker.
+                  // Path param `id` maps to a key in
+                  // `BrandSetupScreen._catalog`.
+                  GoRoute(
+                    path: 'brand/:id',
+                    name: 'brandSetup',
+                    pageBuilder: (context, state) =>
+                        RouteTransitions.fadeThroughPage(
+                      key: state.pageKey,
+                      name: state.name,
+                      child: BrandSetupScreen(
+                        brandId: state.pathParameters['id'] ?? 'other',
+                      ),
+                    ),
+                  ),
+                ],
               ),
             ],
           ),

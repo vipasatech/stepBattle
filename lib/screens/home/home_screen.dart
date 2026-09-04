@@ -12,6 +12,7 @@ import '../../providers/mission_provider.dart';
 import '../../providers/notification_provider.dart';
 import '../../providers/user_provider.dart';
 import '../../services/media_warmup.dart';
+import '../../sheets/device_connect_prompt_sheet.dart';
 import '../../sheets/notifications_sheet.dart';
 import '../../widgets/avatar_circle.dart';
 import '../../widgets/buy_xp_cta.dart';
@@ -19,7 +20,9 @@ import '../../widgets/friends_app_bar_button.dart';
 import '../../widgets/mount_stagger.dart';
 import '../../widgets/no_source_gate.dart';
 import '../../widgets/no_steps_banner.dart';
+import '../../widgets/permission_gate.dart';
 import '../../widgets/pro_badge.dart';
+import '../onboarding/health_setup_screen.dart';
 import 'widgets/overview_card.dart';
 import 'widgets/stat_pills_row.dart';
 import 'widgets/active_battle_card.dart';
@@ -39,11 +42,17 @@ class HomeScreen extends ConsumerStatefulWidget {
   ConsumerState<HomeScreen> createState() => _HomeScreenState();
 }
 
-class _HomeScreenState extends ConsumerState<HomeScreen> {
+class _HomeScreenState extends ConsumerState<HomeScreen>
+    with WidgetsBindingObserver {
   /// Guards the one-shot media warmup. Firing on every rebuild would
   /// hammer `rootBundle.load` — cheap once the asset is cached, but
   /// pointless.
   bool _mediaWarmupScheduled = false;
+
+  /// Guards the one-shot device-connect prompt so we don't try to
+  /// re-fire in the same Home mount if a lifecycle-resume tick lands
+  /// while the sheet is already up.
+  bool _deviceConnectPromptScheduled = false;
 
   @override
   void initState() {
@@ -59,6 +68,94 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
       if (!mounted || _mediaWarmupScheduled) return;
       _mediaWarmupScheduled = true;
       unawaited(MediaWarmup.preloadArenaForNow());
+    });
+    WidgetsBinding.instance.addObserver(this);
+    // Fire the device-connect prompt check on first mount + whenever
+    // the primer / no-source blocker closes (via their ValueNotifier
+    // listeners) + on foreground return. All paths funnel to the same
+    // idempotent [_maybeShowDeviceConnectPrompt] which short-circuits
+    // if the predicate isn't fully met or if we've already prompted.
+    SchedulerBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _maybeShowDeviceConnectPrompt();
+    });
+    PermissionGate.primerOpen.addListener(_onGateVisibilityChanged);
+    NoSourceGate.blockerOpen.addListener(_onGateVisibilityChanged);
+  }
+
+  @override
+  void dispose() {
+    PermissionGate.primerOpen.removeListener(_onGateVisibilityChanged);
+    NoSourceGate.blockerOpen.removeListener(_onGateVisibilityChanged);
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    // Foreground return — retry the prompt in case the user resolved a
+    // gate in another app (e.g. accepted a system permission dialog
+    // that made the primer dismiss). Cheap check; short-circuits
+    // immediately if the flag is set or a gate is still up.
+    if (state == AppLifecycleState.resumed) {
+      _maybeShowDeviceConnectPrompt();
+      // Missions catalog re-hydrate — Supabase Realtime does NOT replay
+      // events that fired while our subscription was down (a network
+      // flap between the last resume and now, an OS backgrounding stretch
+      // during which the WebSocket got killed). Invalidating here forces
+      // a fresh snapshot from server so admin-side edits made while we
+      // were away land immediately, without waiting for the user to
+      // pull-to-refresh. Cheap — the providers are cached, so the read
+      // returns instantly for the common case (nothing changed).
+      // See PostgreSQL logical-replication docs on missed-event
+      // semantics + the analysis on 2026-08-31 diagnostics logs.
+      ref.invalidate(dailyMissionsProvider);
+      ref.invalidate(weeklyMissionsProvider);
+    }
+  }
+
+  /// Fires when either the [PermissionGate] primer or the
+  /// [NoSourceGate] blocker transitions open → closed. Re-checks the
+  /// full predicate; the sheet mounts only if we've fully cleared out
+  /// of the mandatory gates.
+  void _onGateVisibilityChanged() {
+    if (PermissionGate.primerOpen.value) return;
+    if (NoSourceGate.blockerOpen.value) return;
+    _maybeShowDeviceConnectPrompt();
+  }
+
+  /// Idempotent — safe to call from any of the trigger paths. Fires
+  /// the sheet at most once per Home mount (guarded by
+  /// [_deviceConnectPromptScheduled]) AND at most once ever per install
+  /// (guarded by [DeviceConnectPromptSheet.shouldShow]).
+  ///
+  /// The full predicate:
+  ///   • Onboarding complete
+  ///   • No permission primer up
+  ///   • No no-source blocker up
+  ///   • No health-setup first-run wizard pending
+  ///   • Prompt not previously shown
+  void _maybeShowDeviceConnectPrompt() {
+    if (!mounted || _deviceConnectPromptScheduled) return;
+    if (PermissionGate.primerOpen.value) return;
+    if (NoSourceGate.blockerOpen.value) return;
+    if (HealthSetupScreen.shouldShowFirstRunWizard()) return;
+    if (!DeviceConnectPromptSheet.shouldShow()) return;
+    // Onboarding gate — the router only lands on /home for onboarded
+    // users, but read the provider anyway so a still-loading state
+    // (AsyncLoading during a cold-start profile fetch) defers rather
+    // than firing prematurely.
+    final onboarded = ref.read(hasCompletedOnboardingProvider).valueOrNull;
+    if (onboarded != true) return;
+
+    _deviceConnectPromptScheduled = true;
+    // Small delay so the sheet doesn't fight the closing animation of
+    // whatever gate the user just resolved (200 ms matches the pause
+    // permission_gate.dart already uses before pushing the first-run
+    // health wizard).
+    Future.delayed(const Duration(milliseconds: 200), () {
+      if (!mounted) return;
+      DeviceConnectPromptSheet.show(context);
     });
   }
 
@@ -347,6 +444,12 @@ class _HomeBody extends ConsumerWidget {
     ref.invalidate(currentUserProvider);
     ref.invalidate(allBattlesProvider);
     ref.invalidate(dailyMissionsProvider);
+    // Weekly catalog re-hydrates too — the Home feed can surface
+    // weekly missions in the highlighted section, and admin edits to
+    // either catalog should land on a pull. Also catches the same
+    // realtime missed-event class as daily (see AppLifecycleState
+    // .resumed handler in _HomeScreenState).
+    ref.invalidate(weeklyMissionsProvider);
     await Future<void>.delayed(const Duration(milliseconds: 400));
   }
 }

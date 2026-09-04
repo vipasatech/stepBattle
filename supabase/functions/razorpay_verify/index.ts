@@ -28,7 +28,17 @@
 // SECRETS: RAZORPAY_KEY_SECRET (set in Supabase → Edge Functions → Secrets).
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.45.0';
-import { corsHeaders } from '../_shared/cors.ts';
+
+// Inlined (previously imported from ../_shared/cors.ts). Kept inline
+// so the Supabase Dashboard editor can deploy this function as a
+// single file — the Dashboard sandbox doesn't resolve sibling folder
+// imports. Content is identical to the shared version.
+const corsHeaders = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Headers':
+    'authorization, x-client-info, apikey, content-type',
+  'Access-Control-Allow-Methods': 'POST, OPTIONS',
+};
 
 interface VerifyBody {
   order_id?: string;

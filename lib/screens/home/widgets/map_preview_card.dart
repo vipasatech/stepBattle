@@ -120,6 +120,33 @@ class MapPreviewCard extends ConsumerWidget {
                                   ? _HomeRow(user: user!)
                                   : _UnsetRow(),
                             ),
+                            // Change-home affordance — only visible when a
+                            // home is already set. Own tap target with
+                            // HitTestBehavior.opaque so a tap here opens
+                            // the SetHomeSheet instead of bubbling to the
+                            // parent card's Coming-Soon handler. When
+                            // hasHome is false, the whole card already
+                            // opens the sheet (see InkWell onTap above),
+                            // so the pencil would be redundant.
+                            if (hasHome) ...[
+                              GestureDetector(
+                                behavior: HitTestBehavior.opaque,
+                                onTap: () => _openSetHomeSheet(context),
+                                child: Padding(
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 6,
+                                    vertical: 4,
+                                  ),
+                                  child: Icon(
+                                    Icons.edit_outlined,
+                                    color: AppColors.onSurfaceVariant,
+                                    size: 16,
+                                    semanticLabel: 'Change home location',
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(width: 2),
+                            ],
                             Icon(
                               Icons.chevron_right,
                               color: AppColors.onSurfaceVariant,

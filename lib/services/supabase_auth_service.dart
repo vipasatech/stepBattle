@@ -7,6 +7,7 @@ import '../repositories/leaderboard_repository.dart';
 import '../repositories/mission_repository.dart';
 import '../repositories/profile_repository.dart';
 import '../utils/app_logger.dart';
+import '../utils/cross_isolate_kv.dart';
 import 'alarm_wake_scheduler.dart';
 import 'background_sync.dart';
 import 'notification_service.dart';
@@ -109,6 +110,14 @@ class SupabaseAuthService {
         'uid': res.user?.id,
         'email': res.user?.email,
       });
+      // Persist the email + method as the "last signed-in" hint.
+      // /welcome uses BOTH: the email as the button label + the method
+      // to decide which re-auth flow to trigger directly on tap
+      // (google → account picker, email → send OTP). Cleared only on
+      // explicit signOut. Fix pair: 2026-08-30 (email) + 2026-09-04
+      // (method).
+      await CrossIsolateKV.saveLastSignedInEmail(res.user?.email,
+          method: 'google');
       // Identify + funnel event. `identify` attributes every subsequent
       // event/error to this uid on Sentry and PostHog. `sign_in` fires
       // for both first-time and returning users; `signup` is fired
@@ -185,6 +194,12 @@ class SupabaseAuthService {
       );
       AppLogger.auth
           .i('verifyEmailOtp:done', fields: {'uid': res.user?.id});
+      // Persist the email + method as the "last signed-in" hint. Same
+      // rationale as the Google path (see [signInWithGoogle]) — method
+      // is `'email'` so /welcome fires sendEmailOtp on the "Continue
+      // as" tap instead of the Google account picker.
+      await CrossIsolateKV.saveLastSignedInEmail(res.user?.email ?? email,
+          method: 'email');
       return res;
     } catch (e, s) {
       AppLogger.auth.e('verifyEmailOtp:failed',
@@ -253,6 +268,13 @@ class SupabaseAuthService {
   Future<void> signOut() async {
     final uid = _supabase.auth.currentUser?.id;
     AppLogger.auth.i('signOut', fields: {'uid': uid});
+    // This is an EXPLICIT user-initiated signOut (Settings sheet, delete
+    // account, etc.). Clear the last-signed-in email hint so the next
+    // cold start reads as a truly-fresh install. Session-death signOut
+    // (from main.dart `_refreshSessionIfStale` on truly-dead refresh
+    // token) intentionally does NOT clear this hint — see that path's
+    // header for the soft-re-auth rationale.
+    await CrossIsolateKV.clearLastSignedInEmail();
     // Tear down the always-on foreground service here (not in MainShell.dispose
     // — that fires on any shell unmount, including transient root-route
     // navigations, and would stop the service while the user is still active).

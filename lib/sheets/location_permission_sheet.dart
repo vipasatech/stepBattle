@@ -132,7 +132,10 @@ class _LocationPermissionSheetState extends State<_LocationPermissionSheet> {
                 textAlign: TextAlign.center,
                 style: theme.textTheme.headlineSmall?.copyWith(
                   fontWeight: FontWeight.w900,
-                  color: Colors.white,
+                  // Theme-aware — sheet fill is AppColors.surfaceContainer
+                  // which adapts. Was hardcoded white so the title went
+                  // invisible against the light-mode surface.
+                  color: AppColors.onSurface,
                 ),
               ),
               const SizedBox(height: 12),

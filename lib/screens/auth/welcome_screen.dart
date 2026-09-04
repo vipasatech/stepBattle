@@ -1,7 +1,12 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../config/colors.dart';
+import '../../providers/auth_provider.dart';
+import '../../utils/cross_isolate_kv.dart';
+import '../../utils/network_errors.dart';
+import '../../widgets/no_network_sheet.dart';
 
 /// First-run landing page.
 ///
@@ -25,20 +30,40 @@ import '../../config/colors.dart';
 /// Routing: entry point for signed-out users.
 ///   • `Join for free` → `/signup`
 ///   • `Log in`        → `/login`
-class WelcomeScreen extends StatefulWidget {
+class WelcomeScreen extends ConsumerStatefulWidget {
   const WelcomeScreen({super.key});
 
   @override
-  State<WelcomeScreen> createState() => _WelcomeScreenState();
+  ConsumerState<WelcomeScreen> createState() => _WelcomeScreenState();
 }
 
-class _WelcomeScreenState extends State<WelcomeScreen> {
+class _WelcomeScreenState extends ConsumerState<WelcomeScreen> {
   final _controller = PageController();
 
   /// Continuous page position (integer part = current page, fractional
   /// part = drag progress toward the next). Drives the header + card
   /// cross-fade so overlays fade when a slide is mid-transition.
   double _pageOffset = 0;
+
+  /// Last-signed-in email hint (auth-persistence fix 2026-08-30). When
+  /// non-null, the CTA row swaps `Join for free` + `Log in` for a
+  /// one-tap `Continue as <email>` primary + `Not you?` fallback link.
+  /// Preserved across session-death signOuts; cleared only on explicit
+  /// user signOut. Sync-read once in [initState] because we don't need
+  /// to react to changes mid-screen — the hint is set BEFORE welcome
+  /// ever renders (during the previous sign-in that succeeded).
+  String? _lastEmail;
+
+  /// Last sign-in METHOD — one of 'google' / 'email' / null. Paired
+  /// with [_lastEmail] so the Continue-as button fires the right flow
+  /// directly instead of dropping the user on /login. Null = fall back
+  /// to /login prefill (older users pre-2026-09-04).
+  String? _lastMethod;
+
+  /// Spinner state on the Continue-as button while Google sign-in or
+  /// OTP send is in flight. Also disables the row so a double-tap
+  /// doesn't fire twice.
+  bool _busy = false;
 
   // Titles taken verbatim from the original marketing illustrations.
   // Assets are two per slide:
@@ -77,6 +102,75 @@ class _WelcomeScreenState extends State<WelcomeScreen> {
   void initState() {
     super.initState();
     _controller.addListener(_onScroll);
+    _lastEmail = CrossIsolateKV.getLastSignedInEmailSync();
+    _lastMethod = CrossIsolateKV.getLastSignInMethodSync();
+  }
+
+  /// "Continue as [email]" handler — fires the SAME sign-in flow the
+  /// user used last time so they land back where they came from with
+  /// zero extra taps:
+  ///   • `google` → open the Google account picker directly
+  ///   • `email`  → send an OTP + jump straight to /verify-otp
+  ///   • null (pre-2026-09-04 hint) → fall back to /login prefill
+  ///
+  /// Errors surface as a SnackBar; the row's [_busy] flag is cleared
+  /// in `finally` so a failure leaves the button usable. Network
+  /// errors get a friendlier "no internet" sheet via [showNoNetworkSheet].
+  Future<void> _continueAsLastUser() async {
+    if (_busy) return;
+    final email = _lastEmail;
+    if (email == null || email.isEmpty) return;
+    final method = _lastMethod;
+
+    // No method stored → fall back to legacy prefill behaviour so users
+    // who last signed in BEFORE this fix still see a working button.
+    if (method == null || method.isEmpty) {
+      final uri = Uri(
+        path: '/login',
+        queryParameters: {'prefillEmail': email},
+      );
+      context.go(uri.toString());
+      return;
+    }
+
+    setState(() => _busy = true);
+    try {
+      if (method == 'google') {
+        await ref.read(authServiceProvider).signInWithGoogle();
+        // On success the router listens to auth state and moves to
+        // /home (or /onboarding). No manual navigation needed here.
+      } else if (method == 'email') {
+        await ref.read(authServiceProvider).sendEmailOtp(email);
+        await CrossIsolateKV.savePendingOtp(email: email, mode: 'login');
+        if (!mounted) return;
+        context.go(
+          '/verify-otp?email=${Uri.encodeQueryComponent(email)}&mode=login',
+        );
+      } else {
+        // Unknown method → same legacy fallback as null.
+        final uri = Uri(
+          path: '/login',
+          queryParameters: {'prefillEmail': email},
+        );
+        if (!mounted) return;
+        context.go(uri.toString());
+      }
+    } catch (e) {
+      if (!mounted) return;
+      if (isNetworkError(e)) {
+        final retry = await showNoNetworkSheet(context);
+        if (!mounted) return;
+        setState(() => _busy = false);
+        if (retry == true) _continueAsLastUser();
+        return;
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(e.toString())),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
   }
 
   void _onScroll() {
@@ -281,67 +375,181 @@ class _WelcomeScreenState extends State<WelcomeScreen> {
               top: false,
               child: Padding(
                 padding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    // Padding-based sizing (no fixed height) so the button
-                    // grows with the user's system font scale instead of
-                    // clipping "Join for free" at larger sizes. minimumSize
-                    // still keeps the tap target ≥ 52 dp at default scale.
-                    SizedBox(
-                      width: double.infinity,
-                      child: FilledButton(
-                        style: FilledButton.styleFrom(
-                          backgroundColor: AppColors.primary,
-                          foregroundColor: Colors.white,
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(999),
-                          ),
-                          padding:
-                              const EdgeInsets.symmetric(vertical: 14),
-                          minimumSize: const Size.fromHeight(52),
-                        ),
-                        onPressed: () => context.go('/signup'),
-                        child: Text(
-                          'Join for free',
-                          textAlign: TextAlign.center,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: theme.textTheme.titleMedium?.copyWith(
-                            fontWeight: FontWeight.w800,
-                            color: Colors.white,
-                          ),
-                        ),
-                      ),
-                    ),
-                    const SizedBox(height: 12),
-                    // Log in — same padding-based approach so the pill
-                    // grows with font scale rather than clipping.
-                    TextButton(
-                      onPressed: () => context.go('/login'),
-                      style: TextButton.styleFrom(
-                        padding:
-                            const EdgeInsets.symmetric(vertical: 12, horizontal: 20),
-                        minimumSize: const Size.fromHeight(44),
-                      ),
-                      child: Text(
-                        'Log in',
-                        textAlign: TextAlign.center,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: theme.textTheme.titleMedium?.copyWith(
-                          color: AppColors.primary,
-                          fontWeight: FontWeight.w800,
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
+                child: _lastEmail != null
+                    ? _returningUserCtas(context, theme, _lastEmail!)
+                    : _freshUserCtas(context, theme),
               ),
             ),
           ),
         ],
       ),
+    );
+  }
+
+  /// CTA stack for a fresh install (no last-email hint stored). Same
+  /// two-button layout that welcome has always shown: `Join for free`
+  /// (primary → /signup) + `Log in` text link (→ /login).
+  Widget _freshUserCtas(BuildContext context, ThemeData theme) {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        // Padding-based sizing (no fixed height) so the button
+        // grows with the user's system font scale instead of
+        // clipping "Join for free" at larger sizes. minimumSize
+        // still keeps the tap target ≥ 52 dp at default scale.
+        SizedBox(
+          width: double.infinity,
+          child: FilledButton(
+            style: FilledButton.styleFrom(
+              backgroundColor: AppColors.primary,
+              foregroundColor: Colors.white,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(999),
+              ),
+              padding: const EdgeInsets.symmetric(vertical: 14),
+              minimumSize: const Size.fromHeight(52),
+            ),
+            onPressed: () => context.go('/signup'),
+            child: Text(
+              'Join for free',
+              textAlign: TextAlign.center,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: theme.textTheme.titleMedium?.copyWith(
+                fontWeight: FontWeight.w800,
+                color: Colors.white,
+              ),
+            ),
+          ),
+        ),
+        const SizedBox(height: 12),
+        // Log in — same padding-based approach so the pill
+        // grows with font scale rather than clipping.
+        TextButton(
+          onPressed: () => context.go('/login'),
+          style: TextButton.styleFrom(
+            padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 20),
+            minimumSize: const Size.fromHeight(44),
+          ),
+          child: Text(
+            'Log in',
+            textAlign: TextAlign.center,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: theme.textTheme.titleMedium?.copyWith(
+              color: AppColors.primary,
+              fontWeight: FontWeight.w800,
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  /// CTA stack for a returning user whose session was recovered from
+  /// the last-email hint (auth-persistence fix 2026-08-30). Shows a
+  /// one-tap `Continue as <email>` primary that routes to `/login` with
+  /// the email pre-filled (Google sign-in users tap Google as usual;
+  /// OTP users skip typing and go straight to Send Code). Below it, a
+  /// `Not <email>? Use a different account` link clears the hint and
+  /// falls back to the fresh-user flow.
+  Widget _returningUserCtas(
+      BuildContext context, ThemeData theme, String email) {
+    // Elide long emails so a very long username never breaks the button
+    // layout. Native ellipsis on the Text handles the middle-of-string
+    // truncation for us via maxLines:1 + overflow:ellipsis.
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        SizedBox(
+          width: double.infinity,
+          child: FilledButton(
+            style: FilledButton.styleFrom(
+              backgroundColor: AppColors.primary,
+              foregroundColor: Colors.white,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(999),
+              ),
+              padding: const EdgeInsets.symmetric(
+                  vertical: 12, horizontal: 20),
+              minimumSize: const Size.fromHeight(58),
+            ),
+            onPressed: _busy ? null : _continueAsLastUser,
+            child: _busy
+                ? const SizedBox(
+                    height: 22,
+                    width: 22,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2.2,
+                      valueColor:
+                          AlwaysStoppedAnimation<Color>(Colors.white),
+                    ),
+                  )
+                : Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        'Continue as',
+                        textAlign: TextAlign.center,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: theme.textTheme.bodySmall?.copyWith(
+                          color: Colors.white.withValues(alpha: 0.75),
+                          fontWeight: FontWeight.w500,
+                          fontSize: 12,
+                          letterSpacing: 0.15,
+                        ),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        email,
+                        textAlign: TextAlign.center,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: theme.textTheme.titleMedium?.copyWith(
+                          fontWeight: FontWeight.w800,
+                          color: Colors.white,
+                          fontSize: 16,
+                        ),
+                      ),
+                    ],
+                  ),
+          ),
+        ),
+        const SizedBox(height: 12),
+        // Fallback: clear the hint + route to /login so the user picks
+        // a different account. `setState` so the current screen also
+        // re-renders as fresh-user next time it's visible.
+        TextButton(
+          onPressed: () async {
+            // clearLastSignedInEmail also clears the stored method
+            // (2026-09-04 fix) so the next welcome render reads as a
+            // clean fresh-user state.
+            await CrossIsolateKV.clearLastSignedInEmail();
+            if (!context.mounted) return;
+            setState(() {
+              _lastEmail = null;
+              _lastMethod = null;
+            });
+            context.go('/login');
+          },
+          style: TextButton.styleFrom(
+            padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 20),
+            minimumSize: const Size.fromHeight(44),
+          ),
+          child: Text(
+            'Not you? Sign in with a different account',
+            textAlign: TextAlign.center,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: theme.textTheme.bodyMedium?.copyWith(
+              color: AppColors.primary,
+              fontWeight: FontWeight.w700,
+              fontSize: 13,
+            ),
+          ),
+        ),
+      ],
     );
   }
 }

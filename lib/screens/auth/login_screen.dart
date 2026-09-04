@@ -20,7 +20,13 @@ import 'auth_social_button.dart';
 /// passwordless switch still log in fine through this flow — Supabase
 /// accepts an OTP for any email-registered user.
 class LoginScreen extends ConsumerStatefulWidget {
-  const LoginScreen({super.key});
+  /// Optional email to pre-fill on mount. Passed by /welcome's
+  /// "Continue as &lt;email&gt;" one-tap CTA when a last-signed-in-email
+  /// hint is stored (auth-persistence fix 2026-08-30). Null on all
+  /// other entry paths — the field renders blank as before.
+  final String? prefillEmail;
+
+  const LoginScreen({super.key, this.prefillEmail});
 
   @override
   ConsumerState<LoginScreen> createState() => _LoginScreenState();
@@ -31,6 +37,18 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
   String? _error;
 
   final _emailController = TextEditingController();
+
+  @override
+  void initState() {
+    super.initState();
+    // Pre-fill the email field when /welcome sent a hint. Harmless
+    // when null (controller stays empty as before) or when the user
+    // taps "Sign in with Google" instead (Google flow ignores this).
+    final hint = widget.prefillEmail;
+    if (hint != null && hint.isNotEmpty) {
+      _emailController.text = hint;
+    }
+  }
 
   @override
   void dispose() {

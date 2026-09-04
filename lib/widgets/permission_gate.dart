@@ -17,6 +17,17 @@ class PermissionGate extends ConsumerStatefulWidget {
   final Widget child;
   const PermissionGate({super.key, required this.child});
 
+  /// True while the "Almost Ready!" primer dialog is on screen. Other
+  /// blocking gates that would also open a modal on Home (currently
+  /// [NoSourceGate]) listen to this so they don't stack a second modal
+  /// on top of ours — see the fix header on that widget.
+  ///
+  /// Set to true right before [showDialog] fires and flipped back to
+  /// false in the same call's `finally` block, so it clears cleanly
+  /// whether the dialog was dismissed via Grant All, Later, or an
+  /// exception.
+  static final ValueNotifier<bool> primerOpen = ValueNotifier<bool>(false);
+
   @override
   ConsumerState<PermissionGate> createState() => _PermissionGateState();
 }
@@ -108,11 +119,20 @@ class _PermissionGateState extends ConsumerState<PermissionGate>
   }
 
   Future<void> _showPermissionDialog(PermissionSummary status) async {
-    await showDialog<void>(
-      context: context,
-      barrierDismissible: false,
-      builder: (ctx) => _PermissionDialog(status: status),
-    );
+    // Publish "primer visible" so other Home-level gates (NoSourceGate)
+    // hold off on their own modals — otherwise they stack on top and
+    // the user's tap on their button gets swallowed by our still-modal
+    // barrier. See PermissionGate.primerOpen doc.
+    PermissionGate.primerOpen.value = true;
+    try {
+      await showDialog<void>(
+        context: context,
+        barrierDismissible: false,
+        builder: (ctx) => _PermissionDialog(status: status),
+      );
+    } finally {
+      PermissionGate.primerOpen.value = false;
+    }
   }
 
   @override

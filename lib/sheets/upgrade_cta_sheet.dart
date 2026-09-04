@@ -8,6 +8,8 @@ import '../config/colors.dart';
 import '../models/subscription_model.dart';
 import '../providers/auth_provider.dart';
 import '../providers/subscription_provider.dart';
+import '../providers/user_provider.dart';
+import '../services/razorpay_service.dart';
 
 /// Full subscription-plans sheet. Opens when the user taps a
 /// disabled Create/Join button, the "Remaining X entries" usage
@@ -65,7 +67,17 @@ class _UpgradeCtaSheet extends ConsumerStatefulWidget {
 class _UpgradeCtaSheetState extends ConsumerState<_UpgradeCtaSheet> {
   bool _yearly = true; // default to yearly — bigger effective saving
 
-  Future<void> _launchCheckout(SubscriptionTier tier) async {
+  /// True while the native Razorpay SDK checkout is on-screen. Blocks
+  /// double-tap on the plan buttons + swaps the CTA label to a loader.
+  bool _busy = false;
+
+  /// Primary flow (2026-08-30 revision): open the native Razorpay
+  /// SDK checkout via [RazorpayService.startSubscription]. Mirrors
+  /// the Buy-XP flow which has always worked reliably. The native
+  /// SDK has SMS-reader permission on Android → OTP auto-fills, so
+  /// the "OTP never arrived at the web checkout" issue users hit
+  /// on the previous web-hop is bypassed entirely.
+  Future<void> _startNativeCheckout(SubscriptionTier tier) async {
     final uid = ref.read(authStateProvider).valueOrNull?.id;
     if (uid == null || uid.isEmpty) {
       if (mounted) {
@@ -75,6 +87,66 @@ class _UpgradeCtaSheetState extends ConsumerState<_UpgradeCtaSheet> {
       }
       return;
     }
+    final profile = ref.read(userProfileProvider).valueOrNull;
+    setState(() => _busy = true);
+    bool granted = false;
+    try {
+      granted =
+          await ref.read(razorpayServiceProvider).startSubscription(
+                tier: tier.wire,
+                period: _yearly ? 'yearly' : 'monthly',
+                userId: uid,
+                userEmail: profile?.email,
+                userName: profile?.friendlyName,
+              );
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(e.toString().replaceFirst('Exception: ', '')),
+            duration: const Duration(seconds: 5),
+          ),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+    if (!mounted) return;
+    if (granted) {
+      // Nudge the subscription provider to re-read the profile so the
+      // whole app sees the new tier immediately (usage-counter pills,
+      // gated buttons, etc.). The provider re-listens as usual on
+      // subsequent frames — this just fires the refresh eagerly.
+      ref.invalidate(subscriptionProvider);
+      Navigator.of(context).pop();
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Welcome to ${tier.displayName}. 🎉'),
+          duration: const Duration(seconds: 3),
+        ),
+      );
+    }
+    // On cancel (granted=false without exception) we leave the sheet
+    // open so the user can try again or pick a different tier.
+  }
+
+  /// Fallback flow — preserved for users on devices where the native
+  /// SDK misbehaves (rare, but non-zero). Opens the same
+  /// `stepbattle.fit/upgrade` page the old primary flow used. The
+  /// webhook backstop grants the tier once payment settles.
+  Future<void> _launchWebCheckout() async {
+    final uid = ref.read(authStateProvider).valueOrNull?.id;
+    if (uid == null || uid.isEmpty) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Please sign in to subscribe.')),
+        );
+      }
+      return;
+    }
+    // Default the browser hop to Pro if the user hasn't focused a
+    // specific tier — matches what the plan-card CTA would have used.
+    final tier = widget.focusTier ?? SubscriptionTier.pro;
     final url = Uri.parse(
       '$kSubscriptionUpgradeUrlBase'
       '?uid=$uid'
@@ -123,7 +195,15 @@ class _UpgradeCtaSheetState extends ConsumerState<_UpgradeCtaSheet> {
           padding: const EdgeInsets.symmetric(horizontal: 20),
           child: ListView(
             controller: scrollController,
-            padding: const EdgeInsets.only(top: 12, bottom: 32),
+            // Dynamic bottom padding = fixed breathing room + system
+            // nav bar inset. On gesture-nav devices the inset is
+            // ~0-24 dp; on 3-button-nav devices it's ~48 dp. Fixed 32
+            // dp alone was clipping the last row (browser-fallback
+            // text link) under the 3-button nav bar. 2026-08-31.
+            padding: EdgeInsets.only(
+              top: 12,
+              bottom: 32 + MediaQuery.viewPaddingOf(context).bottom,
+            ),
             children: [
               Center(
                 child: Container(
@@ -221,7 +301,10 @@ class _UpgradeCtaSheetState extends ConsumerState<_UpgradeCtaSheet> {
                 currentTier: sub.tier,
                 focused: widget.focusTier == SubscriptionTier.pro,
                 yearly: _yearly,
-                onUpgrade: () => _launchCheckout(SubscriptionTier.pro),
+                busy: _busy,
+                onUpgrade: _busy
+                    ? null
+                    : () => _startNativeCheckout(SubscriptionTier.pro),
               ),
               const SizedBox(height: 12),
               _PlanCard(
@@ -229,8 +312,10 @@ class _UpgradeCtaSheetState extends ConsumerState<_UpgradeCtaSheet> {
                 currentTier: sub.tier,
                 focused: widget.focusTier == SubscriptionTier.max,
                 yearly: _yearly,
-                onUpgrade: () =>
-                    _launchCheckout(SubscriptionTier.max),
+                busy: _busy,
+                onUpgrade: _busy
+                    ? null
+                    : () => _startNativeCheckout(SubscriptionTier.max),
               ),
               // "Manage Family" — only for owners. Members don't have
               // management privileges (only the owner does).
@@ -258,11 +343,37 @@ class _UpgradeCtaSheetState extends ConsumerState<_UpgradeCtaSheet> {
               ],
               const SizedBox(height: 24),
               Text(
-                'Payments are processed on our website via Razorpay. '
-                'The Upgrade button opens your browser.',
+                'Payments are processed by Razorpay right here in the '
+                'app. Card OTPs auto-fill from SMS.',
                 textAlign: TextAlign.center,
                 style: theme.textTheme.bodySmall?.copyWith(
                   color: scheme.onSurfaceVariant,
+                ),
+              ),
+              const SizedBox(height: 8),
+              // Web-checkout fallback for users on devices where the
+              // native SDK misbehaves (rare, but non-zero). Opens the
+              // same stepbattle.fit/upgrade page the pre-2026-08-30
+              // primary flow used.
+              Center(
+                child: TextButton(
+                  onPressed: _busy ? null : _launchWebCheckout,
+                  style: TextButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 12, vertical: 8),
+                    minimumSize: Size.zero,
+                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    foregroundColor: AppColors.primary,
+                  ),
+                  child: Text(
+                    'Prefer the browser? Pay on our website ↗',
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: AppColors.primary,
+                      fontWeight: FontWeight.w700,
+                      decoration: TextDecoration.underline,
+                      decorationColor: AppColors.primary,
+                    ),
+                  ),
                 ),
               ),
             ],
@@ -385,6 +496,7 @@ class _PlanCard extends StatelessWidget {
   final bool focused;
   final bool yearly;
   final VoidCallback? onUpgrade;
+  final bool busy;
 
   const _PlanCard({
     required this.tier,
@@ -392,6 +504,7 @@ class _PlanCard extends StatelessWidget {
     required this.focused,
     required this.yearly,
     this.onUpgrade,
+    this.busy = false,
   });
 
   @override
@@ -566,19 +679,28 @@ class _PlanCard extends StatelessWidget {
                 ),
                 padding: const EdgeInsets.symmetric(vertical: 12),
               ),
-              child: Text(
-                isCurrent
-                    ? 'Current plan'
-                    : (tier == SubscriptionTier.basic
-                        ? 'Default'
-                        : 'Upgrade to ${tier.displayName}'),
-                style: const TextStyle(
-                  fontFamily: 'Manrope',
-                  fontSize: 14,
-                  fontWeight: FontWeight.w800,
-                  letterSpacing: 0.3,
-                ),
-              ),
+              child: busy && !isCurrent && tier != SubscriptionTier.basic
+                  ? const SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        valueColor: AlwaysStoppedAnimation(Colors.white),
+                      ),
+                    )
+                  : Text(
+                      isCurrent
+                          ? 'Current plan'
+                          : (tier == SubscriptionTier.basic
+                              ? 'Default'
+                              : 'Upgrade to ${tier.displayName}'),
+                      style: const TextStyle(
+                        fontFamily: 'Manrope',
+                        fontSize: 14,
+                        fontWeight: FontWeight.w800,
+                        letterSpacing: 0.3,
+                      ),
+                    ),
             ),
           ),
         ],

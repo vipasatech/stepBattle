@@ -3,6 +3,7 @@ import '../config/colors.dart';
 import '../models/mission_model.dart';
 import '../models/user_mission_progress_model.dart';
 import '../widgets/bottom_sheet_handle.dart';
+import '../widgets/fire_particles.dart';
 import '../widgets/glass_card.dart';
 import '../widgets/progress_bar.dart';
 
@@ -38,29 +39,38 @@ class MissionDetailSheet extends StatelessWidget {
           children: [
             const BottomSheetHandle(),
 
-            // Hero: icon + title + status
+            // Hero — for streak-category missions (the daily_streak
+            // "Keep Streak Alive" one users land on from the profile
+            // → streak sheet → daily-mission link), render the exact
+            // same bare-flame + FireParticles hero the streak sheet
+            // uses so the two surfaces read as one continuous flow.
+            // Other mission categories keep the tinted-disc + category
+            // icon look — that fits their content.
             Center(
-              child: Container(
-                width: 64,
-                height: 64,
-                decoration: BoxDecoration(
-                  color: AppColors.primary.withValues(alpha: 0.2),
-                  shape: BoxShape.circle,
-                  border: Border.all(
-                      color: AppColors.primary.withValues(alpha: 0.3)),
-                  boxShadow: [
-                    BoxShadow(
-                      color: AppColors.primary.withValues(alpha: 0.4),
-                      blurRadius: 25,
+              child: mission.category == MissionCategory.streak
+                  ? _StreakFlameHero()
+                  : Container(
+                      width: 64,
+                      height: 64,
+                      decoration: BoxDecoration(
+                        color: AppColors.primary.withValues(alpha: 0.2),
+                        shape: BoxShape.circle,
+                        border: Border.all(
+                            color:
+                                AppColors.primary.withValues(alpha: 0.3)),
+                        boxShadow: [
+                          BoxShadow(
+                            color: AppColors.primary.withValues(alpha: 0.4),
+                            blurRadius: 25,
+                          ),
+                        ],
+                      ),
+                      child: Icon(
+                        _categoryIcon(mission.category),
+                        color: AppColors.primary,
+                        size: 30,
+                      ),
                     ),
-                  ],
-                ),
-                child: Icon(
-                  _categoryIcon(mission.category),
-                  color: AppColors.primary,
-                  size: 30,
-                ),
-              ),
             ),
             const SizedBox(height: 16),
             Center(
@@ -150,7 +160,12 @@ class MissionDetailSheet extends StatelessWidget {
 
             const SizedBox(height: 24),
 
-            // Detail grid (2x2)
+            // Detail row — XP reward + Resets In. Category and
+            // Difficulty were previously in a second row here but
+            // added noise without informational value (2026-08-31
+            // user feedback). Reset time is now computed from the
+            // actual local clock instead of the pre-existing
+            // "4h 22m" / "Sunday" hardcoded string.
             Row(
               children: [
                 Expanded(
@@ -168,34 +183,8 @@ class MissionDetailSheet extends StatelessWidget {
                     label: 'Resets In',
                     icon: Icons.schedule,
                     iconColor: AppColors.amber,
-                    value: mission.type == MissionType.daily
-                        ? '4h 22m'
-                        : 'Sunday',
+                    value: _resetInLabel(mission.type),
                     valueColor: AppColors.amber,
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 16),
-            Row(
-              children: [
-                Expanded(
-                  child: _DetailItem(
-                    label: 'Category',
-                    icon: Icons.calendar_today,
-                    iconColor: AppColors.primary,
-                    value: mission.type == MissionType.daily
-                        ? 'Daily Mission'
-                        : 'Weekly Challenge',
-                  ),
-                ),
-                const SizedBox(width: 16),
-                Expanded(
-                  child: _DetailItem(
-                    label: 'Difficulty',
-                    icon: Icons.grade,
-                    iconColor: AppColors.primary,
-                    value: _difficultyLabel(mission.difficulty),
                   ),
                 ),
               ],
@@ -264,11 +253,80 @@ class MissionDetailSheet extends StatelessWidget {
         MissionCategory.calories => Icons.whatshot,
       };
 
-  String _difficultyLabel(String d) => switch (d) {
-        'hard' => '\u2B50 Hard',
-        'medium' => '\u2B50 Medium',
-        _ => '\u2B50 Easy',
-      };
+  // `_difficultyLabel` was used by the removed Difficulty detail row.
+  // Kept commented for reference; delete when the sheet is confirmed
+  // stable in production.
+  // String _difficultyLabel(String d) => switch (d) { ... };
+
+  /// Live label for the "Resets In" detail. Daily missions reset at
+  /// the user's LOCAL midnight, weekly missions at the upcoming
+  /// Sunday's local midnight. Previously hardcoded to "4h 22m" / the
+  /// literal string "Sunday", which was wrong for every user and
+  /// every clock reading. 2026-08-31 fix.
+  String _resetInLabel(MissionType type) {
+    final now = DateTime.now();
+    // Local midnight = the start of the NEXT calendar day at 00:00.
+    final tomorrow = DateTime(now.year, now.month, now.day)
+        .add(const Duration(days: 1));
+    Duration until;
+    if (type == MissionType.daily) {
+      until = tomorrow.difference(now);
+    } else {
+      // Weekly missions reset at the next Sunday midnight.
+      // DateTime.weekday: Mon=1..Sun=7.
+      final daysToSunday = (7 - now.weekday) % 7;
+      final nextSunday = DateTime(now.year, now.month, now.day)
+          .add(Duration(days: daysToSunday == 0 ? 7 : daysToSunday));
+      until = nextSunday.difference(now);
+    }
+    final hours = until.inHours;
+    final minutes = until.inMinutes.remainder(60);
+    if (until.inDays >= 1) {
+      final days = until.inDays;
+      final remHours = until.inHours.remainder(24);
+      return remHours > 0 ? '${days}d ${remHours}h' : '${days}d';
+    }
+    if (hours > 0) return '${hours}h ${minutes}m';
+    return '${minutes}m';
+  }
+}
+
+/// Flame hero for streak-category missions \u2014 matches the Home streak
+/// strip + streak-history sheet's hero exactly (bare flame icon +
+/// FireParticles rising, no circular glow disc). Colour tracks the
+/// streak's active/dormant state; here it's always the celebratory
+/// orange because the mission's "resets in" affordance means the
+/// user is actively viewing it.
+class _StreakFlameHero extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: 96,
+      height: 96,
+      child: Stack(
+        alignment: Alignment.center,
+        clipBehavior: Clip.none,
+        children: [
+          Positioned(
+            top: -28,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            child: IgnorePointer(
+              child: FireParticles(
+                colour: AppColors.streakActive.withValues(alpha: 0.9),
+              ),
+            ),
+          ),
+          Icon(
+            Icons.local_fire_department,
+            color: AppColors.streakActive,
+            size: 56,
+          ),
+        ],
+      ),
+    );
+  }
 }
 
 class _DetailItem extends StatelessWidget {

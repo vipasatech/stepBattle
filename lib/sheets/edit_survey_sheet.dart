@@ -289,7 +289,11 @@ class _EditSurveySheetState extends ConsumerState<EditSurveySheet> {
                     Text(
                       'Edit your info',
                       style: theme.textTheme.headlineSmall?.copyWith(
-                        color: Colors.white,
+                        // Theme-aware: reads dark in light mode, light in
+                        // dark mode. Was hardcoded `Colors.white` which
+                        // made the title invisible against the sheet's
+                        // theme-aware AppColors.background in light mode.
+                        color: AppColors.onSurface,
                         fontWeight: FontWeight.w900,
                       ),
                     ),
@@ -556,9 +560,14 @@ class _DobField extends StatelessWidget {
           style: TextStyle(
             fontSize: 17,
             fontWeight: FontWeight.w700,
+            // Theme-aware — the birthday pill sits on _Tokens.cardFill
+            // which adapts to light/dark. Was hardcoded Colors.white in
+            // the "value set" branch → invisible on the light-mode
+            // lavender pill (2026-08-31 second pass, missed by the
+            // first grep because the color was inside a ternary).
             color: value == null
                 ? AppColors.onSurfaceVariant
-                : Colors.white,
+                : AppColors.onSurface,
           ),
         ),
       ),
@@ -582,10 +591,13 @@ class _DobField extends StatelessWidget {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              const Text(
+              Text(
                 'Choose Date of Birth',
+                // Theme-aware: dialog fill is theme-aware via _Tokens
+                // .dialogFill, so text must adapt too. Was hardcoded
+                // white → invisible on light theme.
                 style: TextStyle(
-                  color: Colors.white,
+                  color: AppColors.onSurface,
                   fontSize: 18,
                   fontWeight: FontWeight.w800,
                 ),
@@ -594,11 +606,14 @@ class _DobField extends StatelessWidget {
               SizedBox(
                 height: 220,
                 child: CupertinoTheme(
-                  data: const CupertinoThemeData(
-                    brightness: Brightness.dark,
+                  data: CupertinoThemeData(
+                    // Brightness follows the app theme so the picker's
+                    // internal chrome (spinner rows, highlight bar) adapts.
+                    brightness:
+                        AppColors.isDark ? Brightness.dark : Brightness.light,
                     textTheme: CupertinoTextThemeData(
                       dateTimePickerTextStyle: TextStyle(
-                        color: Colors.white,
+                        color: AppColors.onSurface,
                         fontSize: 22,
                         fontWeight: FontWeight.w600,
                       ),
@@ -623,13 +638,15 @@ class _DobField extends StatelessWidget {
                     Expanded(
                       child: InkWell(
                         onTap: () => Navigator.of(ctx).pop(),
-                        child: const SizedBox(
+                        child: SizedBox(
                           height: 52,
                           child: Center(
                             child: Text(
                               'Cancel',
+                              // Theme-aware; dialog fill adapts, so
+                              // does the button text.
                               style: TextStyle(
-                                color: Colors.white,
+                                color: AppColors.onSurface,
                                 fontSize: 16,
                                 fontWeight: FontWeight.w700,
                               ),
@@ -776,8 +793,12 @@ class _OptionCard extends StatelessWidget {
           children: [
             Text(
               title,
-              style: const TextStyle(
-                color: Colors.white,
+              // Theme-aware — cards sit on _Tokens.cardFill which
+              // adapts to light/dark. Was hardcoded white so gender +
+              // fitness-level card labels went invisible in light mode
+              // (2026-08-31 feedback).
+              style: TextStyle(
+                color: AppColors.onSurface,
                 fontSize: 16,
                 fontWeight: FontWeight.w800,
               ),
@@ -786,8 +807,8 @@ class _OptionCard extends StatelessWidget {
               const SizedBox(height: 4),
               Text(
                 description!,
-                style: const TextStyle(
-                  color: Colors.white,
+                style: TextStyle(
+                  color: AppColors.onSurface,
                   fontSize: 13,
                   height: 1.3,
                 ),
