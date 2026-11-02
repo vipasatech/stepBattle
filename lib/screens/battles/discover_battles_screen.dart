@@ -236,6 +236,9 @@ class _DiscoverList extends StatelessWidget {
       separatorBuilder: (_, __) => const SizedBox(height: 12),
       itemBuilder: (_, i) =>
           _PublicLobbyCard(battle: battles[i], onJoin: onJoin),
+      // TourTarget for discoverLobbyCard was moved to the Battles
+      // MAIN screen's _DiscoverEntryTile (2026-09-13) so the tour
+      // stays on the shell tab and doesn't need a route push.
     );
   }
 }
@@ -281,7 +284,12 @@ class _PublicLobbyCard extends StatelessWidget {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      '$_typeLabel battle by ${creator.friendlyName}',
+                      // Custom battle name (migration 0061) replaces the
+                      // "$type battle" half but keeps "by <creator>" so
+                      // discoverers still see whose lobby this is.
+                      battle.name != null
+                          ? '${battle.name} · by ${creator.friendlyName}'
+                          : '$_typeLabel battle by ${creator.friendlyName}',
                       style: theme.textTheme.titleSmall
                           ?.copyWith(fontWeight: FontWeight.w800),
                       maxLines: 1,

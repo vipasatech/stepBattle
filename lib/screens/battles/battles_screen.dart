@@ -7,14 +7,23 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../../config/colors.dart';
+import '../../features/onboarding_tour/tour_controller.dart';
+import '../../features/onboarding_tour/tour_replay_icon.dart';
+import '../../features/onboarding_tour/tour_step.dart';
+import '../../features/onboarding_tour/tour_target.dart';
 import '../../models/battle_model.dart';
 import '../../providers/auth_provider.dart';
 import '../../providers/battle_provider.dart';
+import '../../utils/app_logger.dart';
 // [3D-DISABLED-2026-08-21] media_warmup import was only used for
 // primeWebViewEngine, commented below.
 // import '../../services/media_warmup.dart';
+import '../../screens/team_lobby/team_lobby_page.dart';
+import '../../sheets/battle_1v1_setup_sheet.dart';
+import '../../sheets/battle_group_setup_sheet.dart';
 import '../../sheets/new_battle_selection_sheet.dart';
 import '../../sheets/pending_battle_actions_sheet.dart';
+import '../../sheets/team_battle_confirm_dialog.dart';
 import '../../widgets/avatar_circle.dart';
 import '../../widgets/glass_card.dart';
 import '../../widgets/insufficient_xp_dialog.dart';
@@ -81,6 +90,585 @@ class _BattlesScreenState extends ConsumerState<BattlesScreen> {
 
   @override
   Widget build(BuildContext context) {
+    // ── Tour sheet driver ─────────────────────────────────────────
+    // Dynamic format flow (2026-09-09 user request): step 6 opens
+    // NewBattleSelectionSheet. The user can pick 1v1, Multi or Team.
+    //   • Pick 1v1 (or just tap tour's Next) → continue with steps
+    //     7-10 in Battle1v1SetupSheet.
+    //   • Pick Multi → open BattleGroupSetupSheet and let user
+    //     explore; skip the 1v1-specific steps 7-10 → jump to 11.
+    //   • Pick Team → team lobby route opens; skip to 11.
+    //
+    // All battle-flow steps are INTERACTIVE — the user can tap the
+    // actual buttons, tiles, and pickers.
+    ref.listen(tourControllerProvider, (prev, next) {
+      final prevSheet = prev?.currentStep?.sheet;
+      final nextSheet = next.currentStep?.sheet;
+      AppLogger.tour.i('battlesListener:fire', fields: {
+        'prevActive': (prev?.active ?? false).toString(),
+        'nextActive': next.active.toString(),
+        'prevStep': prev?.stepIndex.toString() ?? 'null',
+        'nextStep': next.stepIndex.toString(),
+        'prevSheet': prevSheet?.name ?? 'null',
+        'nextSheet': nextSheet?.name ?? 'null',
+        'prevTargetId': prev?.currentStep?.targetId.name ?? 'null',
+        'nextTargetId': next.currentStep?.targetId.name ?? 'null',
+      });
+
+      // ── Tour-just-ended teardown (2026-09-13) ─────────────────────
+      // When the user taps the X on the tour card, notifier.skip()
+      // flips the state to idle. Anything the tour is currently
+      // showing on this branch's navigator — NewBattleSelectionSheet
+      // (step 7), Battle1v1SetupSheet (steps 8-11), or BattleGroup
+      // SetupSheet (side-effect opened on the Multi flow after the
+      // tour has advanced past step 12, where currentStep.sheet is
+      // null and the regular open/close diff wouldn't catch it) —
+      // needs to come down.
+      //
+      // Only ONE sheet is ever tour-owned at a time (the listener
+      // below pops the previous relevant sheet before opening the
+      // next one), so a single nav.pop() clears the tour-owned top
+      // WITHOUT wiping any pre-existing pushed route that lived
+      // BELOW it (e.g. a replay triggered from Settings leaves
+      // /settings under the tour sheets — we don't want to pop that
+      // too). Fires ONLY on the active→idle transition; per-step
+      // advancing continues below.
+      final tourJustEnded = prev != null && prev.active && !next.active;
+      if (tourJustEnded) {
+        AppLogger.tour.i('battlesListener:branch:tourJustEnded');
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (!mounted) return;
+          final nav = Navigator.of(context, rootNavigator: false);
+          // Names of every route the tour listeners push onto the
+          // shell branch nav (2026-09-22 team-flow additions
+          // included). Popping only the top-most tour-owned route
+          // leaves stacked cases half-cleaned (e.g. team-flow ends
+          // with AddFriendsSheet on top of TeamLobbyPage on top of
+          // BattlesScreen). popUntil the first NON-tour route so
+          // every layer the tour pushed comes down at once.
+          const tourRoutes = {
+            'tour_add_friends',
+            'tour_multi_setup',
+            'tour_team_confirm',
+            'tour_team_lobby',
+          };
+          if (nav.canPop()) {
+            AppLogger.tour.i('battlesListener:tourJustEnded:popUntilNonTour');
+            nav.popUntil((route) {
+              final name = route.settings.name;
+              return name == null || !tourRoutes.contains(name);
+            });
+          }
+        });
+        return;
+      }
+
+      // ── Nested AddFriendsSheet handling (2026-09-14) ─────────────
+      // Step 9 "Pick a friend" (targetId addFriendsSheetRoot, sheet
+      // addFriends) is a NESTED sheet — it stacks on top of Battle
+      // 1v1 Setup rather than replacing it. Battle1v1SetupSheet's
+      // _pickOpponent pushes the sheet and advances the tour on the
+      // way IN, so this branch only handles the way OUT:
+      //   • Whether the sheet closed via user tap-to-pick, manual
+      //     dismiss, or a Next tap on the tour card, popUntil the
+      //     named 'tour_add_friends' route makes sure AddFriendsSheet
+      //     is off the nav so the next tour step's target (duration
+      //     picker inside Battle 1v1 Setup) is reachable.
+      //   • popUntil is idempotent — if the sheet has already been
+      //     popped by _toggleSelect's Navigator.pop, the condition
+      //     already holds at the top and no unwanted pop of Battle
+      //     1v1 Setup happens.
+      //   • The INBOUND transition (battle1v1Setup → addFriends) is
+      //     handled entirely by _pickOpponent — the listener has
+      //     nothing to do on that side; short-circuit early.
+      if (prevSheet == TourSheet.addFriends &&
+          nextSheet != TourSheet.addFriends) {
+        AppLogger.tour.i('battlesListener:branch:addFriendsOutbound');
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (!mounted) return;
+          final nav = Navigator.of(context, rootNavigator: false);
+          nav.popUntil((route) => route.settings.name != 'tour_add_friends');
+        });
+        return;
+      }
+      if (nextSheet == TourSheet.addFriends) {
+        AppLogger.tour.i('battlesListener:branch:addFriendsInbound');
+        return;
+      }
+      // ── Nested BattleGroupSetupSheet handling (2026-09-21) ────────
+      // Step 13 "Invite players" (targetId battleGroupAddPlayers,
+      // sheet battleGroupSetup) is only reached on the Multi flow —
+      // the format-picker's post-await code opens the Multi setup
+      // sheet and awaits it there. This branch handles the OUTBOUND
+      // transition:
+      //   • Whether the sheet closed via user tap-to-close, drag-
+      //     dismiss, or a Next tap on the tour card while the sheet
+      //     is still open, popUntil the 'tour_multi_setup' named
+      //     route makes sure the Multi sheet is off the nav so the
+      //     next tour step's target (Discover open-battles card on
+      //     the underlying Battles page) is reachable.
+      //   • popUntil is idempotent — if the sheet closed itself
+      //     first, the top no longer carries the name and no
+      //     unwanted pop of a real user route happens.
+      //   • INBOUND (battle1v1Setup / newBattleSelection → battle
+      //     GroupSetup) is entirely handled by the format-picker's
+      //     post-await code — short-circuit early.
+      if (prevSheet == TourSheet.battleGroupSetup &&
+          nextSheet != TourSheet.battleGroupSetup) {
+        AppLogger.tour.i('battlesListener:branch:battleGroupOutbound');
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (!mounted) return;
+          final nav = Navigator.of(context, rootNavigator: false);
+          nav.popUntil((route) => route.settings.name != 'tour_multi_setup');
+        });
+        return;
+      }
+      if (nextSheet == TourSheet.battleGroupSetup) {
+        AppLogger.tour.i('battlesListener:branch:battleGroupInbound');
+        return;
+      }
+
+      // ── Team confirm dialog handling (2026-09-22) ─────────────────
+      // Step 18 "Confirm the team battle" (targetId
+      // teamConfirmUseEntryButton, sheet teamConfirmDialog) is only
+      // reached when the user picks Team at step 7. The format-picker
+      // post-await block opens the confirm dialog with a named route.
+      // OUTBOUND: whether the dialog closed via tap-through (Use
+      // entry & open), Cancel, or Next on the tour card, popUntil the
+      // 'tour_team_confirm' name so the dialog is off the nav before
+      // we push the team lobby page.
+      if (prevSheet == TourSheet.teamConfirmDialog &&
+          nextSheet != TourSheet.teamConfirmDialog) {
+        AppLogger.tour.i('battlesListener:branch:teamConfirmOutbound');
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (!mounted) return;
+          final nav = Navigator.of(context, rootNavigator: false);
+          nav.popUntil(
+              (route) => route.settings.name != 'tour_team_confirm');
+        });
+        return;
+      }
+      if (nextSheet == TourSheet.teamConfirmDialog) {
+        AppLogger.tour.i('battlesListener:branch:teamConfirmInbound');
+        return;
+      }
+
+      // ── Team lobby page handling (2026-09-22) ─────────────────────
+      // Steps 19-22 + 24 (teamLobby sheet marker) render on top of
+      // the shell branch navigator (not the root nav) so the overlay
+      // stays above. OUTBOUND: pop any 'tour_team_lobby' route left
+      // on the stack when the tour advances OFF teamLobby (usually
+      // when landing on Discover, step 25).
+      if (prevSheet == TourSheet.teamLobby &&
+          nextSheet != TourSheet.teamLobby &&
+          nextSheet != TourSheet.addFriends) {
+        AppLogger.tour.i('battlesListener:branch:teamLobbyOutbound');
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (!mounted) return;
+          final nav = Navigator.of(context, rootNavigator: false);
+          nav.popUntil(
+              (route) => route.settings.name != 'tour_team_lobby');
+        });
+        return;
+      }
+      if (nextSheet == TourSheet.teamLobby &&
+          prevSheet != TourSheet.teamConfirmDialog) {
+        // Intra-team-lobby step change (chips → dates → stake, etc.)
+        // or return from AddFriendsSheet — nothing to open/close, just
+        // let the overlay re-measure the new target.
+        AppLogger.tour.i('battlesListener:branch:teamLobbyIntraStep');
+        return;
+      }
+
+      if (prevSheet == nextSheet) {
+        AppLogger.tour.i('battlesListener:noop', fields: {
+          'reason': 'sameSheet',
+          'sheet': (prevSheet?.name ?? 'null'),
+        });
+        return;
+      }
+      final relevant = {
+        TourSheet.newBattleSelection,
+        TourSheet.battle1v1Setup,
+      };
+      if (!relevant.contains(prevSheet) && !relevant.contains(nextSheet)) {
+        AppLogger.tour.i('battlesListener:noop', fields: {
+          'reason': 'irrelevantSheets',
+          'prevSheet': prevSheet?.name ?? 'null',
+          'nextSheet': nextSheet?.name ?? 'null',
+        });
+        return;
+      }
+      AppLogger.tour.i('battlesListener:schedulePostFrame', fields: {
+        'prevSheet': prevSheet?.name ?? 'null',
+        'nextSheet': nextSheet?.name ?? 'null',
+      });
+      WidgetsBinding.instance.addPostFrameCallback((_) async {
+        if (!mounted) return;
+        AppLogger.tour.i('battlesListener:postFrame:start', fields: {
+          'prevSheet': prevSheet?.name ?? 'null',
+          'nextSheet': nextSheet?.name ?? 'null',
+        });
+        final nav = Navigator.of(context, rootNavigator: false);
+        // Pop the previous tour sheet if it's still on top.
+        if (relevant.contains(prevSheet) && nav.canPop()) {
+          AppLogger.tour.i('battlesListener:postFrame:popPrevSheet');
+          nav.pop();
+        }
+        if (nextSheet == TourSheet.newBattleSelection) {
+          AppLogger.tour.i('battlesListener:openNewBattleSelectionSheet');
+          // Reset the format choice each time we enter step 7 (the
+          // "Pick a format" step, formerly 6 before the change-goal
+          // INTRO shifted battle-flow indices +1) so a replay of the
+          // tour starts from a clean slate.
+          ref.read(tourBattleFormatChoiceProvider.notifier).state = null;
+          await NewBattleSelectionSheet.show(
+            context,
+            useRootNavigator: false,
+            barrierColor: Colors.transparent,
+          );
+          if (!mounted) return;
+          AppLogger.tour.i('battlesListener:newBattleSelectionClosed');
+          // Selection sheet closed. Advance the tour past step 6.
+          final notifier = ref.read(tourControllerProvider.notifier);
+          var state = ref.read(tourControllerProvider);
+          while (state.active &&
+              state.currentStep?.sheet == TourSheet.newBattleSelection) {
+            AppLogger.tour.i('battlesListener:advance:pastNewBattleSelection',
+                fields: {'at': state.stepIndex.toString()});
+            await notifier.next();
+            state = ref.read(tourControllerProvider);
+          }
+          if (!mounted) return;
+          // Check the user's choice and route accordingly.
+          final choice = ref.read(tourBattleFormatChoiceProvider);
+          AppLogger.tour.i('battlesListener:formatChoice', fields: {
+            'choice': choice?.toString() ?? 'null',
+            'label': choice == 0
+                ? '1v1'
+                : choice == 1
+                    ? 'multi'
+                    : choice == 2
+                        ? 'team'
+                        : 'default',
+          });
+          if (choice == 1 || choice == 2) {
+            // Multi/Team — skip past ALL 1v1-specific battle-setup
+            // steps: battle1v1Setup sheet (Choose opponent, Set the
+            // window, Stake, Send invite) AND the nested addFriends
+            // step (Pick a friend). The 2026-09-21 loop condition
+            // covers both — before that fix, the loop only skipped
+            // battle1v1Setup and stopped on step 9 (addFriends),
+            // leaving the tour hovering over a non-existent target
+            // while the Multi sheet opened underneath.
+            state = ref.read(tourControllerProvider);
+            while (state.active &&
+                (state.currentStep?.sheet == TourSheet.battle1v1Setup ||
+                    state.currentStep?.sheet == TourSheet.addFriends)) {
+              await notifier.next();
+              state = ref.read(tourControllerProvider);
+            }
+            if (choice == 1) {
+              // Multi flow — now on the Multi-only "Invite players"
+              // step (sheet: battleGroupSetup). Open the Multi setup
+              // sheet so the tour target (the PLAYERS row) becomes
+              // measurable; when the sheet closes, advance the tour
+              // past this Multi step to Discover. Named route so the
+              // main tour listener can popUntil this specific sheet
+              // when the user taps Next on the tour card while the
+              // sheet is still open (2026-09-21).
+              await BattleGroupSetupSheet.show(
+                // ignore: use_build_context_synchronously
+                context,
+                useRootNavigator: false,
+                barrierColor: Colors.transparent,
+                routeSettings: const RouteSettings(name: 'tour_multi_setup'),
+                // Lift the Send Battle Invites CTA above the shell's
+                // floating nav bar so the "Send the invites" step's
+                // spotlight measures on-screen (2026-09-21 user
+                // feedback: CTA was falling behind the nav bar).
+                useSafeArea: true,
+                extraBottomInset: 90,
+              );
+              if (!mounted) return;
+              state = ref.read(tourControllerProvider);
+              // Sweep past every downstream battle-setup surface so
+              // Multi lands cleanly on Discover after the Multi setup
+              // sheet closes (2026-09-22 evening — user report: Next
+              // on "Send the invites" was leaving the tour card stuck
+              // over an unmeasurable target because the previous loop
+              // only skipped battleGroupSetup and the next step is
+              // teamConfirmDialog). Covers:
+              //   • TourSheet.battleGroupSetup   — Multi steps 13, 15-17
+              //   • TourSheet.addFriends         — Multi step 14
+              //   • TourSheet.teamConfirmDialog  — Team step 18
+              //   • TourSheet.teamLobby          — Team steps 19-23, 25
+              while (state.active &&
+                  (state.currentStep?.sheet ==
+                          TourSheet.battleGroupSetup ||
+                      state.currentStep?.sheet == TourSheet.addFriends ||
+                      state.currentStep?.sheet ==
+                          TourSheet.teamConfirmDialog ||
+                      state.currentStep?.sheet == TourSheet.teamLobby)) {
+                await notifier.next();
+                state = ref.read(tourControllerProvider);
+              }
+            }
+            // choice == 2 (Team) — full tour orchestration (2026-09-22).
+            // The New Battle picker's tour path popped the sheet
+            // without opening the confirm dialog OR creating the
+            // lobby (`_continue` short-circuits when tour is active),
+            // so ALL of that is driven from here so it renders under
+            // the shell overlay.
+            if (choice == 2) {
+              // Skip every Multi-only step — battleGroupSetup steps
+              // (13, 15, 16, 17) AND the Multi twin of "Pick a friend"
+              // at step 14 (addFriends) — to land on step 18
+              // "Confirm the team battle".
+              state = ref.read(tourControllerProvider);
+              while (state.active &&
+                  (state.currentStep?.sheet ==
+                          TourSheet.battleGroupSetup ||
+                      state.currentStep?.sheet == TourSheet.addFriends)) {
+                await notifier.next();
+                state = ref.read(tourControllerProvider);
+              }
+              final me = ref.read(currentUserProvider).valueOrNull;
+              if (me == null) {
+                AppLogger.tour.w('battlesListener:teamFlow:noCurrentUser');
+                return;
+              }
+              // Open confirm dialog under the overlay. Non-root nav +
+              // transparent barrier keeps the overlay's dim as the
+              // only backdrop; the named route lets the outbound
+              // teardown branch popUntil it precisely on tour skip.
+              AppLogger.tour.i('battlesListener:teamFlow:openConfirmDialog');
+              final confirmed = await showTeamBattleConfirmDialog(
+                // ignore: use_build_context_synchronously
+                context,
+                useRootNavigator: false,
+                barrierColor: Colors.transparent,
+                routeSettings:
+                    const RouteSettings(name: 'tour_team_confirm'),
+              );
+              if (!mounted) return;
+              AppLogger.tour.i('battlesListener:teamFlow:confirmClosed',
+                  fields: {'confirmed': confirmed.toString()});
+              if (confirmed) {
+                // Hide the overlay immediately (before the RPC + push
+                // work runs) so the user sees a clean team-lobby load
+                // instead of the "Confirm the team battle" card ghost-
+                // hovering over the shimmer skeleton. The overlay
+                // auto-clears the flag inside `_measureTarget` on the
+                // first `measure:committed` for step 19's target, so
+                // it reappears the instant the team lobby is ready.
+                ref.read(tourOverlaySuspendedProvider.notifier).state = true;
+                AppLogger.tour.i(
+                    'battlesListener:teamFlow:overlaySuspended');
+              }
+              if (!confirmed) {
+                // Cancel path — advance past teamConfirmDialog step
+                // and skip past all downstream team-lobby steps + the
+                // trailing addFriends step so the tour lands on
+                // Discover.
+                AppLogger.tour.i(
+                    'battlesListener:teamFlow:skipRestOfTeamSteps');
+                state = ref.read(tourControllerProvider);
+                while (state.active &&
+                    (state.currentStep?.sheet ==
+                            TourSheet.teamConfirmDialog ||
+                        state.currentStep?.sheet == TourSheet.teamLobby ||
+                        state.currentStep?.sheet == TourSheet.addFriends)) {
+                  await notifier.next();
+                  state = ref.read(tourControllerProvider);
+                }
+                return;
+              }
+              // Confirmed path — create lobby BEFORE advancing the
+              // tour past teamConfirmDialog. If we advanced first,
+              // the tour would land on step 19 (teamLobbyDurationChips)
+              // with no team lobby page mounted for ~500 ms while
+              // createTeamLobby's RPC ran, leaving the overlay with
+              // an unmeasurable target during that gap.
+              //
+              // 15 s timeout (2026-09-22 afternoon) — the log from
+              // an earlier session showed the tour appearing "hung"
+              // on Confirm the team battle while createTeamLobby
+              // waited on a flaky Supabase realtime channel (channel
+              // errors preceded the call). Surfacing the failure
+              // instead of hanging indefinitely lets the user retry.
+              String battleId;
+              try {
+                AppLogger.tour.i('battlesListener:teamFlow:createLobby');
+                final result = await ref
+                    .read(battleServiceProvider)
+                    .createTeamLobby(
+                      createdBy: me.userId,
+                      creatorDisplayName: me.displayName.isEmpty
+                          ? 'You'
+                          : me.displayName,
+                      creatorPreferredName: me.preferredName,
+                      creatorAvatarUrl: me.avatarURL,
+                    )
+                    .timeout(const Duration(seconds: 15));
+                battleId = result.battleId;
+                AppLogger.tour.i('battlesListener:teamFlow:lobbyCreated',
+                    fields: {'battleId': battleId});
+              } catch (e) {
+                AppLogger.tour.e('battlesListener:teamFlow:createFailed',
+                    fields: {'error': e.toString()});
+                if (!mounted) return;
+                // ignore: use_build_context_synchronously
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                      content: Text('Could not open team lobby: $e')),
+                );
+                // Skip past confirm + team steps → land on Discover.
+                state = ref.read(tourControllerProvider);
+                while (state.active &&
+                    (state.currentStep?.sheet ==
+                            TourSheet.teamConfirmDialog ||
+                        state.currentStep?.sheet == TourSheet.teamLobby ||
+                        state.currentStep?.sheet == TourSheet.addFriends)) {
+                  await notifier.next();
+                  state = ref.read(tourControllerProvider);
+                }
+                return;
+              }
+              if (!mounted) return;
+              // Push TeamLobbyPage onto the shell branch navigator
+              // (NOT root) so the overlay stays above. Named route
+              // 'tour_team_lobby' lets the outbound branch teardown
+              // popUntil it precisely. Store the Future so we can
+              // advance the tour NOW (page's TourTargets register
+              // during their first frame, right after push) and
+              // await the pop only afterwards.
+              AppLogger.tour.i(
+                  'battlesListener:teamFlow:pushTeamLobbyPage');
+              final teamLobbyFuture =
+                  // ignore: use_build_context_synchronously
+                  Navigator.of(context, rootNavigator: false).push(
+                MaterialPageRoute<void>(
+                  settings: const RouteSettings(name: 'tour_team_lobby'),
+                  builder: (_) => TeamLobbyPage(battleId: battleId),
+                ),
+              );
+              // Advance past teamConfirmDialog now that the page is
+              // on the nav stack (it will be measurable within a
+              // frame or two).
+              state = ref.read(tourControllerProvider);
+              while (state.active &&
+                  state.currentStep?.sheet ==
+                      TourSheet.teamConfirmDialog) {
+                AppLogger.tour.i(
+                    'battlesListener:teamFlow:advancePastConfirm',
+                    fields: {'at': state.stepIndex.toString()});
+                await notifier.next();
+                state = ref.read(tourControllerProvider);
+              }
+              await teamLobbyFuture;
+              if (!mounted) return;
+              AppLogger.tour.i(
+                  'battlesListener:teamFlow:teamLobbyPageClosed');
+              // If the user backed out of the team lobby before the
+              // tour advanced through it (e.g. system back), skip
+              // remaining team steps to land on Discover.
+              state = ref.read(tourControllerProvider);
+              while (state.active &&
+                  (state.currentStep?.sheet == TourSheet.teamLobby ||
+                      state.currentStep?.sheet == TourSheet.addFriends)) {
+                AppLogger.tour.i(
+                    'battlesListener:teamFlow:advancePastTeamLobbyStep',
+                    fields: {'at': state.stepIndex.toString()});
+                await notifier.next();
+                state = ref.read(tourControllerProvider);
+              }
+            }
+          } else {
+            // choice == 0 (1v1) or null (default). The next state
+            // transition (entering battle1v1Setup) is picked up by
+            // the else branch below on the next listener firing.
+          }
+          return;
+        }
+        // Guard added 2026-09-13: only open Battle1v1SetupSheet when
+        // it's actually the target of the transition. Without this,
+        // any transition where prevSheet ∈ relevant and nextSheet is
+        // neither newBattleSelection nor battle1v1Setup — e.g. tour
+        // advancing to step 12 (Discover, sheet:null), or a residual
+        // firing after the tour-just-ended branch above — would fall
+        // through and OPEN a fresh setup sheet on a screen that
+        // shouldn't have one. (The tour-just-ended branch already
+        // early-returns; this is defence-in-depth for state
+        // transitions like battle1v1Setup → null on the last battle
+        // step advance.)
+        if (nextSheet != TourSheet.battle1v1Setup) {
+          AppLogger.tour.i('battlesListener:noop', fields: {
+            'reason': 'guardNotBattle1v1Setup',
+            'nextSheet': nextSheet?.name ?? 'null',
+          });
+          return;
+        }
+        // Multi/Team guard (2026-09-21). When the user picks Multi
+        // (or Team) at step 7 and hits Next on the tour card BEFORE
+        // tapping Continue in the picker, tour advances 7 → 8
+        // (sheet: battle1v1Setup) and this listener firing lands
+        // here. Without the guard we'd blindly open Battle1v1Setup
+        // Sheet on top of an in-progress Multi/Team flow — the
+        // outer newBattleSelection branch's post-await code (which
+        // resumes when we popped NewBattleSelectionSheet above)
+        // ALREADY handles the Multi path (skip 1v1 steps → open
+        // BattleGroupSetupSheet → advance past battleGroupSetup)
+        // and the Team path (out to team lobby). Short-circuit so
+        // only ONE of the two branches acts on this transition.
+        // The 1v1 flow lands here with choice == 0 or null.
+        final choice = ref.read(tourBattleFormatChoiceProvider);
+        if (choice == 1 || choice == 2) {
+          AppLogger.tour.i('battlesListener:noop', fields: {
+            'reason': 'multiTeamGuard',
+            'choice': choice.toString(),
+          });
+          return;
+        }
+        AppLogger.tour.i('battlesListener:openBattle1v1SetupSheet');
+        // nextSheet == TourSheet.battle1v1Setup — steps 8-11.
+        await Battle1v1SetupSheet.show(
+          context,
+          useRootNavigator: false,
+          barrierColor: Colors.transparent,
+          useSafeArea: true,
+          // Push Send Battle Invite button above the shell's own
+          // bottom nav bar during the tour.
+          extraBottomInset: 90,
+        );
+        if (!mounted) return;
+        AppLogger.tour.i('battlesListener:battle1v1SetupSheetClosed');
+        final notifier = ref.read(tourControllerProvider.notifier);
+        var state = ref.read(tourControllerProvider);
+        // Advance past every downstream battle-setup step so the tour
+        // lands cleanly on Discover after 1v1 wraps up. Covers:
+        //   • TourSheet.battle1v1Setup      — 1v1 steps 8-12
+        //   • TourSheet.battleGroupSetup    — Multi steps 13, 15-17
+        //   • TourSheet.addFriends          — Multi step 14, Team step 24
+        //     (also 1v1 step 9, though we normally get here from 12)
+        //   • TourSheet.teamConfirmDialog   — Team step 18
+        //   • TourSheet.teamLobby           — Team steps 19-23, 25
+        // Without the extra branches the tour would stall on the first
+        // step whose sheet isn't listed (2026-09-22 evening — user
+        // request: Next on step 12 must advance regardless of Send
+        // Battle Invite state).
+        while (state.active &&
+            (state.currentStep?.sheet == TourSheet.battle1v1Setup ||
+                state.currentStep?.sheet == TourSheet.battleGroupSetup ||
+                state.currentStep?.sheet == TourSheet.addFriends ||
+                state.currentStep?.sheet == TourSheet.teamConfirmDialog ||
+                state.currentStep?.sheet == TourSheet.teamLobby)) {
+          await notifier.next();
+          state = ref.read(tourControllerProvider);
+        }
+      });
+    });
+
     final theme = Theme.of(context);
     // Strava-style hero header:
     //   ── Row 1 (AppBar) ──────────────────────────────────
@@ -106,17 +694,32 @@ class _BattlesScreenState extends ConsumerState<BattlesScreen> {
           ),
         ),
         actions: [
+          // Info icon — replays the tour SCOPED to the Battles flow
+          // (indices 6-12 after 2026-09-13's change-goal INTRO shift:
+          // New Battle → selection → 1v1 setup → Discover). Hidden
+          // while the tour is running.
+          const TourReplayIconButton(
+            fromIndex: TourStepRanges.battleFrom,
+            untilExclusive: TourStepRanges.battleUntilExclusive,
+            tooltip: 'Battles tour',
+          ),
           Padding(
             padding: const EdgeInsets.only(right: 12),
-            child: FilledButton.icon(
-              onPressed: () => _showNewBattleSheet(context),
-              icon: const Icon(Icons.add, size: 16),
-              label: const Text('New Battle'),
-              style: FilledButton.styleFrom(
-                padding: const EdgeInsets.symmetric(
-                    horizontal: 14, vertical: 8),
-                textStyle: theme.textTheme.labelMedium?.copyWith(
-                  fontWeight: FontWeight.w700,
+            // TourTarget (migration 0062) — step 6 of the new-user
+            // tour spotlights the New Battle button (was step 4 pre-
+            // 2026-09-13's change-goal INTRO shift).
+            child: TourTarget(
+              id: TourTargetId.battlesCreateButton,
+              child: FilledButton.icon(
+                onPressed: () => _showNewBattleSheet(context),
+                icon: const Icon(Icons.add, size: 16),
+                label: const Text('New Battle'),
+                style: FilledButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: 14, vertical: 8),
+                  textStyle: theme.textTheme.labelMedium?.copyWith(
+                    fontWeight: FontWeight.w700,
+                  ),
                 ),
               ),
             ),
@@ -583,9 +1186,18 @@ class _BattlesListOrEmpty extends ConsumerWidget {
         // behind "have at least one battle first" inverted the
         // funnel. The RepaintBoundary keeps ambient ticks from
         // dirtying the compositor here.
+        //
+        // TourTarget (tour step 11 \u2014 "Discover public battles"): wraps
+        // this entry tile on the Battles MAIN screen instead of the
+        // first _PublicLobbyCard on the /battles/discover subroute so
+        // the tour stays on the shell tab, doesn't need a route push,
+        // and highlights the discovery entry point users actually see.
         RepaintBoundary(
-          child: _DiscoverEntryTile(
-            onTap: () => context.push('/battles/discover'),
+          child: TourTarget(
+            id: TourTargetId.discoverLobbyCard,
+            child: _DiscoverEntryTile(
+              onTap: () => context.push('/battles/discover'),
+            ),
           ),
         ),
         const SizedBox(height: 20),
@@ -1018,13 +1630,20 @@ class _IncomingInviteCardState extends ConsumerState<_IncomingInviteCard> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
+                    // Line 1: "who challenged you" — kept regardless of
+                    // custom name, since on an invite tile the challenger
+                    // identity is more important than the battle title.
                     Text('${inviter.friendlyName} challenged you',
                         style: theme.textTheme.titleSmall
                             ?.copyWith(fontWeight: FontWeight.w700),
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis),
+                    // Line 2: substitute the custom battle name for the
+                    // type label when set (migration 0061). Falls back
+                    // to "$typeLabel battle" (e.g. "1v1 battle") when
+                    // the creator left the name blank.
                     Text(
-                      '$typeLabel battle · ${battle.durationDays}-day duration · +${battle.stakeXp} XP on win',
+                      '${battle.name ?? '$typeLabel battle'} · ${battle.durationDays}-day duration · +${battle.stakeXp} XP on win',
                       style: theme.textTheme.bodySmall?.copyWith(
                           color: AppColors.onSurfaceVariant),
                       maxLines: 2,

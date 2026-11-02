@@ -3,6 +3,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
 
 import '../../../config/colors.dart';
+import '../../../features/onboarding_tour/tour_controller.dart';
+import '../../../features/onboarding_tour/tour_step.dart';
 import '../../../providers/auth_provider.dart';
 import '../../../providers/mission_provider.dart';
 import '../../../providers/step_provider.dart';
@@ -104,7 +106,28 @@ class _DailyTargetCardState extends ConsumerState<DailyTargetCard> {
       child: Material(
         color: Colors.transparent,
         child: InkWell(
-          onTap: () => _openEditGoalSheet(context, goal),
+          onTap: () {
+            // Tour intercept (2026-09-13): when the change-goal INTRO
+            // step (index 3) is active on the tour and the user taps
+            // this card, behave the SAME as tapping the tour card's
+            // Next button — advance the tour, which triggers the
+            // HomeScreen listener to open SetGoalSheet with tour
+            // options (transparent barrier, extra bottom inset, etc.)
+            // so the instruction message box stays visible. Without
+            // this branch _openEditGoalSheet fires with useRoot
+            // Navigator:true, covering the overlay entirely and
+            // dropping the user out of the tour flow.
+            final tourState = ref.read(tourControllerProvider);
+            final step = tourState.currentStep;
+            if (tourState.active &&
+                step != null &&
+                step.advanceOnTargetTap &&
+                step.targetId == TourTargetId.homeStepCounter) {
+              ref.read(tourControllerProvider.notifier).next();
+              return;
+            }
+            _openEditGoalSheet(context, goal);
+          },
           borderRadius: BorderRadius.circular(20),
           child: Padding(
             padding: const EdgeInsets.fromLTRB(18, 18, 18, 16),

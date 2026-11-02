@@ -7,6 +7,7 @@ import '../models/friend_relationship_model.dart';
 import '../models/user_model.dart';
 import '../services/friend_service.dart';
 import '../utils/app_logger.dart';
+import '../utils/realtime_retry.dart';
 import 'auth_provider.dart';
 
 final friendServiceProvider =
@@ -58,6 +59,14 @@ final allFriendRelationshipsProvider =
           emit();
         },
         onError: (Object e, StackTrace s) {
+          // Recoverable network flaps (WiFi↔data handover, close 1002/
+          // 1006) are retried by the SDK — log at DEBUG so they don't
+          // crowd out real errors. See isRecoverableRealtimeError.
+          if (isRecoverableRealtimeError(e)) {
+            AppLogger.friend.d('friendRels:asFrom:reconnecting',
+                fields: {'userId': uid});
+            return;
+          }
           AppLogger.friend.e('friendRels:asFrom:streamError',
               fields: {'userId': uid}, error: e, stack: s);
         },
@@ -73,6 +82,11 @@ final allFriendRelationshipsProvider =
           emit();
         },
         onError: (Object e, StackTrace s) {
+          if (isRecoverableRealtimeError(e)) {
+            AppLogger.friend.d('friendRels:asTo:reconnecting',
+                fields: {'userId': uid});
+            return;
+          }
           AppLogger.friend.e('friendRels:asTo:streamError',
               fields: {'userId': uid}, error: e, stack: s);
         },

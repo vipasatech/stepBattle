@@ -82,6 +82,10 @@ class BattleService {
     required String createdBy,
     BattleVisibility visibility = BattleVisibility.private,
     int stakeXp = 0,
+    // Optional user-provided battle name (migration 0061). Trimmed &
+    // clamped to 30 chars server-side via CHECK; the setup sheets clamp
+    // to the same length client-side so writes never fail on length.
+    String? name,
   }) async {
     final now = DateTime.now();
     if (!endTime.isAfter(startTime)) {
@@ -106,6 +110,10 @@ class BattleService {
       //    every battle now that stake mode is mandatory. `stake_xp`
       //    is the sole source of truth for payout — migration 0017's
       //    settle_stake_battle() splits the pot to the winner.
+      final trimmedName = name?.trim();
+      final normalisedName = (trimmedName == null || trimmedName.isEmpty)
+          ? null
+          : (trimmedName.length > 30 ? trimmedName.substring(0, 30) : trimmedName);
       final battleRow = await _supabase
           .from('battles')
           .insert({
@@ -120,6 +128,11 @@ class BattleService {
                 ? 'public'
                 : 'private',
             'join_code': joinCode,
+            // Only include the key when set — sending null works too
+            // but skipping it means older DBs without the column (i.e.
+            // before migration 0061 applies) still accept the insert
+            // instead of PostgREST rejecting the unknown key.
+            if (normalisedName != null) 'name': normalisedName,
           })
           .select('id')
           .single();
@@ -254,6 +267,13 @@ class BattleService {
     required String createdBy,
     int stakeXp = AppConstants.minBattleStakeXp,
     BattleVisibility visibility = BattleVisibility.private,
+    // Optional user-provided name (migration 0061). Written to BOTH the
+    // series row and the day-1 battle row so cards render consistently
+    // whether the viewer is looking at "today's spawned instance" or
+    // the series meta. Subsequent daily spawns come from the server
+    // trigger — the follow-up 0062 migration will teach the trigger to
+    // copy `series.name` into each new spawn.
+    String? name,
   }) async {
     if (!endTime.isAfter(startTime)) {
       throw ArgumentError('endTime must be after startTime');
@@ -266,6 +286,13 @@ class BattleService {
     }
     final tzOffsetMin = DateTime.now().timeZoneOffset.inMinutes;
     final joinCode = _generateJoinCode();
+
+    // Normalise + clamp the optional name once so both inserts below
+    // agree. Mirrors createBattle's handling above.
+    final trimmedName = name?.trim();
+    final normalisedName = (trimmedName == null || trimmedName.isEmpty)
+        ? null
+        : (trimmedName.length > 30 ? trimmedName.substring(0, 30) : trimmedName);
 
     // Creator's local calendar date — the day the creator is competing on
     // for day-1 of this series. Per Q1=B, invitees SKIP day 1 (they only
@@ -284,6 +311,9 @@ class BattleService {
         'tz_offset_minutes': tzOffsetMin,
         'xp_reward': 0,
         'stake_xp': stakeXp,
+        // Only sent when set — pre-migration DBs still accept the insert
+        // when the user leaves the name blank (majority case).
+        if (normalisedName != null) 'name': normalisedName,
       }).select('id').single();
       final seriesId = seriesRow['id'] as String;
 
@@ -357,6 +387,8 @@ class BattleService {
                 ? 'public'
                 : 'private',
             'join_code': joinCode,
+            // Day-1 instance carries the name too (mirrors series row).
+            if (normalisedName != null) 'name': normalisedName,
           })
           .select('id')
           .single();
@@ -1220,6 +1252,25 @@ class BattleService {
     await _supabase.from('battles').update({
       'start_time': startTime.toUtc().toIso8601String(),
       'end_time': endTime.toUtc().toIso8601String(),
+    }).eq('id', battleId);
+  }
+
+  /// Team-lobby mutator: set / clear the optional battle name
+  /// (migration 0061). Called by [BattleTeamSetupSheet]'s TextField
+  /// on debounced change. Trims + clamps to 30 chars to match the
+  /// server CHECK; passing null or empty string CLEARS the name.
+  /// Same best-effort semantics as [setBattleWindow] — failures don't
+  /// throw; the sheet catches and logs.
+  Future<void> setBattleName({
+    required String battleId,
+    required String? name,
+  }) async {
+    final trimmed = name?.trim();
+    final normalised = (trimmed == null || trimmed.isEmpty)
+        ? null
+        : (trimmed.length > 30 ? trimmed.substring(0, 30) : trimmed);
+    await _supabase.from('battles').update({
+      'name': normalised, // explicit null clears the column
     }).eq('id', battleId);
   }
 

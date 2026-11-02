@@ -12,6 +12,7 @@ import '../services/battle_service.dart';
 import '../utils/app_logger.dart';
 import '../widgets/avatar_circle.dart';
 import '../widgets/battle_duration_picker.dart';
+import '../widgets/battle_name_field.dart';
 import '../widgets/bottom_sheet_handle.dart';
 import 'add_friends_sheet.dart';
 
@@ -53,6 +54,11 @@ class _BattleTeamSetupSheetState extends ConsumerState<BattleTeamSetupSheet> {
   final Map<String, ({UserModel user, String teamLabel})> _roster = {};
   final Map<String, String> _teamNames = {};
 
+  /// Optional battle-name controller (migration 0061). Text pushes to
+  /// the already-drafted battle row via [_onNameChanged] → the
+  /// service's `setBattleName` mutator. Disposed alongside the sheet.
+  final TextEditingController _nameCtl = TextEditingController();
+
   /// Held outside Riverpod so we can still reach the service from dispose()
   /// after the widget tree is gone.
   late final BattleService _battleService;
@@ -91,6 +97,7 @@ class _BattleTeamSetupSheetState extends ConsumerState<BattleTeamSetupSheet> {
     // (Migration 0042); if no one joins in time the cron auto-cancels +
     // refunds every paid participant. The creator can also explicitly
     // cancel from the sheet's Cancel button (see _cancelLobby below).
+    _nameCtl.dispose();
     super.dispose();
   }
 
@@ -547,6 +554,23 @@ class _BattleTeamSetupSheetState extends ConsumerState<BattleTeamSetupSheet> {
     });
   }
 
+  /// Optional battle name (migration 0061). Debounced by the underlying
+  /// `TextField` (fires per keystroke; we push to Supabase on every
+  /// change since the mutator is a single UPDATE — cheap). Best-effort
+  /// mirror of [_onWindowChanged]: swallow errors so a network blip
+  /// doesn't dump a modal on the user mid-type; the name persists on
+  /// the next successful keystroke.
+  void _onNameChanged(String text) {
+    final battleId = _battleId;
+    if (battleId == null) return;
+    _battleService
+        .setBattleName(battleId: battleId, name: text)
+        .catchError((e) {
+      AppLogger.battle.e('setBattleName:failed',
+          fields: {'battleId': battleId}, error: e);
+    });
+  }
+
   // ---------------------------------------------------------------------------
   // Create — fans out invite notifications to every non-creator
   // participant so they see the invite in their notification centre.
@@ -809,6 +833,15 @@ class _BattleTeamSetupSheetState extends ConsumerState<BattleTeamSetupSheet> {
             controller: scrollController,
             padding: const EdgeInsets.symmetric(horizontal: 24),
             children: [
+              // Optional battle name — mutator-driven (draft-first
+              // lobby). Placed above BattleDurationPicker to match the
+              // "identify the battle, then set its window" reading
+              // order used by the 1v1 + group sheets.
+              BattleNameField(
+                controller: _nameCtl,
+                onChanged: _onNameChanged,
+              ),
+              const SizedBox(height: 16),
               BattleDurationPicker(onChanged: _onWindowChanged),
               const SizedBox(height: 20),
               // Public toggle is intentionally not offered for team

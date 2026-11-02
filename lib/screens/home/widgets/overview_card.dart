@@ -3,6 +3,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../../../config/colors.dart';
 import '../../../config/motion.dart';
+import '../../../features/onboarding_tour/tour_step.dart';
+import '../../../features/onboarding_tour/tour_target.dart';
 import '../../../providers/step_provider.dart';
 import '../../../providers/user_provider.dart';
 import '../../../sheets/level_info_sheet.dart';
@@ -156,50 +158,57 @@ class OverviewCard extends ConsumerWidget {
 
           // Level progress section — tappable, opens LevelInfoSheet.
           // Same target as the Level badge above so users find it
-          // from either surface.
-          Material(
-            color: Colors.transparent,
-            child: InkWell(
-              borderRadius: BorderRadius.circular(8),
-              onTap: () => LevelInfoSheet.show(context),
-              child: Padding(
-                padding: const EdgeInsets.symmetric(vertical: 4),
-                child: Column(
-                  children: [
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      children: [
-                        Text(
-                          'LVL $level',
-                          style: theme.textTheme.labelSmall?.copyWith(
-                            color: AppColors.onSurfaceVariant,
-                            fontSize: 10,
+          // from either surface. TourTarget wraps ONLY this block
+          // (not the whole overview card) so step 2 spotlights just
+          // the LVL labels + progress bar + "N to level up" text —
+          // per user feedback the step count and XP total shouldn't
+          // be lumped into the same highlight.
+          TourTarget(
+            id: TourTargetId.homeLevelCard,
+            child: Material(
+              color: Colors.transparent,
+              child: InkWell(
+                borderRadius: BorderRadius.circular(8),
+                onTap: () => LevelInfoSheet.show(context),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 4),
+                  child: Column(
+                    children: [
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Text(
+                            'LVL $level',
+                            style: theme.textTheme.labelSmall?.copyWith(
+                              color: AppColors.onSurfaceVariant,
+                              fontSize: 10,
+                            ),
                           ),
-                        ),
-                        Text(
-                          'LVL ${level + 1}',
-                          style: theme.textTheme.labelSmall?.copyWith(
-                            color: AppColors.onSurfaceVariant,
-                            fontSize: 10,
+                          Text(
+                            'LVL ${level + 1}',
+                            style: theme.textTheme.labelSmall?.copyWith(
+                              color: AppColors.onSurfaceVariant,
+                              fontSize: 10,
+                            ),
                           ),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 5),
-                    // Progress bar with spark
-                    StepProgressBar(progress: progress, height: 8),
-                    const SizedBox(height: 6),
-                    // Steps to go
-                    Center(
-                      child: Text(
-                        '$pointsToNext to level up',
-                        style: theme.textTheme.bodySmall?.copyWith(
-                          color: AppColors.onSurfaceVariant,
-                          fontSize: 11,
+                        ],
+                      ),
+                      const SizedBox(height: 5),
+                      // Progress bar with spark
+                      StepProgressBar(progress: progress, height: 8),
+                      const SizedBox(height: 6),
+                      // Steps to go
+                      Center(
+                        child: Text(
+                          '$pointsToNext to level up',
+                          style: theme.textTheme.bodySmall?.copyWith(
+                            color: AppColors.onSurfaceVariant,
+                            fontSize: 11,
+                          ),
                         ),
                       ),
-                    ),
-                  ],
+                    ],
+                  ),
                 ),
               ),
             ),

@@ -226,6 +226,13 @@ class _StreakStripState extends ConsumerState<StreakStrip>
           Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
+              // TourTarget was moved back UP to home_screen.dart on
+              // 2026-09-04 — the target now wraps the WHOLE streak
+              // strip so the spotlight includes the "N Days"
+              // caption + weekly dots, not just the 64x64 flame. The
+              // notch's horizontal position is overridden per-step
+              // (see kTourSteps → homeStreakFlame notchFractionOverride)
+              // to still point at the flame's left position.
               SizedBox(
                 width: 64,
                 // Restored to 64x64 so the parent Row's cross-axis

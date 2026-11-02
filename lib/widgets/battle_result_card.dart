@@ -144,6 +144,26 @@ class BattleResultCard extends StatelessWidget {
           children: [
             _Tag(tag: tag, scale: scale),
             SizedBox(height: 16 * scale),
+            // Battle name eyebrow (migration 0061) — small, all-caps,
+            // sits above the identity line. Kept the vs-line intact so
+            // the shared image still reads as "who competed" — a
+            // repost of an unfamiliar name without competitor identity
+            // would confuse friends who see the share.
+            if (battle.name != null) ...[
+              Text(
+                battle.name!.toUpperCase(),
+                textAlign: TextAlign.center,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  color: Colors.white.withValues(alpha: 0.75),
+                  fontSize: 12 * scale,
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: 1.5 * scale,
+                ),
+              ),
+              SizedBox(height: 6 * scale),
+            ],
             _NamesLine(myName: myName, opName: opName, scale: scale),
             SizedBox(height: 14 * scale),
             _ScoreLabels(

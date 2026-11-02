@@ -6,14 +6,23 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../../config/colors.dart';
 import '../../config/motion.dart';
+import '../../features/onboarding_tour/tour_controller.dart';
+import '../../features/onboarding_tour/tour_replay_icon.dart';
+import '../../features/onboarding_tour/tour_step.dart';
+import '../../features/onboarding_tour/tour_target.dart';
 import '../../providers/auth_provider.dart';
 import '../../providers/battle_provider.dart';
 import '../../providers/mission_provider.dart';
 import '../../providers/notification_provider.dart';
 import '../../providers/user_provider.dart';
 import '../../services/media_warmup.dart';
+import '../../services/tour_service.dart';
+import '../../services/xp_celebration_bus.dart';
 import '../../sheets/device_connect_prompt_sheet.dart';
 import '../../sheets/notifications_sheet.dart';
+import '../../sheets/set_goal_sheet.dart';
+import '../../utils/app_logger.dart';
+import '../../utils/cross_isolate_kv.dart';
 import '../../widgets/avatar_circle.dart';
 import '../../widgets/buy_xp_cta.dart';
 import '../../widgets/friends_app_bar_button.dart';
@@ -81,12 +90,18 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
     });
     PermissionGate.primerOpen.addListener(_onGateVisibilityChanged);
     NoSourceGate.blockerOpen.addListener(_onGateVisibilityChanged);
+    // The XP celebration is the first half of the signup flow this
+    // sheet now waits behind; `current` clears when the overlay's exit
+    // animation finishes, which is our cue to re-check.
+    XPCelebrationBus.instance.current.addListener(_onGateVisibilityChanged);
   }
 
   @override
   void dispose() {
     PermissionGate.primerOpen.removeListener(_onGateVisibilityChanged);
     NoSourceGate.blockerOpen.removeListener(_onGateVisibilityChanged);
+    XPCelebrationBus.instance.current
+        .removeListener(_onGateVisibilityChanged);
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();
   }
@@ -121,6 +136,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
   void _onGateVisibilityChanged() {
     if (PermissionGate.primerOpen.value) return;
     if (NoSourceGate.blockerOpen.value) return;
+    if (XPCelebrationBus.instance.current.value != null) return;
     _maybeShowDeviceConnectPrompt();
   }
 
@@ -134,8 +150,14 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
   ///   • No permission primer up
   ///   • No no-source blocker up
   ///   • No health-setup first-run wizard pending
+  ///   • No XP celebration on screen
+  ///   • New-user tour neither running nor still owed
   ///   • Prompt not previously shown
-  void _maybeShowDeviceConnectPrompt() {
+  ///
+  /// [tourJustEnded] is passed only by the tour-end listener in
+  /// [build], which knows the tour is over first-hand and therefore
+  /// skips the "still owed" check — see the note on that gate below.
+  void _maybeShowDeviceConnectPrompt({bool tourJustEnded = false}) {
     if (!mounted || _deviceConnectPromptScheduled) return;
     if (PermissionGate.primerOpen.value) return;
     if (NoSourceGate.blockerOpen.value) return;
@@ -147,6 +169,45 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
     // than firing prematurely.
     final onboarded = ref.read(hasCompletedOnboardingProvider).valueOrNull;
     if (onboarded != true) return;
+
+    // ── Signup-flow deferral (2026-11-02) ─────────────────────────
+    //
+    // This sheet opens with `useRootNavigator: true`, so it paints
+    // ABOVE MainShell's Stack — which is exactly where the XP
+    // celebration overlay (main_shell.dart, XPCelebrationHost) and the
+    // tour overlay both live. Firing while either is up doesn't stack
+    // politely, it BURIES them.
+    //
+    // logs/2026-11-02_12-02-56 caught all three at once on a fresh
+    // signup: bonus credited :22.472, this sheet opened :23.217, the
+    // tour started :23.817 underneath it and then spent 20 s
+    // highlighting a step counter the sheet was covering.
+    //
+    // Of the three this is the lowest priority — it's discoverability,
+    // not a requirement (see the class doc) — so it goes LAST, once
+    // the whole new-user flow has been finished or skipped.
+    if (XPCelebrationBus.instance.current.value != null) return;
+    if (ref.read(tourControllerProvider).active) return;
+    // `active` alone is not enough. The tour starts ~1.3 s AFTER the
+    // bonus lands, so a check that runs in that gap sees an inactive
+    // tour and fires straight into its face. Ask the same question
+    // MainShell asks when deciding to START the tour — "is a tour
+    // still owed?" — so a pending one defers us just as a running one
+    // does.
+    //
+    // The tour-end listener passes `tourJustEnded: true` to bypass
+    // this rather than re-deriving it, because `markCompleted` writes
+    // the server flag and the local mirror BEFORE flipping the
+    // controller to inactive; re-reading those here would couple the
+    // sheet to that write order for no benefit.
+    if (!tourJustEnded) {
+      final tourOwed = TourService.shouldFire(
+        serverHasCompleted:
+            ref.read(currentUserProvider).valueOrNull?.hasCompletedTour,
+        localHasCompleted: CrossIsolateKV.getTourCompletedLocalSync(),
+      );
+      if (tourOwed) return;
+    }
 
     _deviceConnectPromptScheduled = true;
     // Small delay so the sheet doesn't fight the closing animation of
@@ -161,6 +222,76 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
 
   @override
   Widget build(BuildContext context) {
+    // ── Tour sheet driver ─────────────────────────────────────────
+    // Home currently drives ONE sheet: SetGoalSheet, for the
+    // change-goal + save-goal steps (indices 3 + 4). Both share the
+    // same sheet, so the sheet stays open across those two steps —
+    // we only open when entering the pair and only close when
+    // leaving it.
+    //
+    // (The old TodaysMissionSheet path was retired 2026-09-04 when
+    // the change-goal flow was rewritten to go straight to
+    // SetGoalSheet with interactive +/- + Save.)
+    ref.listen(tourControllerProvider, (prev, next) {
+      final prevSheet = prev?.currentStep?.sheet;
+      final nextSheet = next.currentStep?.sheet;
+      AppLogger.tour.i('homeListener:fire', fields: {
+        'prevActive': (prev?.active ?? false).toString(),
+        'nextActive': next.active.toString(),
+        'prevStep': prev?.stepIndex.toString() ?? 'null',
+        'nextStep': next.stepIndex.toString(),
+        'prevSheet': prevSheet?.name ?? 'null',
+        'nextSheet': nextSheet?.name ?? 'null',
+        'nextTargetId': next.currentStep?.targetId.name ?? 'null',
+      });
+      // Tour finished or skipped — the last thing the new-user flow was
+      // waiting on. Release the device-connect sheet (deliberately NOT
+      // a `return`: the setGoal outbound branch below still has to run
+      // if the tour ended while that sheet was the current step).
+      if ((prev?.active ?? false) && !next.active) {
+        _maybeShowDeviceConnectPrompt(tourJustEnded: true);
+      }
+      if (nextSheet == TourSheet.setGoal && prevSheet != TourSheet.setGoal) {
+        AppLogger.tour.i('homeListener:branch:setGoalInbound');
+        WidgetsBinding.instance.addPostFrameCallback((_) async {
+          if (!mounted) return;
+          final userAsync = ref.read(currentUserProvider);
+          final currentGoal =
+              userAsync.valueOrNull?.dailyStepGoal ?? 8000;
+          AppLogger.tour.i('homeListener:openSetGoalSheet',
+              fields: {'currentGoal': currentGoal.toString()});
+          await SetGoalSheet.show(
+            context,
+            currentGoal: currentGoal,
+            useRootNavigator: false,
+            barrierColor: Colors.transparent,
+            useSafeArea: true,
+            initialChildSize: 0.95,
+            extraBottomPadding: 100,
+          );
+          if (!mounted) return;
+          AppLogger.tour.i('homeListener:setGoalClosed');
+          final notifier = ref.read(tourControllerProvider.notifier);
+          var state = ref.read(tourControllerProvider);
+          while (state.active &&
+              state.currentStep?.sheet == TourSheet.setGoal) {
+            AppLogger.tour.i('homeListener:advance:pastSetGoal',
+                fields: {'at': state.stepIndex.toString()});
+            await notifier.next();
+            state = ref.read(tourControllerProvider);
+          }
+        });
+      }
+      if (prevSheet == TourSheet.setGoal && nextSheet != TourSheet.setGoal) {
+        AppLogger.tour.i('homeListener:branch:setGoalOutbound');
+        final nav = Navigator.of(context, rootNavigator: false);
+        if (nav.canPop()) {
+          AppLogger.tour.i('homeListener:popSetGoal');
+          nav.pop();
+        }
+      }
+    });
+
     // Narrow the profile watch to just the two fields the AppBar
     // reads. Watching raw `userProfileProvider.valueOrNull` used to
     // rebuild the AppBar (and thus the BellButton, BuyXpCta,
@@ -255,7 +386,15 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
           // full-width "Live tracking paused" card that used to live
           // at the top of the MountStagger (2026-08-13 UX refactor).
           const ResumeTrackingIconButton(),
-          const SizedBox(width: 8),
+          // Info icon — replays the tour SCOPED to Home steps (0-5
+          // after 2026-09-13's change-goal INTRO shift).
+          // Compact 36×36 target so the actions row fits within the
+          // AppBar width (see tour_replay_icon.dart comment).
+          const TourReplayIconButton(
+            fromIndex: TourStepRanges.homeFrom,
+            untilExclusive: TourStepRanges.homeUntilExclusive,
+            tooltip: 'Home tour',
+          ),
           _BellButton(unreadCount: unreadCount),
           const SizedBox(width: 12),
         ],
@@ -419,14 +558,47 @@ class _HomeBody extends ConsumerWidget {
             // migrated to the ResumeTrackingIconButton in the app-bar
             // actions (see above). Keeps Home clean when FGS is healthy.
             Padding(padding: EdgeInsets.only(bottom: 0), child: HealthSyncNudgeCard()),
-            Padding(padding: EdgeInsets.only(bottom: 28), child: RepaintBoundary(child: StreakStrip())),
+            // TourTarget wraps the WHOLE streak strip (2026-09-04):
+            // spotlight includes flame + "N Days" caption + weekly
+            // dots so the highlight covers the entire concept unit,
+            // and the card lands right below the strip. The step's
+            // `notchFractionOverride` (in kTourSteps) forces the
+            // notch to point at the LEFT of the strip where the
+            // flame lives.
+            Padding(
+              padding: EdgeInsets.only(bottom: 28),
+              child: TourTarget(
+                id: TourTargetId.homeStreakFlame,
+                child: RepaintBoundary(child: StreakStrip()),
+              ),
+            ),
             Padding(padding: EdgeInsets.only(bottom: 0),  child: RepaintBoundary(child: UpgradeBannerCard())),
-            Padding(padding: EdgeInsets.only(bottom: 12), child: RepaintBoundary(child: OverviewCard())),
+            // OverviewCard hosts the level progress block internally
+            // (see overview_card.dart — TourTarget wraps just that
+            // block so step 2 spotlights ONLY the LVL bar + labels,
+            // not the whole card with step count + XP total).
+            Padding(
+              padding: EdgeInsets.only(bottom: 12),
+              child: RepaintBoundary(child: OverviewCard()),
+            ),
             Padding(padding: EdgeInsets.only(bottom: 0),  child: RepaintBoundary(child: StatPillsRow())),
             Padding(padding: EdgeInsets.only(bottom: 24), child: RepaintBoundary(child: ActiveBattleCard())),
-            Padding(padding: EdgeInsets.only(bottom: 0),  child: RepaintBoundary(child: HighlightedMissionsSection())),
+            // Bonus-quests tour step removed 2026-09-04 (user
+            // request). Widget stays; the TourTarget wrapper is gone.
+            Padding(
+              padding: EdgeInsets.only(bottom: 0),
+              child: RepaintBoundary(child: HighlightedMissionsSection()),
+            ),
             Padding(padding: EdgeInsets.only(bottom: 0),  child: RepaintBoundary(child: TodaysSessionCard())),
-            Padding(padding: EdgeInsets.only(bottom: 32), child: RepaintBoundary(child: DailyTargetCard())),
+            // Wrapped in TourTarget (migration 0062) so step 1 of the
+            // new-user tour spotlights today's goal card. Layout-neutral.
+            Padding(
+              padding: EdgeInsets.only(bottom: 32),
+              child: TourTarget(
+                id: TourTargetId.homeStepCounter,
+                child: RepaintBoundary(child: DailyTargetCard()),
+              ),
+            ),
             Padding(padding: EdgeInsets.only(bottom: 0),  child: RepaintBoundary(child: MapPreviewCard())),
           ],
         ),

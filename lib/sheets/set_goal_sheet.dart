@@ -4,6 +4,8 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../config/colors.dart';
 import '../config/constants.dart';
+import '../features/onboarding_tour/tour_step.dart';
+import '../features/onboarding_tour/tour_target.dart';
 import '../providers/auth_provider.dart';
 import '../services/goal_formula.dart';
 import '../widgets/bottom_sheet_handle.dart';
@@ -12,7 +14,60 @@ import '../widgets/bottom_sheet_handle.dart';
 class SetGoalSheet extends ConsumerStatefulWidget {
   final int currentGoal;
 
-  const SetGoalSheet({super.key, required this.currentGoal});
+  /// Extra pixels of padding added to the bottom of the sheet's
+  /// ListView. The tour passes ~100 dp so the Save Goal button gets
+  /// pushed up above the shell's own bottom-nav bar (which is a
+  /// Scaffold slot and NOT counted by MediaQuery.viewPadding, so
+  /// `useSafeArea: true` alone doesn't clear it). Zero by default so
+  /// normal user-initiated opens are unchanged.
+  final double extraBottomPadding;
+
+  /// Initial fraction of the available height the DraggableScrollable-
+  /// Sheet opens to. Default 0.8 (matches historical behaviour). The
+  /// tour passes 0.95 so the sheet opens taller and Save Goal has
+  /// even more room above the nav.
+  final double initialChildSize;
+
+  const SetGoalSheet({
+    super.key,
+    required this.currentGoal,
+    this.extraBottomPadding = 0,
+    this.initialChildSize = 0.8,
+  });
+
+  /// Opens the sheet. Tour uses `useRootNavigator: false` +
+  /// `barrierColor: Colors.transparent` so it sits UNDER our
+  /// shell-mounted overlay without stacking dim.
+  ///
+  /// [useSafeArea] defaults to false (matches Flutter's default so
+  /// existing user-initiated opens are unchanged). The tour passes
+  /// TRUE so the modal respects the bottom-nav inset — otherwise
+  /// DraggableScrollableSheet's 0.8 initialChildSize is 0.8 of the
+  /// FULL screen (including behind the nav), which pushes the Save
+  /// Goal button behind the nav bar and makes it invisible.
+  static Future<void> show(
+    BuildContext context, {
+    required int currentGoal,
+    bool useRootNavigator = true,
+    Color? barrierColor,
+    bool useSafeArea = false,
+    double extraBottomPadding = 0,
+    double initialChildSize = 0.8,
+  }) {
+    return showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      useRootNavigator: useRootNavigator,
+      useSafeArea: useSafeArea,
+      backgroundColor: Colors.transparent,
+      barrierColor: barrierColor,
+      builder: (_) => SetGoalSheet(
+        currentGoal: currentGoal,
+        extraBottomPadding: extraBottomPadding,
+        initialChildSize: initialChildSize,
+      ),
+    );
+  }
 
   @override
   ConsumerState<SetGoalSheet> createState() => _SetGoalSheetState();
@@ -90,7 +145,7 @@ class _SetGoalSheetState extends ConsumerState<SetGoalSheet> {
     final aboveRecommended = _goal > range.max;
 
     return DraggableScrollableSheet(
-      initialChildSize: 0.8,
+      initialChildSize: widget.initialChildSize,
       minChildSize: 0.5,
       maxChildSize: 0.95,
       builder: (context, scrollController) => Container(
@@ -101,13 +156,19 @@ class _SetGoalSheetState extends ConsumerState<SetGoalSheet> {
         child: ListView(
           controller: scrollController,
           // Dynamic bottom padding = fixed breathing room + system
-          // nav bar inset. On gesture-nav devices the inset is
-          // ~0-24 dp; on 3-button-nav devices ~48 dp. Fixed 40 dp
-          // alone was clipping the Save Goal button under the 3-button
-          // nav bar on some phones. Same treatment as
-          // buy_xp_sheet / upgrade_cta_sheet (2026-08-31).
+          // nav bar inset + optional tour-mode extra padding.
+          //
+          // The tour passes ~100 dp of extraBottomPadding so the
+          // Save Goal button is pushed up above the shell's OWN
+          // bottom nav bar (which is a Scaffold slot and not
+          // reflected in MediaQuery.viewPadding).
           padding: EdgeInsets.fromLTRB(
-            24, 0, 24, 40 + MediaQuery.viewPaddingOf(context).bottom,
+            24,
+            0,
+            24,
+            40 +
+                MediaQuery.viewPaddingOf(context).bottom +
+                widget.extraBottomPadding,
           ),
           children: [
             const BottomSheetHandle(),
@@ -269,12 +330,23 @@ class _SetGoalSheetState extends ConsumerState<SetGoalSheet> {
 
             const SizedBox(height: 24),
 
-            // Custom stepper
-            Text('OR ENTER A CUSTOM GOAL',
-                style: theme.textTheme.labelSmall?.copyWith(
-                    color: AppColors.onSurfaceVariant, letterSpacing: 2)),
-            const SizedBox(height: 12),
-            Row(
+            // Custom stepper — wrapped as a Column by TourTarget so the
+            // tour's "Change your daily goal" step highlights the whole
+            // "custom goal" block (label + stepper + the 2,500 readout
+            // in the middle). Wrapping just the Row previously left the
+            // highlight band too thin — the user asked for the 2,500
+            // itself to be clearly inside the highlight.
+            TourTarget(
+              id: TourTargetId.setGoalSheetPicker,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Text('OR ENTER A CUSTOM GOAL',
+                      style: theme.textTheme.labelSmall?.copyWith(
+                          color: AppColors.onSurfaceVariant, letterSpacing: 2)),
+                  const SizedBox(height: 12),
+                  Row(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
                 _StepperBtn(
@@ -321,6 +393,9 @@ class _SetGoalSheetState extends ConsumerState<SetGoalSheet> {
                       : null,
                 ),
               ],
+            ),
+                ],
+              ),
             ),
 
             // Soft warning strip — only when the goal sits above the
@@ -378,32 +453,63 @@ class _SetGoalSheetState extends ConsumerState<SetGoalSheet> {
 
             const SizedBox(height: 28),
 
-            // Buttons
+            // Buttons — flex is 2:3 (was 1:2) so Cancel gets enough
+            // proportional room even on narrow screens / with a
+            // bumped-up system font scale. Each label additionally
+            // rides inside a FittedBox(scaleDown) — if the button is
+            // still too tight, the text shrinks proportionally BEFORE
+            // clipping. maxLines/ellipsis is the last-resort indicator
+            // (shows "Cance…" / "Save Goa…") so a user in the rare
+            // truly-tiny-screen case still knows text was truncated.
+            // User feedback 2026-09-14: "Cance" instead of "Cancel"
+            // on some devices.
             Row(
               children: [
                 Expanded(
+                  flex: 2,
                   child: SizedBox(
                     height: 52,
                     child: OutlinedButton(
                       onPressed: () => Navigator.pop(context),
-                      child: const Text('Cancel'),
+                      child: const FittedBox(
+                        fit: BoxFit.scaleDown,
+                        child: Text(
+                          'Cancel',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          softWrap: false,
+                        ),
+                      ),
                     ),
                   ),
                 ),
                 const SizedBox(width: 12),
                 Expanded(
-                  flex: 2,
-                  child: SizedBox(
-                    height: 52,
-                    child: FilledButton(
-                      onPressed: _saving ? null : _save,
-                      child: _saving
-                          ? const SizedBox(
-                              width: 20,
-                              height: 20,
-                              child: CircularProgressIndicator(
-                                  strokeWidth: 2, color: Colors.white))
-                          : const Text('Save Goal'),
+                  flex: 3,
+                  // TourTarget wraps the Save Goal button so the
+                  // "Save your new goal" tour step spotlights it.
+                  child: TourTarget(
+                    id: TourTargetId.setGoalSheetSave,
+                    child: SizedBox(
+                      height: 52,
+                      child: FilledButton(
+                        onPressed: _saving ? null : _save,
+                        child: _saving
+                            ? const SizedBox(
+                                width: 20,
+                                height: 20,
+                                child: CircularProgressIndicator(
+                                    strokeWidth: 2, color: Colors.white))
+                            : const FittedBox(
+                                fit: BoxFit.scaleDown,
+                                child: Text(
+                                  'Save Goal',
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  softWrap: false,
+                                ),
+                              ),
+                      ),
                     ),
                   ),
                 ),

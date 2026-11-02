@@ -231,6 +231,14 @@ class UserModel {
   /// double-payout.
   final String? lastPerfectMonthAwarded;
 
+  /// Whether the user has seen (or explicitly skipped) the 7-step
+  /// new-user app tour (migration 0062, 2026-09-04). Server-side flag
+  /// is source of truth; a local mirror in `CrossIsolateKV` provides
+  /// offline-first reads. Existing users were grandfathered to true
+  /// via the migration's backfill so only NEW sign-ups see the tour.
+  /// The "Replay app tour" row in Settings resets both flags.
+  final bool hasCompletedTour;
+
   const UserModel({
     required this.userId,
     required this.userCode,
@@ -286,6 +294,10 @@ class UserModel {
     this.subscriptionBillingPeriod,
     this.familyOwnerId,
     this.lastPerfectMonthAwarded,
+    // Defaults TRUE so a missing column (rollback / pre-migration DB)
+    // never triggers a surprise tour for an existing user. The tour
+    // fires only when the server ACTIVELY reports false.
+    this.hasCompletedTour = true,
   });
 
   /// Name to render in friendly UI surfaces (leaderboard rows,
@@ -421,6 +433,11 @@ class UserModel {
       familyOwnerId: data['family_owner_id'] as String?,
       lastPerfectMonthAwarded:
           data['last_perfect_month_awarded'] as String?,
+      // Missing column (rollback / pre-migration) reads as null → we
+      // treat that as TRUE (no tour) so a schema hiccup never triggers
+      // a surprise re-onboarding for an existing user. The tour only
+      // fires when the server ACTIVELY reports false.
+      hasCompletedTour: (data['has_completed_tour'] as bool?) ?? true,
     );
   }
 
@@ -482,6 +499,7 @@ class UserModel {
       'family_owner_id': familyOwnerId,
       'last_perfect_month_awarded': lastPerfectMonthAwarded,
       'last_streak_milestone_awarded': lastStreakMilestoneAwarded,
+      'has_completed_tour': hasCompletedTour,
     };
   }
   UserModel copyWith({
@@ -536,6 +554,7 @@ class UserModel {
     String? subscriptionBillingPeriod,
     String? familyOwnerId,
     String? lastPerfectMonthAwarded,
+    bool? hasCompletedTour,
     bool clearSubscription = false,
     bool clearFamilyOwner = false,
   }) {
@@ -611,6 +630,7 @@ class UserModel {
           : (familyOwnerId ?? this.familyOwnerId),
       lastPerfectMonthAwarded:
           lastPerfectMonthAwarded ?? this.lastPerfectMonthAwarded,
+      hasCompletedTour: hasCompletedTour ?? this.hasCompletedTour,
     );
   }
 }

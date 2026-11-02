@@ -12,6 +12,7 @@ import 'alarm_wake_scheduler.dart';
 import 'background_sync.dart';
 import 'notification_service.dart';
 import 'observability_service.dart';
+import 'xp_celebration_bus.dart';
 
 /// Auth service backed by Supabase.
 ///
@@ -473,6 +474,19 @@ class SupabaseAuthService {
           if (creditedInt > 0) {
             AppLogger.xp.i('signupBonus:credited',
                 fields: {'uid': userId, 'xp': creditedInt});
+            // Surface the celebration overlay (2026-10-30). Migration
+            // 0055 moved the grant off XPService.awardXP() onto this
+            // server RPC — which fixed the amount (100 → 500) and made
+            // it idempotent, but silently dropped the popup, because
+            // awardXP() was BOTH the crediting path and the only
+            // caller of XPCelebrationBus.enqueue(). The overlay widget
+            // and bus were never removed (see xp_celebration.dart,
+            // mounted in main_shell), so re-publishing here is all
+            // that's needed. 'Sign-up bonus' is the exact label
+            // XPService's own docstring names for this case.
+            XPCelebrationBus.instance.enqueue(
+              XPAwardEvent(amount: creditedInt, reason: 'Sign-up bonus'),
+            );
           } else {
             AppLogger.xp.i('signupBonus:alreadyGranted',
                 fields: {'uid': userId});

@@ -5,6 +5,8 @@ import 'package:material_design_icons_flutter/material_design_icons_flutter.dart
 import 'package:share_plus/share_plus.dart';
 
 import '../../config/colors.dart';
+import '../../features/onboarding_tour/tour_step.dart';
+import '../../features/onboarding_tour/tour_target.dart';
 import '../../models/avatar.dart';
 import '../../providers/auth_provider.dart';
 import '../../providers/user_provider.dart';
@@ -53,10 +55,16 @@ class ProfileScreen extends ConsumerWidget {
             icon: const Icon(Icons.ios_share),
             onPressed: () => _shareProfile(profile?.userCode),
           ),
-          IconButton(
-            tooltip: 'Settings',
-            icon: const Icon(Icons.settings_outlined),
-            onPressed: () => context.push('/settings'),
+          // TourTarget (migration 0062) — step 7 spotlights the
+          // Settings gear so users know where to change goal, home,
+          // theme, and later replay the tour itself.
+          TourTarget(
+            id: TourTargetId.profileSettingsGear,
+            child: IconButton(
+              tooltip: 'Settings',
+              icon: const Icon(Icons.settings_outlined),
+              onPressed: () => context.push('/settings'),
+            ),
           ),
           const SizedBox(width: 4),
         ],
@@ -85,6 +93,8 @@ class ProfileScreen extends ConsumerWidget {
                         child: UserIdentitySection(user: profile),
                       ),
                     ),
+                    // TourTarget was removed 2026-09-04 (moved to
+                    // Home level card, see kTourSteps step 6).
                     Padding(
                       padding: const EdgeInsets.only(bottom: 44),
                       child: ProfileStatsStrip(user: profile),

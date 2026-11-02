@@ -3,6 +3,36 @@ import 'dart:async';
 import '../services/observability_service.dart';
 import 'app_logger.dart';
 
+/// True when [error] is a Supabase realtime subscription failure that the
+/// SDK (or [retryingRealtimeStream]) recovers from on its own — i.e. a
+/// network flap, not a bug.
+///
+/// Covers the WebSocket close codes a mobile client actually hits:
+///   • `timedOut`      — subscription handshake exceeded its deadline
+///   • `channelError`  — channel rejected / dropped mid-subscribe
+///   • `code: 1002`    — protocol error, typical of a WiFi↔mobile-data handover
+///   • `code: 1006`    — abnormal closure, no close frame received
+///
+/// Added 2026-10-29. Call sites previously logged these at ERROR, so a
+/// single network transition produced a burst of five ERROR entries
+/// (profile, battles.watchAll, friendRels asFrom + asTo, and the
+/// session-level platformError). That volume of recoverable noise is how
+/// the signup-bonus 42501 went unnoticed in Diagnostics for weeks.
+/// Classify here, log at DEBUG, and keep ERROR meaning "something is
+/// actually broken".
+bool isRecoverableRealtimeError(Object? error) {
+  if (error == null) return false;
+  final msg = error.toString();
+  if (!msg.contains('RealtimeSubscribeException') &&
+      !msg.contains('RealtimeCloseEvent')) {
+    return false;
+  }
+  return msg.contains('timedOut') ||
+      msg.contains('channelError') ||
+      msg.contains('code: 1002') ||
+      msg.contains('code: 1006');
+}
+
 /// Wrap a Supabase realtime stream so transient `RealtimeSubscribeException`s
 /// (channelError / timedOut) auto-retry with exponential backoff instead of
 /// dropping the consumer onto a raw error state.

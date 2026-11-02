@@ -21,6 +21,7 @@ import 'services/observability_service.dart';
 import 'services/persistent_notifications.dart';
 import 'utils/app_logger.dart';
 import 'utils/cross_isolate_kv.dart';
+import 'utils/realtime_retry.dart';
 
 /// Top-level FCM background/terminated message handler. Must be a top-level
 /// (or static) function annotated with `@pragma('vm:entry-point')` because it
@@ -344,10 +345,15 @@ void main() async {
     // INSERT that fires during our reconnect window) is handled
     // separately by the lifecycle-resume invalidation on the missions
     // + friends providers (2026-08-31 change).
-    final isRealtimeTimeoutNoise =
-        msg.contains('RealtimeSubscribeException') &&
-        msg.contains('timedOut');
-    if (isRealtimeTimeoutNoise) {
+    // 2026-10-29: widened from `timedOut` only, and the matching moved
+    // into isRecoverableRealtimeError so this and the per-provider
+    // stream handlers can't drift apart. A WiFi↔mobile-data handover
+    // closes the WebSocket with protocol code 1002, which the SDK
+    // surfaces as `channelError` rather than `timedOut` — so every
+    // network transition was dumping a burst of ERROR entries into
+    // Diagnostics. Those channels recover on their own via
+    // realtime_retry.dart's backoff (`realtime:retry … delaySec: 2`).
+    if (isRecoverableRealtimeError(error)) {
       AppLogger.session.d('platformError:realtimeReconnect',
           fields: {'msg': msg.length > 160 ? '${msg.substring(0, 160)}…' : msg});
       return false;

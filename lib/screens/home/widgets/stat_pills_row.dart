@@ -141,7 +141,9 @@ class _StatPill extends StatelessWidget {
     return GestureDetector(
       onTap: onTap,
       child: Container(
-        padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 12),
+        // Reduced horizontal padding (12 → 8) so the three pills have
+        // more usable width for their value text on narrow phones.
+        padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 8),
         decoration: BoxDecoration(
           color: AppColors.surfaceContainerLow,
           borderRadius: BorderRadius.circular(16),
@@ -150,6 +152,7 @@ class _StatPill extends StatelessWidget {
           ),
         ),
         child: Column(
+          mainAxisSize: MainAxisSize.min,
           children: [
             Icon(icon, color: iconColor, size: 20),
             const SizedBox(height: 8),
@@ -162,15 +165,29 @@ class _StatPill extends StatelessWidget {
                     size: 20,
                     color: AppColors.onSurfaceVariant,
                   )
-                : Text(
-                    value,
-                    style: theme.textTheme.titleMedium?.copyWith(
-                      fontWeight: FontWeight.w700,
+                // FittedBox scales the value text down when the pill
+                // is too narrow to hold "226 kcal" or "4.31 km" at
+                // titleMedium — instead of the text wrapping to a
+                // second line (which pushed "Burnt Today" off the
+                // card on smaller phones). scaleDown keeps the text
+                // AT its natural size when there's room, only
+                // shrinking when needed. 2026-09-13 responsive fix.
+                : FittedBox(
+                    fit: BoxFit.scaleDown,
+                    child: Text(
+                      value,
+                      maxLines: 1,
+                      softWrap: false,
+                      style: theme.textTheme.titleMedium?.copyWith(
+                        fontWeight: FontWeight.w700,
+                      ),
                     ),
                   ),
             const SizedBox(height: 2),
             Text(
               label,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
               style: theme.textTheme.labelSmall?.copyWith(
                 color: AppColors.onSurfaceVariant,
                 fontSize: 9,

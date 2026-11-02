@@ -6,6 +6,8 @@ import 'package:go_router/go_router.dart';
 
 import '../config/colors.dart';
 import '../providers/step_provider.dart';
+import '../screens/onboarding/health_setup_screen.dart';
+import '../utils/app_logger.dart';
 import 'permission_gate.dart';
 
 /// Blocking gate that fires on Home mount when the device has NO
@@ -69,6 +71,16 @@ class _NoSourceGateState extends ConsumerState<NoSourceGate>
     // become the only modal wanting to show), we re-check without
     // waiting for the 15 s tick.
     PermissionGate.primerOpen.addListener(_onPrimerVisibilityChange);
+    // Same treatment for the health-setup screen: re-check the moment
+    // the user leaves it, so the blocker returns promptly if they
+    // walked away without actually fixing anything.
+    HealthSetupScreen.isOpen.addListener(_onHealthSetupVisibilityChange);
+  }
+
+  /// Fires when the health-setup screen opens or closes. Only the
+  /// closed transition matters — see the deferral note in [_check].
+  void _onHealthSetupVisibilityChange() {
+    if (!HealthSetupScreen.isOpen.value) _check();
   }
 
   /// Fires whenever [PermissionGate.primerOpen] changes value. We only
@@ -90,6 +102,7 @@ class _NoSourceGateState extends ConsumerState<NoSourceGate>
   void dispose() {
     _timer?.cancel();
     PermissionGate.primerOpen.removeListener(_onPrimerVisibilityChange);
+    HealthSetupScreen.isOpen.removeListener(_onHealthSetupVisibilityChange);
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();
   }
@@ -105,19 +118,77 @@ class _NoSourceGateState extends ConsumerState<NoSourceGate>
     // moment the primer closes, so waiting is safe.
     if (PermissionGate.primerOpen.value) return;
 
+    // Defer while the user is ON the health-setup screen (2026-10-31).
+    //
+    // Without this the gate eats itself: `onSetUp` pops this dialog and
+    // pushes /profile/health-setup, the `finally` below clears
+    // `_dialogOpen`, `_check()` re-runs immediately, the source is still
+    // absent (that's WHY they're going to setup), and the blocker
+    // re-opens ON TOP of the setup page. Because the dialog is
+    // barrierDismissible:false + canPop:false, that is an unescapable
+    // loop — a tester who denied every permission could not reach the
+    // one screen able to fix it. The 15 s timer and the `resumed` hook
+    // re-armed the trap even after a manual dismiss.
+    //
+    // `isOpen` is cleared in that screen's dispose, and the listener in
+    // initState re-checks on close, so the blocker still re-fires if the
+    // user leaves setup without resolving anything.
+    if (HealthSetupScreen.isOpen.value) return;
+
     final aggregator = ref.read(stepAggregatorProvider);
     final native = ref.read(nativeStepServiceProvider);
     final fit = ref.read(googleFitServiceProvider);
+    final health = ref.read(healthServiceProvider);
     final reading = await aggregator.readWithDebug();
     if (!mounted) return;
 
-    final nativeAbsent = !native.isAvailable;
-    final hcAbsent = reading.healthConnectSteps == 0;
-    final fitAbsent = !fit.isEnabled ||
-        reading.googleFitSteps == null ||
-        reading.googleFitSteps == 0;
+    // ── Availability, NOT step count (rewritten 2026-11-02) ─────────
+    //
+    // The previous test was:
+    //
+    //     final hcAbsent = reading.healthConnectSteps == 0;
+    //
+    // which conflates "no step source configured" with "source works
+    // fine, you just haven't walked yet". Those are completely
+    // different states and only the first one warrants a hard block.
+    //
+    // Evidence this was wrong (logs/2026-11-02_09-30-22): a tester with
+    // Health, Location, Notifications AND Physical activity all granted
+    // was still blocked. health.log showed `getTodaySteps {"steps":0}`
+    // at DEBUG on every poll — and that line only executes on the
+    // SUCCESS path (HealthService:138). The failure path logs
+    // `getTodaySteps:fetchFailed` at WARN, which never appeared. So
+    // Health Connect was connected, permitted, and correctly reporting
+    // zero. The gate blocked a working app.
+    //
+    // This hit EVERY user who opened the app before walking — first
+    // thing in the morning, or straight after granting permissions.
+    //
+    // `hasPermissions()` asks Health Connect directly instead of
+    // inferring from a number that is legitimately 0 for part of
+    // every single day.
+    final hcAbsent = !(await health.hasPermissions());
+    if (!mounted) return;
+
+    // Native: `isAvailable` is `_hasReading` — "the pedometer stream
+    // has produced at least one event". That is false for a few
+    // seconds after a cold start even on a perfectly good sensor, so
+    // treat a reported error as the real absence signal and let a
+    // not-yet-warmed stream count as present.
+    final nativeAbsent = !native.isAvailable && reading.nativeError != null;
+
+    // Fit is opt-in. Enabled + non-null means it answered; 0 is a
+    // valid answer, same as above.
+    final fitAbsent = !fit.isEnabled || reading.googleFitSteps == null;
 
     if (nativeAbsent && hcAbsent && fitAbsent) {
+      AppLogger.step.i('noSourceGate:blocking', fields: {
+        'nativeAbsent': nativeAbsent,
+        'hcAbsent': hcAbsent,
+        'fitAbsent': fitAbsent,
+        'nativeError': reading.nativeError ?? 'none',
+        'hcSteps': reading.healthConnectSteps,
+      });
       _showBlocker();
     }
   }
@@ -137,6 +208,14 @@ class _NoSourceGateState extends ConsumerState<NoSourceGate>
           // is the Set up button below, which dismisses the dialog before
           // navigating so we don't stack routes.
           canPop: false,
+          // ONE action, one path (2026-11-02). A second "Open app
+          // settings" button briefly lived here as an escape hatch for
+          // the permanentlyDenied case. It was redundant once the
+          // health-setup screen grew its own permission card — and
+          // actively worse than redundant, because two buttons that
+          // both read as "fix this" force a choice the user has no
+          // basis to make. The setup screen can read the permission
+          // state; the user can't. That decision belongs there.
           child: _NoSourceDialog(
             onSetUp: () {
               Navigator.of(dialogCtx).pop();

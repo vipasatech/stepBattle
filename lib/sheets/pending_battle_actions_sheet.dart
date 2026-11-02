@@ -146,7 +146,8 @@ class _PendingBattleActionsSheetState
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             Text(
-              '⚔️ You vs $opponent',
+              // Custom battle name (migration 0061) wins.
+              battle.name ?? '⚔️ You vs $opponent',
               style: theme.textTheme.titleMedium?.copyWith(
                 fontWeight: FontWeight.w700,
                 color: AppColors.onSurface,

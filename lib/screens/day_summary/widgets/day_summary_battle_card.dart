@@ -108,7 +108,9 @@ class DaySummaryBattleCard extends StatelessWidget {
               const SizedBox(width: 6),
               Expanded(
                 child: Text(
-                  'You vs ${opponent.friendlyName}',
+                  // Custom battle name (migration 0061) wins; otherwise
+                  // fall back to the derived "You vs X" title.
+                  battle.name ?? 'You vs ${opponent.friendlyName}',
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: theme.textTheme.titleMedium?.copyWith(

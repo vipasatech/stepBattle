@@ -1,12 +1,13 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:go_router/go_router.dart';
 import 'package:http/http.dart' as http;
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../config/colors.dart';
 import '../providers/auth_provider.dart';
 import '../providers/user_provider.dart';
+import '../utils/account_deletion.dart';
+import '../utils/app_logger.dart';
 
 /// Full-height bottom sheet gating account deletion.
 ///
@@ -22,7 +23,9 @@ import '../providers/user_provider.dart';
 ///      the rest.
 ///   3. Server calls supabase.auth.admin.deleteUser(uid) to remove
 ///      the auth row too.
-///   4. Client signOut + navigate to /welcome.
+///   4. Client closes this sheet, raises [AccountDeletion] so the
+///      router routes to /welcome, then signs out. The flag — not this
+///      sheet — owns the navigation; see [_confirmDelete].
 Future<void> showDeleteAccountSheet(BuildContext context) {
   return showModalBottomSheet<void>(
     context: context,
@@ -66,9 +69,23 @@ class _DeleteAccountSheetState extends ConsumerState<_DeleteAccountSheet> {
       _errorMsg = '';
     });
 
+    // Capture everything that needs `ref` up front, while this sheet is
+    // guaranteed mounted. The delete POST below is a network round-trip
+    // the user can dismiss the sheet during, and the router's redirect
+    // can tear it down too — `ref` on a disposed ConsumerState throws,
+    // which is how the entire post-delete path used to die silently.
+    //
+    // `signOut()` is not just a token clear: it stops the foreground
+    // service, cancels the alarm schedule, drops the FCM token-refresh
+    // listener, signs out of Google and wipes every repository cache.
+    // Skipping it would leave background isolates syncing for a deleted
+    // user, so it has to run whether or not this widget survives.
+    final authService = ref.read(authServiceProvider);
+
     final session = Supabase.instance.client.auth.currentSession;
     final token = session?.accessToken;
-    if (token == null) {
+    final uid = session?.user.id;
+    if (token == null || uid == null) {
       setState(() {
         _status = 'error';
         _errorMsg = 'Session expired. Sign in again.';
@@ -96,45 +113,48 @@ class _DeleteAccountSheetState extends ConsumerState<_DeleteAccountSheet> {
       return;
     }
 
-    // Success — sign out locally and route to /welcome. Auth row is
-    // already gone server-side; signOut just clears our cached token
-    // and provider state.
+    // Deletion succeeded server-side. Three things now have to happen,
+    // in this order, and the ordering is the whole fix (2026-11-02).
+    //
+    // 1. CLOSE THE SHEET — while we still unambiguously own this route.
+    //    Once the flag in step 2 moves the page underneath us, go_router
+    //    pops imperatively-pushed routes whose page has left, and that
+    //    teardown would race our own pop.
+    if (mounted) {
+      // `isCurrent` guards the narrow case where the profile row's
+      // realtime delete beat the HTTP response and a redirect already
+      // pushed something over us — popping then would dismiss that
+      // instead of this sheet.
+      final route = ModalRoute.of(context);
+      if (route?.isCurrent ?? false) Navigator.of(context).pop();
+    }
+
+    // 2. RAISE THE DELETION FLAG — synchronously, before any further
+    //    await. From here until the session clears, this device is
+    //    authenticated with no profile row, which by provider values
+    //    alone is indistinguishable from a fresh signup. The flag is
+    //    the only thing that tells the router which of the two it's
+    //    looking at; its listener drives the redirect to /welcome
+    //    immediately, so navigation no longer depends on how long
+    //    sign-out takes. See [AccountDeletion] for the full rationale
+    //    and for the three race-based attempts this replaces.
+    AccountDeletion.begin(uid);
+
+    // 3. SIGN OUT — via the service captured at the top of this method,
+    //    so it runs even if this widget is already gone. A failure here
+    //    is survivable and must not be silent: the auth row is already
+    //    deleted server-side so the token is worthless, and the flag
+    //    keeps the router on /welcome regardless. `AccountDeletion` is
+    //    scoped to this uid precisely so a stuck flag can't trap a
+    //    later signup on this device.
     try {
-      await ref.read(authServiceProvider).signOut();
-    } catch (_) {
-      // Recoverable — sign-out failing after successful server-side
-      // deletion is still a "logged out" outcome from the user's
-      // perspective; the router will bounce them to /welcome anyway.
+      await authService.signOut();
+    } catch (e) {
+      AppLogger.auth.w('deleteAccount:signOutFailed', fields: {
+        'uid': uid,
+        'error': e.toString(),
+      });
     }
-
-    // Force-invalidate the profile providers so they don't try to
-    // load stale rows for the just-deleted user. Without this, the
-    // brief window before authStateProvider emits null lets the
-    // profile stream return a null row, which flips
-    // hasCompletedOnboardingProvider → false, and the redirect gate
-    // sends the user to /onboarding ("What should we call you?")
-    // instead of /welcome. Testers reported exactly this stuck state.
-    ref.invalidate(currentUserProvider);
-    ref.invalidate(userProfileProvider);
-    ref.invalidate(hasCompletedOnboardingProvider);
-
-    // Wait for `authStateProvider` to actually emit `null` before we
-    // navigate. Bumped from 2s → 5s because the Supabase stream can
-    // take ~1-3s on slow networks to broadcast the sign-out event,
-    // and cutting the wait short is what leaked the user into the
-    // onboarding funnel. If it still hasn't cleared after 5s we
-    // navigate anyway — the router's redirect gate now handles the
-    // orphaned-auth case (see routes.dart).
-    final deadline = DateTime.now().add(const Duration(seconds: 5));
-    while (ref.read(authStateProvider).valueOrNull != null &&
-        DateTime.now().isBefore(deadline)) {
-      await Future.delayed(const Duration(milliseconds: 50));
-    }
-
-    if (!mounted) return;
-    Navigator.of(context).pop();
-    // ignore: use_build_context_synchronously
-    context.go('/welcome');
   }
 
   @override

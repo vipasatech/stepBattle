@@ -5,12 +5,16 @@ import 'package:go_router/go_router.dart';
 
 import '../../config/colors.dart';
 import '../../config/team_colors.dart';
+import '../../features/onboarding_tour/tour_step.dart';
+import '../../features/onboarding_tour/tour_target.dart';
+import '../../features/onboarding_tour/tour_controller.dart';
 import '../../models/battle_model.dart';
 import '../../models/user_model.dart';
 import '../../providers/auth_provider.dart';
 import '../../providers/battle_provider.dart';
 import '../../services/battle_service.dart';
 import '../../sheets/add_friends_sheet.dart';
+import '../../utils/app_logger.dart';
 import '../../widgets/avatar_circle.dart';
 import '../../widgets/battle_duration_picker.dart';
 import '../../widgets/battle_stake_picker.dart';
@@ -62,6 +66,99 @@ class _TeamLobbyPageState extends ConsumerState<TeamLobbyPage> {
   static const int _minTeams = 2;
   static const int _maxTeams = 4;
   static const int _maxParticipants = 10;
+
+  /// Cached notifier for [tourNextInterceptorProvider]. Populated in
+  /// [didChangeDependencies] so [dispose] can deregister the
+  /// interceptors WITHOUT touching `ref` — Riverpod's ConsumerState
+  /// disposes its `ref` before our `dispose` runs, and calling
+  /// `ref.read` from there throws "Cannot use \"ref\" after the
+  /// widget was disposed." See the parallel comment in
+  /// [_TeamBattleConfirmDialogState] for the log-observed failure
+  /// mode this pattern avoids.
+  StateController<Map<TourTargetId, Future<void> Function()>>?
+      _interceptorController;
+
+  @override
+  void initState() {
+    super.initState();
+    Future.microtask(_registerTourInterceptors);
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _interceptorController ??=
+        ref.read(tourNextInterceptorProvider.notifier);
+  }
+
+  void _registerTourInterceptors() {
+    if (!mounted) return;
+    final notifier = ref.read(tourNextInterceptorProvider.notifier);
+    notifier.state = {
+      ...notifier.state,
+      TourTargetId.teamLobbyStake: _handleTourNextAtLockStake,
+      TourTargetId.teamLobbyInvitePlayers:
+          _handleTourNextAtInvitePlayers,
+    };
+    AppLogger.tour.i('teamLobby:interceptorsRegistered');
+  }
+
+  void _unregisterTourInterceptors() {
+    // Deferred + reads the cached controller (not `ref`) — same
+    // pattern as [_TeamBattleConfirmDialogState.dispose].
+    final controller = _interceptorController;
+    if (controller == null) return;
+    Future.microtask(() {
+      final current = controller.state;
+      final touchesUs = current.containsKey(TourTargetId.teamLobbyStake) ||
+          current.containsKey(TourTargetId.teamLobbyInvitePlayers);
+      if (!touchesUs) return;
+      controller.state = {...current}
+        ..remove(TourTargetId.teamLobbyStake)
+        ..remove(TourTargetId.teamLobbyInvitePlayers);
+      AppLogger.tour.i('teamLobby:interceptorsUnregistered');
+    });
+  }
+
+  Future<void> _handleTourNextAtLockStake() async {
+    if (!mounted) return;
+    final battle =
+        ref.read(battleDetailProvider(widget.battleId)).valueOrNull;
+    if (battle == null) return;
+    if (battle.stakeXp > 0) {
+      // Stake already locked (user tapped Confirm stake before Next).
+      // Just advance the tour past this step. The interceptor
+      // firing-guard in [OnboardingTourController] keeps this next()
+      // call from re-triggering the interceptor.
+      AppLogger.tour.i('teamLobby:tourNext:stakeAlreadyLocked');
+      await ref.read(tourControllerProvider.notifier).next();
+      return;
+    }
+    AppLogger.tour.i('teamLobby:tourNext:invokeConfirmStake');
+    await _confirmStake(battle);
+    // The build()-level ref.listen<BattleDetail> catches the stakeXp
+    // 0 → 100 flip and calls notifier.next() from THERE, so no
+    // duplicate advance here.
+  }
+
+  Future<void> _handleTourNextAtInvitePlayers() async {
+    if (!mounted) return;
+    final battle =
+        ref.read(battleDetailProvider(widget.battleId)).valueOrNull;
+    if (battle == null) return;
+    AppLogger.tour.i('teamLobby:tourNext:invokeInvitePlayers');
+    // _invitePlayers already carries its own tour-advance logic
+    // (checks target id before firing notifier.next()); the
+    // controller's re-entrancy guard prevents it from re-triggering
+    // this interceptor.
+    await _invitePlayers(battle);
+  }
+
+  @override
+  void dispose() {
+    _unregisterTourInterceptors();
+    super.dispose();
+  }
 
   void _snack(String msg) {
     if (!mounted) return;
@@ -241,14 +338,36 @@ class _TeamLobbyPageState extends ConsumerState<TeamLobbyPage> {
     }
     final me = ref.read(currentUserProvider).valueOrNull;
     if (me == null) return;
+    // Tour integration (2026-09-22, team sub-flow step 23) — mirrors
+    // the 1v1 `_pickOpponent` pattern:
+    //   1. Push AddFriendsSheet with the tour_add_friends named route
+    //      + transparent barrier so the shell overlay's spotlight dim
+    //      remains the only backdrop.
+    //   2. Advance the tour from Invite players (22) → Add teammates
+    //      (23) AFTER the sheet is on the nav stack, so the listener's
+    //      pop routines can't race the push.
+    //   3. On sheet close, if we're still on Add teammates, advance
+    //      to the Start-or-cancel step (24).
+    final notifier = ref.read(tourControllerProvider.notifier);
+    final tourBefore = ref.read(tourControllerProvider);
+    final onInvitePlayersStep = tourBefore.active &&
+        tourBefore.currentStep?.targetId ==
+            TourTargetId.teamLobbyInvitePlayers;
+    AppLogger.tour.i('teamLobby:invitePlayers:enter', fields: {
+      'tourActive': tourBefore.active.toString(),
+      'atStep': tourBefore.stepIndex.toString(),
+      'targetId': tourBefore.currentStep?.targetId.name ?? 'null',
+    });
     // Instant-invite mode — each tap on a friend's `+` chip fires an
     // invite immediately. No batch select + confirm button. The sheet
     // shows a spinner per row while the RPC runs, then flips to a
     // green `✓ Sent` chip on success.
-    await showModalBottomSheet<void>(
+    final sheetFuture = showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
+      barrierColor: tourBefore.active ? Colors.transparent : null,
+      routeSettings: const RouteSettings(name: 'tour_add_friends'),
       builder: (_) => AddFriendsSheet(
         mode: FriendsSheetMode.picker,
         onInviteImmediately: (u) async {
@@ -312,6 +431,24 @@ class _TeamLobbyPageState extends ConsumerState<TeamLobbyPage> {
         },
       ),
     );
+
+    // Tour: advance to Add teammates AFTER the sheet has been pushed
+    // (see docstring in the pre-push block).
+    if (onInvitePlayersStep) {
+      AppLogger.tour.i('teamLobby:invitePlayers:advanceToAddFriends');
+      await notifier.next();
+    }
+
+    await sheetFuture;
+    if (!mounted) return;
+    AppLogger.tour.i('teamLobby:invitePlayers:sheetClosed');
+    final tourAfter = ref.read(tourControllerProvider);
+    if (tourAfter.active &&
+        tourAfter.currentStep?.targetId ==
+            TourTargetId.addFriendsSheetRoot) {
+      AppLogger.tour.i('teamLobby:invitePlayers:advanceToBottomActions');
+      await notifier.next();
+    }
   }
 
   Future<void> _removePlayer(BattleModel battle, UserModel u) async {
@@ -551,6 +688,33 @@ class _TeamLobbyPageState extends ConsumerState<TeamLobbyPage> {
     final isCreator = me != null && battle.createdBy == me.userId;
     final stakeLocked = battle.stakeXp > 0;
 
+    // Tour auto-advance when the stake locks (2026-09-22).
+    //
+    // Step 21 "Lock the stake" targets the Confirm stake button in
+    // _BottomBar's State A. Once the user taps it, the stake locks,
+    // the bottom bar swaps to State B (Start battle now), and the
+    // Confirm stake button unmounts → its TourTarget deregisters.
+    // Without this advance the tour would sit on step 21 with an
+    // unmeasurable target. Watching per-battle detail is safe here
+    // — the stream fires exactly once when stake flips 0 → 100.
+    ref.listen<AsyncValue<BattleModel?>>(
+      battleDetailProvider(widget.battleId),
+      (prev, next) {
+        final prevXp = prev?.valueOrNull?.stakeXp ?? 0;
+        final nextXp = next.valueOrNull?.stakeXp ?? 0;
+        if (prevXp <= 0 && nextXp > 0) {
+          final tour = ref.read(tourControllerProvider);
+          if (tour.active &&
+              tour.currentStep?.targetId == TourTargetId.teamLobbyStake) {
+            AppLogger.tour.i('teamLobby:stakeLocked:advanceTour', fields: {
+              'from': tour.stepIndex.toString(),
+            });
+            ref.read(tourControllerProvider.notifier).next();
+          }
+        }
+      },
+    );
+
     // Kick-detect auto-pop: if the current user is a NON-CREATOR whose
     // participant row just transitioned to `rejected` (or vanished),
     // they were either kicked by the creator (Migration 0058's
@@ -611,9 +775,11 @@ class _TeamLobbyPageState extends ConsumerState<TeamLobbyPage> {
         child: ListView(
           padding: const EdgeInsets.fromLTRB(20, 12, 20, 20),
           children: [
-            // Header — title + Battle ID (Batch A r3 spec)
+            // Header — title + Battle ID (Batch A r3 spec).
+            // Custom battle name (migration 0061) wins over the
+            // "Team battle" default label.
             Text(
-              'Team battle',
+              battle.name ?? 'Team battle',
               style: theme.textTheme.titleLarge
                   ?.copyWith(fontWeight: FontWeight.w800),
             ),
@@ -815,13 +981,29 @@ class _CreatorBody extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        BattleDurationPicker(onChanged: onWindowChanged),
+        BattleDurationPicker(
+          onChanged: onWindowChanged,
+          // Wired for the team sub-tour steps 19 + 20 (2026-09-22).
+          // No-op for non-tour usage — TourTarget doesn't render any
+          // visual chrome; it only registers a key with the registry
+          // so the overlay can measure the rect when its step fires.
+          chipsTargetId: TourTargetId.teamLobbyDurationChips,
+          datesTargetId: TourTargetId.teamLobbyDurationDates,
+        ),
         const SizedBox(height: 18),
         if (!stakeLocked) ...[
-          BattleStakePicker(
-            value: draftStake,
-            onChanged: onStakeDraftChanged,
-            participantsCount: labels.length.clamp(2, 4),
+          // Team-tour step 21 (2026-09-22 afternoon) — spotlights the
+          // stake picker itself so the user can adjust the value
+          // during the tour. The next step ([teamLobbyStake], step
+          // 22) then spotlights the Confirm stake CTA in the bottom
+          // bar so tap-to-lock has its own tour beat.
+          TourTarget(
+            id: TourTargetId.teamLobbyStakePicker,
+            child: BattleStakePicker(
+              value: draftStake,
+              onChanged: onStakeDraftChanged,
+              participantsCount: labels.length.clamp(2, 4),
+            ),
           ),
           const SizedBox(height: 6),
           Text(
@@ -847,17 +1029,26 @@ class _CreatorBody extends StatelessWidget {
               ),
             ),
             if (stakeLocked)
-              TextButton.icon(
-                onPressed: onInvitePlayers,
-                icon:
-                    const Icon(Icons.group_add_outlined, size: 18),
-                label: const Text('Invite players'),
-                style: TextButton.styleFrom(
-                  foregroundColor: AppColors.primary,
-                  padding: const EdgeInsets.symmetric(
-                      horizontal: 10, vertical: 4),
-                  minimumSize: Size.zero,
-                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              // Team-tour step 22 (2026-09-22) — spotlight the
+              // Invite players entry point. Only wraps once stake is
+              // locked (matches the button's visibility gate); the
+              // tour listener drives the stake through Confirm before
+              // advancing to this step, so registration timing lines
+              // up with the button's mount.
+              TourTarget(
+                id: TourTargetId.teamLobbyInvitePlayers,
+                child: TextButton.icon(
+                  onPressed: onInvitePlayers,
+                  icon:
+                      const Icon(Icons.group_add_outlined, size: 18),
+                  label: const Text('Invite players'),
+                  style: TextButton.styleFrom(
+                    foregroundColor: AppColors.primary,
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 10, vertical: 4),
+                    minimumSize: Size.zero,
+                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                  ),
                 ),
               ),
           ],
@@ -1444,27 +1635,42 @@ class _BottomBar extends StatelessWidget {
     }
     // Creator bar
     if (!stakeLocked) {
-      // State A — Confirm stake
+      // State A — Confirm stake.
+      //
+      // Team-tour step 21 (2026-09-22) targets the Confirm stake
+      // button here — NOT the top stake picker. Rationale: an
+      // `allowTargetInteraction:true` step wraps 4 AbsorbPointer
+      // bands around the target rect, so anything outside it becomes
+      // untappable. If we targeted the top picker, the user could
+      // adjust the value but couldn't reach this button; if we
+      // targeted the button, the top picker becomes read-only during
+      // the tour but the default 100 XP is a valid stake and the
+      // user can still confirm and move forward. The tour card copy
+      // acknowledges the top picker even though only the button is
+      // interactive.
       return SafeArea(
         minimum: const EdgeInsets.fromLTRB(16, 8, 16, 12),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            SizedBox(
-              width: double.infinity,
-              height: 52,
-              child: FilledButton(
-                onPressed: confirmingStake ? null : onConfirmStake,
-                child: confirmingStake
-                    ? const SizedBox(
-                        width: 20,
-                        height: 20,
-                        child: CircularProgressIndicator(
-                          strokeWidth: 2,
-                          color: Colors.white,
-                        ),
-                      )
-                    : const Text('Confirm stake'),
+            TourTarget(
+              id: TourTargetId.teamLobbyStake,
+              child: SizedBox(
+                width: double.infinity,
+                height: 52,
+                child: FilledButton(
+                  onPressed: confirmingStake ? null : onConfirmStake,
+                  child: confirmingStake
+                      ? const SizedBox(
+                          width: 20,
+                          height: 20,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            color: Colors.white,
+                          ),
+                        )
+                      : const Text('Confirm stake'),
+                ),
               ),
             ),
             const SizedBox(height: 4),
@@ -1495,47 +1701,55 @@ class _BottomBar extends StatelessWidget {
         nonCreatorAccepted >= 1 && teamsWithMembers.length >= 2;
     return SafeArea(
       minimum: const EdgeInsets.fromLTRB(16, 8, 16, 12),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          SizedBox(
-            width: double.infinity,
-            height: 52,
-            child: FilledButton(
-              onPressed: canStart && !starting ? onStartNow : null,
-              child: starting
-                  ? const SizedBox(
-                      width: 20,
-                      height: 20,
-                      child: CircularProgressIndicator(
-                        strokeWidth: 2,
-                        color: Colors.white,
-                      ),
-                    )
-                  : const Text('Start battle now'),
-            ),
-          ),
-          const SizedBox(height: 4),
-          TextButton.icon(
-            onPressed: cancelling ? null : onCancel,
-            icon: Icon(Icons.cancel_outlined,
-                size: 16, color: AppColors.error),
-            label: Text(
-              'Cancel lobby & refund everyone',
-              style: TextStyle(color: AppColors.error),
-            ),
-          ),
-          if (!canStart)
-            Padding(
-              padding: const EdgeInsets.only(top: 2),
-              child: Text(
-                'Need ≥1 acceptor and members on ≥2 teams to start.',
-                style: theme.textTheme.labelSmall?.copyWith(
-                  color: AppColors.onSurfaceVariant,
-                ),
+      // Team-tour step 24 (2026-09-22) — spotlight the final action
+      // row (primary + text link). Only mounted in State B (stake
+      // locked); the tour listener advances through Invite players +
+      // AddFriendsSheet before landing on this step, so registration
+      // timing aligns with mount.
+      child: TourTarget(
+        id: TourTargetId.teamLobbyBottomActions,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            SizedBox(
+              width: double.infinity,
+              height: 52,
+              child: FilledButton(
+                onPressed: canStart && !starting ? onStartNow : null,
+                child: starting
+                    ? const SizedBox(
+                        width: 20,
+                        height: 20,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: Colors.white,
+                        ),
+                      )
+                    : const Text('Start battle now'),
               ),
             ),
-        ],
+            const SizedBox(height: 4),
+            TextButton.icon(
+              onPressed: cancelling ? null : onCancel,
+              icon: Icon(Icons.cancel_outlined,
+                  size: 16, color: AppColors.error),
+              label: Text(
+                'Cancel lobby & refund everyone',
+                style: TextStyle(color: AppColors.error),
+              ),
+            ),
+            if (!canStart)
+              Padding(
+                padding: const EdgeInsets.only(top: 2),
+                child: Text(
+                  'Need ≥1 acceptor and members on ≥2 teams to start.',
+                  style: theme.textTheme.labelSmall?.copyWith(
+                    color: AppColors.onSurfaceVariant,
+                  ),
+                ),
+              ),
+          ],
+        ),
       ),
     );
   }

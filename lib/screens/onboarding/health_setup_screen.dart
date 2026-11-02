@@ -2,6 +2,7 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:hive/hive.dart';
+import 'package:permission_handler/permission_handler.dart';
 import 'package:url_launcher/url_launcher.dart';
 import '../../config/colors.dart';
 import '../../providers/step_provider.dart';
@@ -40,25 +41,108 @@ class HealthSetupScreen extends ConsumerStatefulWidget {
     await box.put(seenFlagKey, true);
   }
 
+  /// True while this screen is on-screen. [NoSourceGate] watches it and
+  /// suppresses its "No step data detected" blocker for the duration —
+  /// otherwise the blocker re-fires the moment it pushes the user HERE
+  /// and covers the one screen that can resolve it. Same static-notifier
+  /// pattern as `PermissionGate.primerOpen` / `NoSourceGate.blockerOpen`.
+  /// Added 2026-10-31 after a tester denied every permission and got
+  /// trapped in an unescapable dialog loop.
+  static final ValueNotifier<bool> isOpen = ValueNotifier<bool>(false);
+
   @override
   ConsumerState<HealthSetupScreen> createState() =>
       _HealthSetupScreenState();
 }
 
-class _HealthSetupScreenState extends ConsumerState<HealthSetupScreen> {
+class _HealthSetupScreenState extends ConsumerState<HealthSetupScreen>
+    with WidgetsBindingObserver {
   HealthSetupAdvice? _advice;
   bool _enablingFit = false;
+
+  /// Live status of ACTIVITY_RECOGNITION. Null until the first read.
+  /// Drives [_ActivityPermissionCard] — without the OS permission, no
+  /// amount of Samsung Health / Health Connect wiring produces steps,
+  /// so this gates everything else on the screen.
+  PermissionStatus? _activityStatus;
+  bool _requestingActivity = false;
 
   @override
   void initState() {
     super.initState();
+    HealthSetupScreen.isOpen.value = true;
+    WidgetsBinding.instance.addObserver(this);
     _loadAdvice();
+    _refreshActivityStatus();
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    HealthSetupScreen.isOpen.value = false;
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    // The user may have just come back from the system settings page
+    // where they flipped Physical activity on. Re-read so the card
+    // updates (and disappears) without needing a manual refresh.
+    if (state == AppLifecycleState.resumed) _refreshActivityStatus();
   }
 
   Future<void> _loadAdvice() async {
     final fp = await ref.read(deviceInfoServiceProvider).getFingerprint();
     if (!mounted) return;
     setState(() => _advice = HealthSetupAdvice.forDevice(fp));
+  }
+
+  Future<void> _refreshActivityStatus() async {
+    final status = await Permission.activityRecognition.status;
+    if (!mounted) return;
+    setState(() => _activityStatus = status);
+  }
+
+  /// Ask for ACTIVITY_RECOGNITION, or route to App Settings when Android
+  /// has stopped showing the system prompt.
+  ///
+  /// Once a user denies twice (or picks "Don't allow" on Android 11+),
+  /// the permission goes `permanentlyDenied` and `request()` returns
+  /// INSTANTLY with no visible dialog. That is exactly the "I click Set
+  /// up and nothing happens" report — the call succeeded, it just can't
+  /// prompt any more. The only recovery is the system settings page.
+  Future<void> _requestOrOpenSettings() async {
+    if (_requestingActivity) return;
+    setState(() => _requestingActivity = true);
+    try {
+      final current = await Permission.activityRecognition.status;
+      if (current.isPermanentlyDenied || current.isRestricted) {
+        await openAppSettings();
+        // Status is re-read in didChangeDependencies-equivalent fashion
+        // when the user returns; _refreshActivityStatus is also called
+        // from the lifecycle hook below.
+        return;
+      }
+      final result = await Permission.activityRecognition.request();
+      if (!mounted) return;
+      setState(() => _activityStatus = result);
+      if (result.isPermanentlyDenied && mounted) {
+        // The request itself flipped it to permanently-denied (user hit
+        // "Don't allow" again). Tell them plainly rather than leaving a
+        // button that silently does nothing next tap.
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Android won\'t show the prompt again. '
+              'Use Open Settings to allow Physical activity.',
+            ),
+            duration: Duration(seconds: 5),
+          ),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _requestingActivity = false);
+    }
   }
 
   Future<void> _enableFit() async {
@@ -116,6 +200,19 @@ class _HealthSetupScreenState extends ConsumerState<HealthSetupScreen> {
           : ListView(
               padding: const EdgeInsets.fromLTRB(20, 12, 20, 32),
               children: [
+                // Sits ABOVE the hero deliberately. Without
+                // ACTIVITY_RECOGNITION the phone's pedometer is mute,
+                // so no amount of Samsung Health / Health Connect
+                // wiring below produces a single step. Fix this first
+                // or the rest of the page is wasted effort.
+                if (_activityStatus != null && !_activityStatus!.isGranted) ...[
+                  _ActivityPermissionCard(
+                    status: _activityStatus!,
+                    busy: _requestingActivity,
+                    onAction: _requestOrOpenSettings,
+                  ),
+                  const SizedBox(height: 20),
+                ],
                 _Hero(advice: advice),
                 const SizedBox(height: 20),
                 _StepList(steps: advice.steps),
@@ -474,6 +571,113 @@ class _FitFallbackCard extends StatelessWidget {
             )
           else
             const Icon(Icons.check_circle, color: AppColors.success),
+        ],
+      ),
+    );
+  }
+}
+
+// =============================================================================
+// Activity-recognition permission card
+// =============================================================================
+
+/// Surfaces a denied ACTIVITY_RECOGNITION permission and offers the ONE
+/// action that can actually resolve it from the current state.
+///
+/// Why this exists (2026-10-31): a tester denied every permission during
+/// onboarding and was then trapped. `NoSourceGate` hard-blocks Home with
+/// an unescapable "No step data detected" dialog whose only button pushes
+/// here — but this screen had no permission handling whatsoever, only
+/// Samsung Health / Health Connect / Google Fit wiring. With the OS
+/// permission denied, none of those can emit a step, so the blocker
+/// re-fired forever.
+///
+/// The action flips on status because `request()` is a SILENT NO-OP once
+/// Android marks the permission permanently denied — showing a "Grant"
+/// button there produces a dead tap, which is precisely what the tester
+/// reported.
+class _ActivityPermissionCard extends StatelessWidget {
+  final PermissionStatus status;
+  final bool busy;
+  final VoidCallback onAction;
+
+  const _ActivityPermissionCard({
+    required this.status,
+    required this.busy,
+    required this.onAction,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    // permanentlyDenied → the system prompt is gone for good; Settings
+    // is the only route. restricted → parental/device policy, same.
+    final needsSettings = status.isPermanentlyDenied || status.isRestricted;
+
+    return Container(
+      padding: const EdgeInsets.all(18),
+      decoration: BoxDecoration(
+        color: AppColors.error.withValues(alpha: 0.08),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: AppColors.error.withValues(alpha: 0.35)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(Icons.directions_walk, color: AppColors.error, size: 22),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  'Physical activity is blocked',
+                  style: theme.textTheme.titleMedium?.copyWith(
+                    fontWeight: FontWeight.w800,
+                    color: AppColors.onSurface,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          Text(
+            needsSettings
+                ? 'Android won\'t show the permission prompt again because '
+                    'it was declined. Open Settings → Permissions → '
+                    'Physical activity and set it to Allow. Nothing below '
+                    'can count steps until you do.'
+                : 'StepBattle needs the Physical activity permission to read '
+                    'your phone\'s step counter. Nothing below can count '
+                    'steps until this is allowed.',
+            style: theme.textTheme.bodyMedium?.copyWith(
+              color: AppColors.onSurfaceVariant,
+              height: 1.45,
+            ),
+          ),
+          const SizedBox(height: 16),
+          SizedBox(
+            width: double.infinity,
+            height: 46,
+            child: FilledButton.icon(
+              onPressed: busy ? null : onAction,
+              icon: busy
+                  ? const SizedBox(
+                      width: 16,
+                      height: 16,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        color: Colors.white,
+                      ),
+                    )
+                  : Icon(needsSettings ? Icons.settings : Icons.check_circle,
+                      size: 18),
+              label: Text(needsSettings ? 'Open Settings' : 'Allow access'),
+              style: FilledButton.styleFrom(
+                backgroundColor: AppColors.error,
+                foregroundColor: Colors.white,
+              ),
+            ),
+          ),
         ],
       ),
     );

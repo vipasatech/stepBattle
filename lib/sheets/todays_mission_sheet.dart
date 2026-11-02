@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../config/colors.dart';
+import '../features/onboarding_tour/tour_step.dart';
+import '../features/onboarding_tour/tour_target.dart';
 import '../providers/auth_provider.dart';
 import '../providers/step_provider.dart';
 import '../services/goal_formula.dart';
@@ -37,12 +39,26 @@ import 'set_goal_sheet.dart';
 class TodaysMissionSheet extends ConsumerWidget {
   const TodaysMissionSheet({super.key});
 
-  static Future<void> show(BuildContext context) {
+  /// Opens the sheet. `useRootNavigator` defaults true (matches
+  /// existing call sites); the new-user tour passes `false` so the
+  /// sheet renders inside the shell's local navigator and stays
+  /// UNDER the shell-mounted OnboardingTourOverlay.
+  ///
+  /// `barrierColor` defaults to Material's ~32% black scrim; the tour
+  /// passes `Colors.transparent` so its own 10% dim isn't layered on
+  /// top of Flutter's default scrim (would read as "everything
+  /// blurred" on tour steps).
+  static Future<void> show(
+    BuildContext context, {
+    bool useRootNavigator = true,
+    Color? barrierColor,
+  }) {
     return showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
-      useRootNavigator: true,
+      useRootNavigator: useRootNavigator,
       backgroundColor: Colors.transparent,
+      barrierColor: barrierColor,
       builder: (_) => const TodaysMissionSheet(),
     );
   }
@@ -254,10 +270,13 @@ class TodaysMissionSheet extends ConsumerWidget {
               const SizedBox(height: 24),
 
               // Primary CTA — Change goal. Opens the same SetGoalSheet
-              // the Home card's InkWell tap opens.
+              // the Home card's InkWell tap opens. TourTarget wraps
+              // it so tour step 4 can spotlight this button.
               SizedBox(
                 width: double.infinity,
-                child: FilledButton(
+                child: TourTarget(
+                  id: TourTargetId.missionSheetChangeGoal,
+                  child: FilledButton(
                   onPressed: () {
                     Navigator.of(context).pop();
                     showModalBottomSheet<void>(
@@ -284,6 +303,7 @@ class TodaysMissionSheet extends ConsumerWidget {
                       color: Colors.white,
                     ),
                   ),
+                ),
                 ),
               ),
               const SizedBox(height: 8),

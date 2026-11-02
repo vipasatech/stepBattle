@@ -1,0 +1,120 @@
+-- =============================================================================
+-- Migration 0066: Drop profiles_signup_grant — make the RPC the sole
+--                 signup-bonus path
+-- =============================================================================
+--
+-- CONTEXT. Migration 0063 fixed the 42501 that was blocking the signup
+-- bonus, and in doing so RE-ASSERTED the `profiles_signup_grant`
+-- AFTER INSERT trigger from migration 0020. That was an over-correction.
+-- This migration removes the trigger and leaves `award_signup_bonus_v2()`
+-- — the RPC the client calls at the end of onboarding — as the single
+-- grant path.
+--
+-- WHY THE TRIGGER HAS TO GO. Three independent reasons:
+--
+-- 1. IT SUPPRESSES THE CELEBRATION POPUP. The client gates the RPC on
+--    a pre-read of the profile:
+--
+--        final shouldAwardSignUpBonus = currentTotalXp == 0;   // :419
+--
+--    If the trigger has already credited 500 during profile INSERT,
+--    that pre-read returns 500, the gate is false, and the RPC never
+--    runs — so the `XPCelebrationBus.enqueue()` call added alongside
+--    this migration never fires. The user silently has 500 XP and no
+--    "+500 Sign-up bonus" overlay.
+--
+-- 2. IT ERASES THE 0 → 500 TRANSITION. A profile born holding 500 XP
+--    paints Level 2 on its first frame. Every XP/level animation needs
+--    a CHANGE to interpolate from; there isn't one. Crediting at the
+--    end of onboarding — while the user is watching — produces a real
+--    transition the UI can react to.
+--
+-- 3. IT PUTS A CREDIT OPERATION INSIDE PROFILE INSERT. An exception in
+--    an AFTER INSERT trigger aborts the insert. Pre-0063 that was not
+--    hypothetical: the trigger called credit_user_xp, which raises
+--    42501 for client callers, so any profile INSERT that reached it
+--    would have failed — and since signups demonstrably worked for 140
+--    users, the trigger was evidently already absent from the live DB
+--    before 0063 put it back. Dropping it restores that state and keeps
+--    signup decoupled from XP accounting.
+--
+-- WHAT WE GIVE UP. A user who creates an auth account but abandons
+-- onboarding gets no bonus. That is the correct outcome: they have no
+-- usable profile, and `award_signup_bonus_v2()` is idempotent, so the
+-- grant lands in full whenever they do finish.
+--
+-- `grant_signup_xp()` the FUNCTION is intentionally left in place
+-- (still rerouted through _credit_xp_admin by 0063). Dropping only the
+-- trigger keeps the rollback a one-liner and leaves the function
+-- available should a server-side grant path ever be wanted again.
+--
+-- HOW TO APPLY: Dashboard → SQL Editor → paste → Run. Idempotent.
+-- PAIRS WITH: the client change in supabase_auth_service.dart that
+--   enqueues XPAwardEvent(amount: credited, reason: 'Sign-up bonus')
+--   on a non-zero RPC result. Ship both together — the trigger drop
+--   alone restores the transition, the client change alone does nothing
+--   while the trigger still wins the race.
+-- =============================================================================
+
+drop trigger if exists profiles_signup_grant on public.profiles;
+
+-- =============================================================================
+-- Verification
+-- =============================================================================
+--
+-- 1. The trigger is gone (and nothing else on profiles was disturbed):
+--
+--   select tgname, tgenabled
+--   from pg_trigger
+--   where tgrelid = 'public.profiles'::regclass
+--     and not tgisinternal;
+--
+--   Expect: NO row named `profiles_signup_grant`. Other triggers on
+--   profiles (e.g. the streak-zero watcher from 0050) must still be
+--   listed — if they vanished, something else went wrong.
+--
+-- 2. The function survives, still routed through the admin helper:
+--
+--   select proname,
+--          regexp_replace(pg_get_functiondef(oid), '--[^\n]*', '', 'g')
+--            ~ 'public\._credit_xp_admin' as calls_admin
+--   from pg_proc
+--   where pronamespace = 'public'::regnamespace
+--     and proname = 'grant_signup_xp';
+--
+--   Expect: one row, calls_admin = true.
+--
+-- 3. End-to-end — sign up a BRAND-NEW account (a Gmail `+alias` is
+--    enough; the guard keys on auth.users.id, which is always fresh):
+--
+--    • Complete onboarding fully (name, DOB, gender, fitness level) —
+--      the RPC fires at the END of completeOnboarding.
+--    • Expect the "+500 Sign-up bonus" celebration overlay on Home.
+--    • Diagnostics → `xp` filter: `signupBonus:credited {xp: 500}`.
+--      (Before this migration you would have seen NOTHING here, because
+--      the trigger path skipped the RPC entirely.)
+--
+--   select user_id, delta, reason, balance_after,
+--          context->>'source' as source, created_at
+--   from public.xp_ledger
+--   where reason = 'signup_grant'
+--   order by created_at desc
+--   limit 3;
+--
+--   Expect: delta = 500 AND source = 'onboarding_rpc_v2'.
+--   A source of 'profile_insert_trigger' means the trigger is somehow
+--   still attached — re-check step 1.
+--
+-- =============================================================================
+-- Rollback
+-- =============================================================================
+--
+--   create trigger profiles_signup_grant
+--     after insert on public.profiles
+--     for each row
+--     execute function public.grant_signup_xp();
+--
+-- Safe to re-attach (the function is 42501-free since 0063), but doing
+-- so re-introduces all three problems above. No data is modified by
+-- this migration in either direction.
+-- =============================================================================

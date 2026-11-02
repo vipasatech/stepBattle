@@ -14,6 +14,7 @@ import 'package:url_launcher/url_launcher.dart';
 import '../../config/motion.dart';
 
 import '../../config/colors.dart';
+import '../../features/onboarding_tour/tour_controller.dart';
 import '../../providers/auth_provider.dart';
 import '../../providers/theme_mode_provider.dart';
 import '../../providers/user_provider.dart';
@@ -378,6 +379,21 @@ class SettingsScreen extends ConsumerWidget {
                   } else {
                     await reviewer.openStoreListing();
                   }
+                },
+              ),
+              // Replay app tour (migration 0062) — resets the server
+              // flag + local mirror and fires the 7-step tour from the
+              // top. Routes user back to Home via context.pop() so the
+              // first step's target (step counter) is visible.
+              _SettingsRow(
+                icon: Icons.tour_outlined,
+                title: 'Replay app tour',
+                subtitle: 'See the 7-step intro again',
+                onTap: () async {
+                  Navigator.of(context).pop(); // exit Settings
+                  await ref
+                      .read(tourControllerProvider.notifier)
+                      .replay();
                 },
               ),
               _SettingsRow(

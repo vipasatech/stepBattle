@@ -2,26 +2,117 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../config/colors.dart';
+import '../features/onboarding_tour/tour_controller.dart';
+import '../features/onboarding_tour/tour_step.dart';
+import '../features/onboarding_tour/tour_target.dart';
 import '../providers/subscription_provider.dart';
 
 /// Confirm dialog shown when the creator taps "Team battle" in the New
 /// Battle sheet. Explains that a battle-create entry gets consumed and
 /// shows how many remain. Return value is `true` if the user tapped
 /// "Use entry & open", `false` (or null) otherwise.
-Future<bool> showTeamBattleConfirmDialog(BuildContext context) async {
+///
+/// Tour mode (2026-09-22): callers can pass `useRootNavigator: false`
+/// + `barrierColor: Colors.transparent` + a named `routeSettings` so
+/// the dialog renders UNDER the shell-mounted `OnboardingTourOverlay`
+/// (which sits above the shell's non-root navigator). The default
+/// non-tour path leaves these at Flutter's `showDialog` defaults —
+/// same behaviour as before.
+Future<bool> showTeamBattleConfirmDialog(
+  BuildContext context, {
+  bool useRootNavigator = true,
+  Color? barrierColor,
+  RouteSettings? routeSettings,
+}) async {
   final result = await showDialog<bool>(
     context: context,
     barrierDismissible: true,
+    useRootNavigator: useRootNavigator,
+    barrierColor: barrierColor,
+    routeSettings: routeSettings,
     builder: (_) => const _TeamBattleConfirmDialog(),
   );
   return result == true;
 }
 
-class _TeamBattleConfirmDialog extends ConsumerWidget {
+class _TeamBattleConfirmDialog extends ConsumerStatefulWidget {
   const _TeamBattleConfirmDialog();
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<_TeamBattleConfirmDialog> createState() =>
+      _TeamBattleConfirmDialogState();
+}
+
+class _TeamBattleConfirmDialogState
+    extends ConsumerState<_TeamBattleConfirmDialog> {
+  /// Cached notifier for [tourNextInterceptorProvider]. Populated in
+  /// [didChangeDependencies] so [dispose] can deregister the
+  /// interceptor WITHOUT touching `ref` — Riverpod's ConsumerState
+  /// disposes its `ref` before our `dispose` runs, and calling
+  /// `ref.read` from here throws "Cannot use \"ref\" after the widget
+  /// was disposed." A previous version of this file did exactly that
+  /// (2026-09-22 afternoon log evidence), leaving the interceptor
+  /// stuck in the provider map and every subsequent
+  /// `tour_controller.next()` call re-firing the closure of an
+  /// already-disposed dialog.
+  StateController<Map<TourTargetId, Future<void> Function()>>?
+      _interceptorController;
+
+  @override
+  void initState() {
+    super.initState();
+    Future.microtask(() {
+      if (!mounted) return;
+      final notifier = ref.read(tourNextInterceptorProvider.notifier);
+      notifier.state = {
+        ...notifier.state,
+        TourTargetId.teamConfirmUseEntryButton: _handleTourNextTap,
+      };
+    });
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _interceptorController ??=
+        ref.read(tourNextInterceptorProvider.notifier);
+  }
+
+  @override
+  void dispose() {
+    // Defer the mutation to a microtask, and read the controller from
+    // the field (not `ref`, which is already unusable at this point).
+    // Same pattern as `TourTarget.dispose`.
+    final controller = _interceptorController;
+    if (controller != null) {
+      Future.microtask(() {
+        final current = controller.state;
+        if (!current.containsKey(TourTargetId.teamConfirmUseEntryButton)) {
+          return;
+        }
+        controller.state = {...current}
+          ..remove(TourTargetId.teamConfirmUseEntryButton);
+      });
+    }
+    super.dispose();
+  }
+
+  Future<void> _handleTourNextTap() async {
+    if (!mounted) return;
+    // Guard: don't pop the dialog with `true` if the user has no
+    // entries left — the button itself is disabled in that state, so
+    // Next shouldn't sidestep the gating. Fall through to a plain
+    // advance (skip past teamConfirmDialog) in the caller instead.
+    final sub = ref.read(subscriptionProvider);
+    if (sub.remainingCreates <= 0) {
+      Navigator.of(context).pop(false);
+      return;
+    }
+    Navigator.of(context).pop(true);
+  }
+
+  @override
+  Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final sub = ref.watch(subscriptionProvider);
     // `remainingCreates` is null if the user has an unlimited plan; we
@@ -101,11 +192,14 @@ class _TeamBattleConfirmDialog extends ConsumerWidget {
           child: Text('Cancel',
               style: TextStyle(color: AppColors.onSurfaceVariant)),
         ),
-        FilledButton(
-          onPressed: hasEntries
-              ? () => Navigator.of(context).pop(true)
-              : null,
-          child: const Text('Use entry & open'),
+        TourTarget(
+          id: TourTargetId.teamConfirmUseEntryButton,
+          child: FilledButton(
+            onPressed: hasEntries
+                ? () => Navigator.of(context).pop(true)
+                : null,
+            child: const Text('Use entry & open'),
+          ),
         ),
       ],
     );

@@ -363,12 +363,18 @@ class _ActiveCard extends StatelessWidget {
 
     // Header title varies by battle type; Battle ID always renders on
     // the SECOND line below the title (per Batch A r3 spec — all three
-    // types share this pattern).
-    final headerTitle = isTeam
+    // types share this pattern). When the creator gave the battle a
+    // custom name (migration 0061), it replaces the derived title;
+    // otherwise falls back to "Team battle" / "Multi battle" / "You vs X"
+    // via `displayName`. `_shortName` still guards the opponent
+    // fallback for the derived branch so the "Opponent" placeholder
+    // during the auth-hydration window keeps working.
+    final derived = isTeam
         ? 'Team battle'
         : isGroup
             ? 'Multi battle'
             : 'You vs ${_shortName(opponent?.friendlyName)}';
+    final headerTitle = battle.name ?? derived;
 
     return GestureDetector(
       onTap: onTap,
@@ -636,9 +642,13 @@ class _ScheduledCard extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    isTeam
-                        ? '🏳️ ${battle.teamCount ?? battle.teamLabels.length}-team battle'
-                        : '⚔️ You vs ${opponent == null ? "Waiting..." : _shortName(opponent.friendlyName)}',
+                    // Custom name (migration 0061) wins; otherwise
+                    // derived label with the same emoji prefix the
+                    // scheduled card has always used.
+                    battle.name ??
+                        (isTeam
+                            ? '🏳️ ${battle.teamCount ?? battle.teamLabels.length}-team battle'
+                            : '⚔️ You vs ${opponent == null ? "Waiting..." : _shortName(opponent.friendlyName)}'),
                     style: theme.textTheme.titleMedium
                         ?.copyWith(fontWeight: FontWeight.w700),
                     maxLines: 1,
@@ -842,11 +852,14 @@ class _CompletedCard extends StatelessWidget {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
-                          isTeam
-                              ? 'Team battle'
-                              : battle.type == BattleType.group
-                                  ? 'Multi battle'
-                                  : 'You vs ${_shortName(opponent?.friendlyName)}',
+                          // Custom name (migration 0061) wins over the
+                          // derived title on completed cards too.
+                          battle.name ??
+                              (isTeam
+                                  ? 'Team battle'
+                                  : battle.type == BattleType.group
+                                      ? 'Multi battle'
+                                      : 'You vs ${_shortName(opponent?.friendlyName)}'),
                           style: theme.textTheme.titleMedium
                               ?.copyWith(fontWeight: FontWeight.w700),
                           maxLines: 1,

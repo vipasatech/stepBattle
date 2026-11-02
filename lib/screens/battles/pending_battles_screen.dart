@@ -147,7 +147,8 @@ class _PendingRowState extends ConsumerState<_PendingRow> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      '\u2694\ufe0f You vs $otherLabel',
+                      // Custom battle name (migration 0061) wins.
+                      battle.name ?? '\u2694\ufe0f You vs $otherLabel',
                       style: theme.textTheme.titleSmall
                           ?.copyWith(fontWeight: FontWeight.w700),
                     ),

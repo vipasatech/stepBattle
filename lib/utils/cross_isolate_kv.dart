@@ -79,6 +79,16 @@ class CrossIsolateKV {
   // 2026-09-04 fix — see welcome_screen.dart _continueAsLastUser.
   static const String lastSignInMethod = 'ci_last_signin_method';
 
+  // New-user tour completion mirror — migration 0062 (2026-09-04).
+  // The server's `profiles.has_completed_tour` is source of truth;
+  // this local mirror lets the tour-gating check happen offline-first
+  // so a cold-start on Home doesn't flash the tour for a returning
+  // user while the profile is still hydrating. Written whenever the
+  // user finishes or skips the tour, AND whenever a fresh profile
+  // read reports a value that differs from the mirror. Cleared by
+  // the "Replay app tour" Settings action so the tour re-fires.
+  static const String tourCompletedLocal = 'ci_tour_completed_local';
+
   /// Cached instance for sync reads. Populated by [init]; nulled by
   /// nothing (SharedPreferences singleton lives as long as the isolate).
   static SharedPreferences? _prefs;
@@ -113,6 +123,12 @@ class CrossIsolateKV {
     await p.setDouble(key, value);
   }
 
+  static Future<void> setBool(String key, bool value) async {
+    final p = _prefs ?? (await SharedPreferences.getInstance());
+    _prefs = p;
+    await p.setBool(key, value);
+  }
+
   /// Store a nullable double — SharedPreferences has no "set null"
   /// concept, so `null` is encoded as REMOVAL of the key. Reads
   /// that come back missing are interpreted as null by the caller.
@@ -137,6 +153,7 @@ class CrossIsolateKV {
   static int? getIntSync(String key) => _prefs?.getInt(key);
   static double? getDoubleSync(String key) => _prefs?.getDouble(key);
   static String? getStringSync(String key) => _prefs?.getString(key);
+  static bool? getBoolSync(String key) => _prefs?.getBool(key);
 
   // ── Async reads — for cold paths / background isolates where we
   //    can't rely on init having been awaited before the read.
@@ -266,6 +283,44 @@ class CrossIsolateKV {
       AppLogger.auth.i('lastEmail:cleared');
     } catch (e) {
       AppLogger.auth.w('lastEmail:clearFailed',
+          fields: {'err': e.toString()});
+    }
+  }
+
+  // ── New-user tour local mirror ───────────────────────────────────
+  // See the [tourCompletedLocal] key comment for the full policy: the
+  // server flag is source of truth, this mirror is offline-first for
+  // gating the tour on cold-start before the profile hydrates.
+
+  /// True when the local mirror says the user has completed / skipped
+  /// the tour. Null when we've never written the mirror (e.g. fresh
+  /// install, or an existing user pre-migration who hasn't hit the
+  /// tour gate yet). Sync — safe for router / shell gate reads.
+  static bool? getTourCompletedLocalSync() =>
+      getBoolSync(tourCompletedLocal);
+
+  /// Write the local mirror. Called on tour finish / skip AND
+  /// whenever a hydrated profile read reports a value that differs
+  /// from the current mirror (server → local sync direction).
+  static Future<void> setTourCompletedLocal(bool value) async {
+    try {
+      await setBool(tourCompletedLocal, value);
+      AppLogger.auth.i('tour:localMirrorSet',
+          fields: {'value': value.toString()});
+    } catch (e) {
+      AppLogger.auth.w('tour:localMirrorFailed',
+          fields: {'err': e.toString()});
+    }
+  }
+
+  /// Clear the local mirror. Called by the "Replay app tour" Settings
+  /// action so the next Home visit re-fires the tour.
+  static Future<void> clearTourCompletedLocal() async {
+    try {
+      await remove(tourCompletedLocal);
+      AppLogger.auth.i('tour:localMirrorCleared');
+    } catch (e) {
+      AppLogger.auth.w('tour:localMirrorClearFailed',
           fields: {'err': e.toString()});
     }
   }

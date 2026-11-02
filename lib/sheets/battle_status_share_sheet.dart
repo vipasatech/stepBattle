@@ -134,8 +134,18 @@ class _BattleShareSheetState extends State<_BattleShareSheet> {
     final opp = widget.battle.opponentFor(widget.uid);
     final iWon = widget.battle.winnerId == widget.uid;
     final opName = opp?.friendlyName ?? 'them';
+    // When the creator gave the battle a custom name (migration 0061),
+    // weave it into the caption so the share tells the story of THAT
+    // battle, not a generic one.
+    final named = widget.battle.name;
     if (iWon) {
+      if (named != null) {
+        return "Beat $opName in '$named' on StepBattle 💪";
+      }
       return 'Beat $opName in a step battle on StepBattle 💪';
+    }
+    if (named != null) {
+      return "Great '$named' against $opName on StepBattle — running it back.";
     }
     return 'Great battle against $opName on StepBattle — running it back.';
   }

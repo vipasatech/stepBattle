@@ -48,6 +48,7 @@ enum LogCategory {
   nav,
   track,
   payments,
+  tour,
 }
 
 enum LogLevel { trace, debug, info, warn, error }
@@ -154,6 +155,7 @@ class AppLogger {
   static final nav = AppLogger._(LogCategory.nav);
   static final track = AppLogger._(LogCategory.track);
   static final payments = AppLogger._(LogCategory.payments);
+  static final tour = AppLogger._(LogCategory.tour);
 
   /// Resolve a logger from a runtime [LogCategory]. Used by call-site
   /// helpers (see [SupabaseApiClient]) that need to route log lines to
@@ -176,6 +178,7 @@ class AppLogger {
       case LogCategory.nav: return nav;
       case LogCategory.track: return track;
       case LogCategory.payments: return payments;
+      case LogCategory.tour: return tour;
     }
   }
 

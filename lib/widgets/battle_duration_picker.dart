@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import '../config/colors.dart';
+import '../features/onboarding_tour/tour_step.dart';
+import '../features/onboarding_tour/tour_target.dart';
 
 /// Picks the battle's full time window: a start moment AND an end moment.
 ///
@@ -48,11 +50,24 @@ class BattleDurationPicker extends StatefulWidget {
   /// lead time.
   final DateTime? minStart;
 
+  /// Optional tour-target id for the preset-chips row. When non-null
+  /// the chips Wrap is wrapped in a [TourTarget] with this id so the
+  /// tour can spotlight just the chips. Only the team-lobby usage
+  /// passes this today. Added 2026-09-22.
+  final TourTargetId? chipsTargetId;
+
+  /// Optional tour-target id for the Starts + Ends pills column.
+  /// Same rationale as [chipsTargetId] — team-lobby only. Added
+  /// 2026-09-22.
+  final TourTargetId? datesTargetId;
+
   const BattleDurationPicker({
     super.key,
     required this.onChanged,
     this.initial,
     this.minStart,
+    this.chipsTargetId,
+    this.datesTargetId,
   });
 
   @override
@@ -306,6 +321,15 @@ class _BattleDurationPickerState extends State<BattleDurationPicker> {
   String _format(DateTime t) =>
       DateFormat('E, MMM d • h:mm a').format(t.toLocal());
 
+  /// Wraps [child] in a [TourTarget] with [id] when non-null.
+  /// No-op passthrough when the picker's caller (1v1 / Multi setup
+  /// sheets) doesn't pass a tour id — those flows never spotlight
+  /// this widget's internals.
+  Widget _maybeWrapTarget(TourTargetId? id, Widget child) {
+    if (id == null) return child;
+    return TourTarget(id: id, child: child);
+  }
+
   String get _durationSummary {
     final diff = _end.difference(_start);
     if (diff.isNegative || diff == Duration.zero) return 'Invalid window';
@@ -333,36 +357,47 @@ class _BattleDurationPickerState extends State<BattleDurationPicker> {
         const SizedBox(height: 10),
 
         // Preset chips
-        Wrap(
-          spacing: 8,
-          runSpacing: 8,
-          children: _Preset.values
-              .map((p) => _Chip(
-                    label: _presetShort[p]!,
-                    selected: _preset == p,
-                    // Daily is disabled when the parent set a start-time
-                    // floor (Public toggle → start ≥ now+1h). Grey it out
-                    // so users see it's unavailable in this context.
-                    disabled: p == _Preset.daily && widget.minStart != null,
-                    onTap: () => _pickPreset(p),
-                  ))
-              .toList(),
+        _maybeWrapTarget(
+          widget.chipsTargetId,
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: _Preset.values
+                .map((p) => _Chip(
+                      label: _presetShort[p]!,
+                      selected: _preset == p,
+                      // Daily is disabled when the parent set a start-time
+                      // floor (Public toggle → start ≥ now+1h). Grey it out
+                      // so users see it's unavailable in this context.
+                      disabled: p == _Preset.daily && widget.minStart != null,
+                      onTap: () => _pickPreset(p),
+                    ))
+                .toList(),
+          ),
         ),
         const SizedBox(height: 14),
 
         // Start + End pills
-        _TimePill(
-          icon: Icons.play_arrow_rounded,
-          label: 'Starts',
-          value: _format(_start),
-          onTap: _editStart,
-        ),
-        const SizedBox(height: 8),
-        _TimePill(
-          icon: Icons.flag_rounded,
-          label: 'Ends',
-          value: _format(_end),
-          onTap: _editEnd,
+        _maybeWrapTarget(
+          widget.datesTargetId,
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              _TimePill(
+                icon: Icons.play_arrow_rounded,
+                label: 'Starts',
+                value: _format(_start),
+                onTap: _editStart,
+              ),
+              const SizedBox(height: 8),
+              _TimePill(
+                icon: Icons.flag_rounded,
+                label: 'Ends',
+                value: _format(_end),
+                onTap: _editEnd,
+              ),
+            ],
+          ),
         ),
 
         const SizedBox(height: 6),

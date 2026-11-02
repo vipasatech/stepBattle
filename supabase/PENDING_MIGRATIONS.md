@@ -140,3 +140,204 @@ drop function if exists public.daily_series_charge_on_accept();
 **How to apply:** Dashboard → SQL Editor → paste `0052_daily_series_spawn_offbyone.sql` → Run. Verification queries at the bottom of the file.
 
 **Rollback:** re-run migration 0047's `settle_daily_battle` (which contains the buggy `+ 1` version). Backfill can be reverted with `update public.battle_participants set competing_date = '2026-08-22' where battle_id = '6cc9cce4-0d4c-4aca-a659-f25b30f88b88' and invite_status = 'accepted';` — but no reason to; the backfill matches user expectation and is verified safe.
+
+---
+
+## 0061 — Optional user-provided battle name
+
+**Status:** ~~Pending~~ **Applied 2026-09-25** ✅ (verified: `information_schema.columns` returns exactly one row — `battles / name / text / YES`. Note `battle_series.name` was NOT part of this migration; it's deferred to the 0063 follow-up below.)
+**File:** [0061_battle_name.sql](migrations/0061_battle_name.sql)
+**Why:** 1.1.6+39 ships the `BattleNameField` widget in every setup sheet — 1v1, Multi, Team — so users can name a battle ("🌅 Morning Warriors", "Revenge match", …). The name renders on Discover cards, Battle-Ground headers, and Day-Summary tiles in place of the auto-generated `"$type battle by $creator"`.
+
+**Client state today (already shipped):**
+- `BattleModel.name : String?` (lib/models/battle_model.dart:221) — reads `d['name']` as trimmed String, NULL when blank.
+- `BattleNameField` wired into `battle_1v1_setup_sheet.dart`, `battle_group_setup_sheet.dart`, `battle_team_setup_sheet.dart`.
+- `BattleService.createBattle(name: name)` passes it through to the RPC.
+
+Column doesn't exist server-side yet — every insert with a non-null name would fail with `column "name" of relation "battles" does not exist`. This migration adds it. Existing battles carry NULL → client falls back to the auto-generated label. No backfill needed.
+
+**Cost:** < 100 ms metadata-only ADD COLUMN. Nullable + no default → no full-table rewrite.
+
+**How to apply:** Dashboard → SQL Editor → paste `0061_battle_name.sql` → Run. Verification queries at the bottom of the file.
+
+**Rollback:** `alter table public.battles drop column if exists name;` — loses any user-set names, irreversible.
+
+---
+
+## 0062 — Server-side "has completed tour" flag
+
+**Status:** ~~Pending~~ **Applied 2026-09-25** ✅ (verified: column is `boolean / default false / NOT NULL`, and the grandfather backfill ran — `grandfathered = 117`, `will_see_tour = 0`, so no existing user gets the tour retro-fired.)
+**File:** [0062_has_completed_tour.sql](migrations/0062_has_completed_tour.sql)
+**Why:** 1.1.6+39 ships the new-user tour (`OnboardingTourOverlay` in lib/features/onboarding_tour/). Fire gate needs a durable server-side "user has seen the tour" bit so the overlay doesn't re-fire on every install / device switch / cache clear.
+
+**Client state today (already shipped):**
+- `UserModel.hasCompletedTour : bool` (lib/models/user_model.dart:240) — reads `d['has_completed_tour']`, defaults to `true` when the column is absent so today's release doesn't fire the tour retroactively.
+- `TourService.syncFromServer / markCompleted / resetForReplay` (lib/services/tour_service.dart) mirrors it into `CrossIsolateKV.tour_completed_local`.
+- `TourService.shouldFire` gates first-fire on both source == not-completed AND local mirror == not-completed.
+- On skip / finish, client writes `.update({'has_completed_tour': true})` on `profiles`.
+
+Today those writes soft-fail with **PGRST204** — visible in session logs as `tour:server:markCompletedFailed` because the column doesn't exist. Local mirror still gets set (so the tour won't re-fire on THIS device), but the flag doesn't sync across devices.
+
+**Schema:** `profiles.has_completed_tour boolean not null default false`.
+
+**Backfill (critical):** every existing row is set to `true` in the same migration. Existing users are grandfathered so they don't get retro-fired the tour on their next open. New sign-ups after this migration get the column default (`false`) and correctly see the tour on first Home visit.
+
+**Cost:** ~50 ms at today's ~200-profile size (ADD COLUMN NOT NULL DEFAULT false is one storage rewrite pass; the follow-up backfill UPDATE is another single pass). Well under 1 s total.
+
+**How to apply:** Dashboard → SQL Editor → paste `0062_has_completed_tour.sql` → Run. Verification queries at the bottom of the file.
+
+**Rollback:** `alter table public.profiles drop column if exists has_completed_tour;` — loses per-user tour-completion history, irreversible.
+
+---
+
+## 0063 — Fix signup bonus (route both grant paths through `_credit_xp_admin`)
+
+**Status:** ~~Pending~~ **Applied 2026-11-02** ✅ (verified end-to-end on three fresh signups — `logs/2026-11-02_12-34-08/xp.log`: `signupBonus:credited {xp: 500}` → `signupBonus:xpVerified {totalXp: 500}` → `xpDelta:reason {reason: "signup_grant", context: {"source": "onboarding_rpc_v2"}}`. The `onboarding_rpc_v2` source proves the RPC path ran and no longer raises 42501.)
+**File:** [0063_fix_signup_grant_admin_route.sql](migrations/0063_fix_signup_grant_admin_route.sql)
+**Priority:** 🔴 HIGH — every new signup is currently losing their 500 XP bonus.
+
+**Why:** Testers reported missing signup bonuses (2026-10-18). Client log:
+`credit_user_xp: reason signup_grant not allowed for client callers, code 42501`.
+
+The DEPLOYED `credit_user_xp` (drifted from 0016 — hardened live, never captured in a
+migration) allows exactly ONE reason for non-`service_role` callers: `battle_stake`.
+`SECURITY DEFINER` does not rescue callers because `auth.role()` reads the JWT request
+setting, not the function owner — the trap documented in 0047 (lines 16-24) and 0045
+(lines 35-39).
+
+**This is the third occurrence of this guard silently breaking an XP path.** `battle_win`
+/ `battle_refund` were rerouted in 0047; `daily_mission` / `streak_milestone` in 0048.
+`signup_grant` was never rerouted, so BOTH paths have been failing:
+- `grant_signup_xp()` — AFTER INSERT trigger on `profiles` (0020, 100 XP)
+- `award_signup_bonus_v2()` — onboarding RPC the client calls (live-only, 500 XP)
+
+**What it changes:** both now call `public._credit_xp_admin` (0047). Legacy trigger's
+amount goes 100 → 500 so the two paths agree — otherwise whichever fires first wins and
+the other no-ops on the existence guard, permanently capping that user at 100.
+
+`credit_user_xp` itself is deliberately NOT loosened — that would reopen the client-side
+XP-minting hole its guards exist to close.
+
+**Cost:** two `CREATE OR REPLACE FUNCTION` + one trigger re-assert. No data touched.
+
+**How to apply:** Dashboard → SQL Editor → paste → Run. Then sign up a fresh account and
+confirm `signupBonus:credited {xp: 500}` before applying 0064.
+
+**Rollback:** restore the previous bodies (in the file). Non-destructive — no data change.
+
+---
+
+## 0064 — Backfill signup bonus for the 102 users the bug skipped
+
+**Status:** Pending — **apply ONLY after 0063 is verified on a live signup**
+**File:** [0064_backfill_signup_grant.sql](migrations/0064_backfill_signup_grant.sql)
+**Priority:** 🔴 HIGH — but gated behind 0063.
+
+**Why:** measured 2026-10-29, before any fix:
+
+| metric | value |
+|---|---|
+| total_users | 140 |
+| got_bonus | 38 |
+| **owed_bonus** | **102** |
+
+73% of the user base never received the bonus they were promised.
+
+**⚠️ Economic impact:** 102 × 500 = **51,000 XP minted**. At the ₹1 = 1 XP sale rate
+that's ~₹51,000 of in-app value, and it WILL shift leaderboard standings since
+`profiles.total_xp` drives ranking. This is value users were already owed, but it is real
+and irreversible in practice — a deliberate decision, not a side effect.
+
+**Structure:** the file is split so nothing fires by accident.
+- **SECTION 1** — read-only pre-flight. Cohort breakdown (how many at 0 / 100 / 500 XP)
+  plus a duplicate-grant sanity check. Run first, eyeball the numbers.
+- **SECTION 2a** — backfills the 102 with no grant at all. Idempotent via `NOT EXISTS`.
+- **SECTION 2b** — **commented out.** Optional 400 XP top-up for users the legacy trigger
+  gave 100. That's a policy call about your economy, not a bug fix, so it does not run
+  by default.
+
+**How to apply:** Dashboard → SQL Editor. SECTION 1 first, read output, then SECTION 2a.
+
+**Rollback:** in-file, matched on `context->>'source' = 'backfill_0064'` so genuine grants
+are untouched. ⚠️ Only realistically safe immediately after applying — once users spend
+the XP the debit clamps at 0 and ledgers stop reconciling.
+
+---
+
+## 0065 — Fix `notify_streak_at_risk` text/date comparison
+
+**Status:** Pending
+**File:** [0065_fix_streak_at_risk_date_cast.sql](migrations/0065_fix_streak_at_risk_date_cast.sql)
+**Priority:** 🟠 MEDIUM — streak-at-risk pushes have never been delivered, but nothing is corrupted.
+
+**Why:** `cron.job_run_details` shows `notify_streak_at_risk_hourly` failing with
+`operator does not exist: text = date`. `step_logs.date` is **text** (`yyyy-MM-dd`, 0001
+line 123) but 0050 declared `v_today_local date` and compared them directly (0050 line 131).
+
+**The run history is misleading.** 159 "succeeded" vs 9 "failed" looks like an intermittent
+glitch. It isn't — PL/pgSQL only plans a statement when it executes, and the failing line
+sits behind four gates (recovery-started, streak > 0, fcm_token set, **local hour == 19**,
+not already notified today). Hours where nobody cleared all of them never reached the
+statement and reported success. **Every run with actual work to do has failed.** Zero
+streak-at-risk notifications have been sent since 0050 shipped 2026-08-20.
+
+**Fix:** compare on text — `date = to_char(v_today_local, 'YYYY-MM-DD')`. Casting the
+column (`date::date`) would also type-check but goes non-sargable and abandons the
+`unique (user_id, date)` index from 0001. Formatting the variable keeps the index.
+
+Everything else in the function is byte-identical: gates, copy, dedup write, 50%-of-goal
+threshold.
+
+**Checked, not affected:** `notify_streak_broken` never reads `step_logs`, so its 168/168
+successes are genuine.
+
+**Cost:** one `CREATE OR REPLACE FUNCTION`. No data touched.
+
+**How to apply:** Dashboard → SQL Editor → paste → Run, then `select public.notify_streak_at_risk();`
+to confirm it plans without error.
+
+**Rollback:** restore 0050's body. Non-destructive — but it only re-introduces the bug.
+
+---
+
+## 0066 — Drop `profiles_signup_grant` trigger (restore the celebration popup)
+
+**Status:** ~~Pending~~ **Applied 2026-11-02** ✅ (verified: the grant arrives with `source = "onboarding_rpc_v2"`, never `profile_insert_trigger` — if the trigger were still attached it would pre-credit during profile INSERT, the client's `currentTotalXp == 0` gate would skip the RPC, and no `signupBonus:credited` line would exist at all. The +500 celebration overlay also fires, which is only reachable via the RPC path.)
+**File:** [0066_drop_signup_grant_trigger.sql](migrations/0066_drop_signup_grant_trigger.sql)
+**Priority:** 🟠 MEDIUM — corrects an over-correction in 0063.
+
+**Why:** 0063 re-asserted the AFTER INSERT trigger from 0020. That was wrong on three counts:
+
+1. **It suppresses the celebration popup.** The client gates the RPC on
+   `shouldAwardSignUpBonus = currentTotalXp == 0` (supabase_auth_service.dart:419). If the
+   trigger already credited 500 during profile INSERT, that read returns 500, the gate is
+   false, the RPC never runs — and the `XPCelebrationBus.enqueue()` added alongside this
+   migration never fires.
+2. **It erases the 0 → 500 transition.** A profile born at 500 XP paints Level 2 on frame 1.
+   Animations need a change to interpolate from.
+3. **It puts a credit operation inside profile INSERT.** An exception in an AFTER INSERT
+   trigger aborts the insert. Pre-0063 the trigger called `credit_user_xp` → 42501, so any
+   INSERT reaching it would have failed. Since 140 signups demonstrably worked, the trigger
+   was already absent live before 0063 re-added it.
+
+**Trade-off:** a user who abandons onboarding gets no bonus. Correct — they have no usable
+profile, and the RPC is idempotent so it lands in full whenever they finish.
+
+The `grant_signup_xp()` **function** is left in place (still rerouted via `_credit_xp_admin`),
+so rollback is one line.
+
+**Pairs with a client change** in `supabase_auth_service.dart` — enqueues
+`XPAwardEvent(amount: credited, reason: 'Sign-up bonus')` on a non-zero RPC result. The
+celebration overlay and bus were never deleted (`xp_celebration.dart`, mounted in
+`main_shell.dart:44`); migration 0055 just moved the grant off `XPService.awardXP()`, which
+was the only caller of `enqueue()`. **Ship both together** — the trigger drop alone restores
+the transition; the client change alone does nothing while the trigger wins the race.
+
+⚠️ **The client half needs a new build.** Server-only testing will show the ledger row but
+no popup until the app is rebuilt.
+
+**Cost:** one `DROP TRIGGER`. No data touched.
+
+**How to apply:** Dashboard → SQL Editor → paste → Run.
+
+**Rollback:** re-create the trigger (in the file). Non-destructive, but re-introduces all three problems.

@@ -99,8 +99,13 @@ class _BuyXpCtaState extends ConsumerState<BuyXpCta>
             final balance =
                 ref.watch(currentUserProvider).valueOrNull?.totalXP ?? 0;
             return Container(
+              // Compact padding (2026-09-13 fix): the previous 26 dp
+              // horizontal stretched the pill so the [bolt][value][+]
+              // trio floated inside too much whitespace. 16 dp packs
+              // the elements tight while keeping the touch target
+              // comfortable.
               padding: const EdgeInsets.symmetric(
-                  horizontal: 26, vertical: 8),
+                  horizontal: 16, vertical: 8),
               decoration: BoxDecoration(
                 color: AppColors.primary.withValues(alpha: 0.14),
                 borderRadius: BorderRadius.circular(22),
@@ -113,7 +118,7 @@ class _BuyXpCtaState extends ConsumerState<BuyXpCta>
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   Icon(Icons.bolt, color: AppColors.primary, size: 16),
-                  const SizedBox(width: 5),
+                  const SizedBox(width: 6),
                   Text(
                     _fmtBalance(balance),
                     style: TextStyle(
@@ -124,7 +129,7 @@ class _BuyXpCtaState extends ConsumerState<BuyXpCta>
                       color: AppColors.primary,
                     ),
                   ),
-                  const SizedBox(width: 5),
+                  const SizedBox(width: 6),
                   Icon(Icons.add_circle,
                       color: AppColors.primary.withValues(alpha: 0.85),
                       size: 16),

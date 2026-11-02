@@ -209,6 +209,17 @@ class BattleModel {
   /// going forward (migration 0015 backfilled existing rows).
   final String? joinCode;
 
+  /// Optional user-provided name (migration 0061, 2026-09-04). Users can
+  /// name a battle from any setup sheet ("🌅 Morning Warriors",
+  /// "Revenge match", "Sam's send-off"). When null (the default and
+  /// today's majority state), every surface falls back to the derived
+  /// "You vs X" / team-count title via [displayName]. When non-null,
+  /// cards, detail sheets, invites, discover, and share PNGs all use
+  /// this value instead. Length is capped 1-30 chars server-side via
+  /// a CHECK constraint; the client's TextField enforces the same
+  /// cap to prevent write failures.
+  final String? name;
+
   /// For team battles: how many teams (2–4). Null otherwise.
   final int? teamCount;
 
@@ -243,6 +254,7 @@ class BattleModel {
     this.teamCount,
     this.teamNames = const {},
     this.pendingExpiresAt,
+    this.name,
   });
 
   /// True when the creator picked a start time more than 1h out from
@@ -408,6 +420,15 @@ class BattleModel {
       pendingExpiresAt: d['pending_expires_at'] == null
           ? null
           : DateTime.tryParse(d['pending_expires_at'].toString()),
+      // Optional user-provided name (migration 0061). Trim any accidental
+      // whitespace and read empty strings as null so display surfaces can
+      // rely on `name != null` as "user actually set something".
+      name: () {
+        final raw = d['name'] as String?;
+        if (raw == null) return null;
+        final trimmed = raw.trim();
+        return trimmed.isEmpty ? null : trimmed;
+      }(),
     );
   }
   /// True if this is a pending invite for the given user and they haven't responded.
@@ -485,6 +506,48 @@ class BattleModel {
       return '#${battleId.substring(0, 4).toUpperCase()}';
     }
     return '#${battleId.toUpperCase()}';
+  }
+
+  /// One source of truth for the user-facing battle title (migration
+  /// 0061). Returns the user-provided [name] when set; otherwise falls
+  /// back to the per-surface derivation each caller was doing inline
+  /// before this helper existed. Callers pass only what they need —
+  /// most just need `currentUserId`; team battles don't (the derived
+  /// "Team battle" label doesn't reference the viewer).
+  ///
+  /// This helper deliberately does NOT know about score-row / participant
+  /// labels — those still use `_shortName(opponent)` etc. Renaming the
+  /// title never changes who's competing.
+  ///
+  /// Example callers:
+  /// ```dart
+  /// // 1v1 card:
+  /// final title = battle.displayName(currentUserId: uid);
+  /// // team lobby header:
+  /// final title = battle.displayName();
+  /// ```
+  String displayName({String? currentUserId}) {
+    // User-supplied name always wins when present.
+    final n = name;
+    if (n != null && n.isNotEmpty) return n;
+
+    // Fall back to the derived title the app has always shown. Each
+    // caller previously did this inline; consolidating here means one
+    // place to evolve the derivation if we ever want to (e.g. add
+    // group-size in the group label).
+    switch (type) {
+      case BattleType.team:
+        return 'Team battle';
+      case BattleType.group:
+        return 'Multi battle';
+      case BattleType.oneVsOne:
+        final opp =
+            currentUserId == null ? null : opponentFor(currentUserId);
+        final oppName = opp?.friendlyName ?? 'Opponent';
+        // Match the historical "You vs X" phrasing that cards / detail
+        // sheets / invites / share PNGs all used inline.
+        return 'You vs $oppName';
+    }
   }
 
   static BattleType _parseType(String s) => switch (s) {

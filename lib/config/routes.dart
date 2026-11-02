@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../providers/auth_provider.dart';
 import '../providers/user_provider.dart';
 import '../services/observability_service.dart';
+import '../utils/account_deletion.dart';
 import '../utils/app_logger.dart';
 import '../utils/cross_isolate_kv.dart';
 import '../screens/shell/main_shell.dart';
@@ -103,7 +104,20 @@ final routerProvider = Provider<GoRouter>((ref) {
   // Bumps every time we want GoRouter to re-run its redirect. Subscribed
   // listeners (the router) react; this provider itself does NOT rebuild.
   final refreshNotifier = ValueNotifier<int>(0);
-  ref.listen(authStateProvider, (_, __) => refreshNotifier.value++);
+  ref.listen(authStateProvider, (_, next) {
+    // Lower the account-deletion flag once the condition it describes is
+    // actually over: the session cleared, or a different user signed in
+    // on this device. Clearing from here rather than from the sheet is
+    // deliberate — the sheet is gone by this point, and tying the
+    // flag's lifetime to the auth stream is what keeps a failed
+    // `signOut()` from stranding it raised. See [AccountDeletion].
+    final deleting = AccountDeletion.deletedUid.value;
+    if (deleting != null && !next.isLoading) {
+      final uid = next.valueOrNull?.id;
+      if (uid == null || uid != deleting) AccountDeletion.end();
+    }
+    refreshNotifier.value++;
+  });
   ref.listen(hasCompletedOnboardingProvider, (_, __) => refreshNotifier.value++);
   // Also re-run the redirect when the profile row lands (or disappears
   // — delete-account race). The escape hatch at line ~216 branches on
@@ -114,6 +128,14 @@ final routerProvider = Provider<GoRouter>((ref) {
   // until something else forces a refresh. See routes.dart 2026-09-04
   // fix for the log trace showing the stuck-on-signup case.
   ref.listen(userProfileProvider, (_, __) => refreshNotifier.value++);
+  // Deletion has to move the user off Settings immediately, not after
+  // `signOut()` finishes tearing down services. Driving the redirect
+  // off the flag itself makes the navigation independent of how long
+  // sign-out takes (or whether it succeeds at all).
+  void onDeletionFlagChanged() => refreshNotifier.value++;
+  AccountDeletion.deletedUid.addListener(onDeletionFlagChanged);
+  ref.onDispose(
+      () => AccountDeletion.deletedUid.removeListener(onDeletionFlagChanged));
   ref.onDispose(refreshNotifier.dispose);
 
   return GoRouter(
@@ -132,6 +154,28 @@ final routerProvider = Provider<GoRouter>((ref) {
       // window — it waits for auth + onboarding to resolve then calls
       // context.go itself. Don't second-guess it from here.
       if (isOnSplash) return null;
+
+      // Just-deleted account (2026-11-02). Checked FIRST, ahead of the
+      // loading guard and every auth branch below, because during this
+      // window those branches are reading values that describe a user
+      // who no longer exists.
+      //
+      // The server has already removed both the profile row and the
+      // auth row; this device holds the old token for another beat. In
+      // that beat the provider values are identical to a fresh signup's
+      // (authenticated, no profile, onboarded == false), so the
+      // onboarding gate further down sent deleted users to
+      // "What should we call you?" — the bug testers reported. The
+      // escape hatch at ~line 255 was written for the same window but
+      // only fires if the user is already standing on an auth surface,
+      // which after deletion they never are: they came from Settings.
+      //
+      // [AccountDeletion] explains why no amount of provider
+      // invalidation or waiting can distinguish the two cases, and why
+      // this is a synchronous static rather than a provider.
+      if (AccountDeletion.isSettling(authState.valueOrNull?.id)) {
+        return location == '/welcome' ? null : '/welcome';
+      }
 
       // While Supabase is still restoring the persisted session on cold
       // start, `authState` is in AsyncLoading and `valueOrNull` is null.

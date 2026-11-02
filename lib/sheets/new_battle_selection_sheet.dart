@@ -2,6 +2,9 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../config/colors.dart';
+import '../features/onboarding_tour/tour_controller.dart';
+import '../features/onboarding_tour/tour_step.dart';
+import '../features/onboarding_tour/tour_target.dart';
 import '../providers/auth_provider.dart';
 import '../providers/battle_provider.dart';
 import '../widgets/bottom_sheet_handle.dart';
@@ -12,6 +15,25 @@ import 'team_battle_confirm_dialog.dart';
 /// Step 1 of battle creation: choose 1v1, Multi-player, or Team format.
 class NewBattleSelectionSheet extends ConsumerStatefulWidget {
   const NewBattleSelectionSheet({super.key});
+
+  /// Opens the sheet. Tour opens with `useRootNavigator: false` so
+  /// the sheet renders inside the shell (under our overlay), and
+  /// `barrierColor: Colors.transparent` so the sheet's default scrim
+  /// doesn't stack with the tour's dim.
+  static Future<void> show(
+    BuildContext context, {
+    bool useRootNavigator = true,
+    Color? barrierColor,
+  }) {
+    return showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      useRootNavigator: useRootNavigator,
+      backgroundColor: Colors.transparent,
+      barrierColor: barrierColor,
+      builder: (_) => const NewBattleSelectionSheet(),
+    );
+  }
 
   @override
   ConsumerState<NewBattleSelectionSheet> createState() =>
@@ -61,40 +83,65 @@ class _NewBattleSelectionSheetState
           // tallest child's natural height; without it `stretch` would
           // demand infinite height from a child inside the parent
           // SingleChildScrollView and the whole sheet would fail layout.
-          IntrinsicHeight(
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Expanded(
-                  child: _FormatCard(
-                    icon: Icons.person,
-                    title: '1v1',
-                    subtitle: 'Head-to-head\nwith a friend',
-                    isSelected: _selected == 0,
-                    onTap: () => setState(() => _selected = 0),
+          // TourTarget wraps ALL THREE tiles so the tour spotlight
+          // covers every format option (2026-09-13 user feedback:
+          // "highlight only 1v1 was misleading — user should see they
+          // can pick Multi or Team too"). Each tile's onTap ALSO
+          // records the selection in tourBattleFormatChoiceProvider
+          // so the tour overlay can move its notch dynamically to
+          // point at whichever tile the user has selected.
+          TourTarget(
+            id: TourTargetId.battleSelect1v1Tile,
+            child: IntrinsicHeight(
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Expanded(
+                    child: _FormatCard(
+                      icon: Icons.person,
+                      title: '1v1',
+                      subtitle: 'Head-to-head\nwith a friend',
+                      isSelected: _selected == 0,
+                      onTap: () {
+                        setState(() => _selected = 0);
+                        ref
+                            .read(tourBattleFormatChoiceProvider.notifier)
+                            .state = 0;
+                      },
+                    ),
                   ),
-                ),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: _FormatCard(
-                    icon: Icons.group,
-                    title: 'Multiplayer',
-                    subtitle: 'Free-for-all\nup to 10',
-                    isSelected: _selected == 1,
-                    onTap: () => setState(() => _selected = 1),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: _FormatCard(
+                      icon: Icons.group,
+                      title: 'Multiplayer',
+                      subtitle: 'Free-for-all\nup to 10',
+                      isSelected: _selected == 1,
+                      onTap: () {
+                        setState(() => _selected = 1);
+                        ref
+                            .read(tourBattleFormatChoiceProvider.notifier)
+                            .state = 1;
+                      },
+                    ),
                   ),
-                ),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: _FormatCard(
-                    icon: Icons.flag,
-                    title: 'Team',
-                    subtitle: '2–4 teams\ncombined steps',
-                    isSelected: _selected == 2,
-                    onTap: () => setState(() => _selected = 2),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: _FormatCard(
+                      icon: Icons.flag,
+                      title: 'Team',
+                      subtitle: '2–4 teams\ncombined steps',
+                      isSelected: _selected == 2,
+                      onTap: () {
+                        setState(() => _selected = 2);
+                        ref
+                            .read(tourBattleFormatChoiceProvider.notifier)
+                            .state = 2;
+                      },
+                    ),
                   ),
-                ),
-              ],
+                ],
+              ),
             ),
           ),
           const SizedBox(height: 28),
@@ -119,8 +166,22 @@ class _NewBattleSelectionSheetState
   }
 
   Future<void> _continue() async {
-    // Team battles now open a full-screen page instead of a bottom
-    // sheet. Correct sequence:
+    // Tour mode short-circuit — for ALL three format choices during
+    // the tour, we just record the pick and pop the sheet; the
+    // BattlesScreen tour listener drives the follow-up (opens
+    // Battle1v1SetupSheet / BattleGroupSetupSheet / the team confirm
+    // dialog + team lobby page). This centralises tour orchestration
+    // in ONE place instead of splitting it between here and the
+    // listener.
+    final tourActive = ref.read(tourControllerProvider).active;
+    if (tourActive) {
+      ref.read(tourBattleFormatChoiceProvider.notifier).state = _selected;
+      Navigator.pop(context);
+      return;
+    }
+    // ── Non-tour paths below (unchanged) ──────────────────────────
+    // Team battles open a full-screen page instead of a bottom sheet.
+    // Correct sequence:
     //   1. Show the confirm dialog OVER the still-open selection
     //      sheet (using the sheet's context is safe as long as the
     //      sheet hasn't been popped yet).
@@ -156,7 +217,6 @@ class _NewBattleSelectionSheetState
       }
       return;
     }
-    // 1v1 / group still use the bottom-sheet flow.
     Navigator.pop(context);
     showModalBottomSheet(
       context: context,
@@ -256,20 +316,36 @@ class _FormatCard extends StatelessWidget {
               maxLines: 2,
               overflow: TextOverflow.ellipsis,
             ),
-            // Selection checkmark
-            if (isSelected) ...[
-              const SizedBox(height: 8),
-              Container(
-                width: 18,
-                height: 18,
-                decoration: BoxDecoration(
-                  color: AppColors.primaryBrand,
-                  shape: BoxShape.circle,
-                ),
-                child: const Icon(Icons.check,
-                    color: Colors.white, size: 12),
+            // Selection checkmark — slot is ALWAYS reserved (fixed
+            // spacer + 18 × 18 badge box) even when unselected, so the
+            // Column's intrinsic height doesn't change between states.
+            // Before 2026-09-20 this was `if (isSelected) [...]` which
+            // added 26 dp of content only in the selected state; the
+            // outer IntrinsicHeight + Row.stretch should in theory
+            // have padded the other tiles to match, but inside the
+            // parent SingleChildScrollView (unbounded vertical) the
+            // intrinsic-height sample stayed stale during the
+            // AnimatedContainer's 200 ms transition and the selected
+            // tile visibly ballooned while the others stayed small.
+            // Reserving the slot unconditionally makes every tile's
+            // intrinsic height identical from t=0, so tapping never
+            // changes the card size — only the fill + icon appear.
+            const SizedBox(height: 8),
+            AnimatedContainer(
+              duration: const Duration(milliseconds: 200),
+              width: 18,
+              height: 18,
+              decoration: BoxDecoration(
+                color: isSelected
+                    ? AppColors.primaryBrand
+                    : Colors.transparent,
+                shape: BoxShape.circle,
               ),
-            ],
+              child: isSelected
+                  ? const Icon(Icons.check,
+                      color: Colors.white, size: 12)
+                  : null,
+            ),
           ],
         ),
       ),

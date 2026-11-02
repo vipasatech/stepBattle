@@ -3,12 +3,16 @@ import 'dart:io' show Platform;
 import 'dart:ui' show ImageFilter;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart' show ScrollDirection;
 import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:material_design_icons_flutter/material_design_icons_flutter.dart';
 import '../../config/colors.dart';
 import '../../config/motion.dart';
+import '../../features/onboarding_tour/tour_controller.dart';
+import '../../features/onboarding_tour/tour_overlay.dart';
+import '../../features/onboarding_tour/tour_step.dart';
 import '../../providers/app_lifecycle_provider.dart';
 import '../../providers/auth_provider.dart';
 import '../../models/notification_model.dart';
@@ -23,9 +27,12 @@ import '../../providers/tab_focus_provider.dart';
 import '../../providers/user_provider.dart';
 import '../../services/background_sync.dart';
 import '../../services/notification_service.dart';
+import '../../services/tour_service.dart';
+import '../../utils/cross_isolate_kv.dart';
 import '../../services/persistent_notifications.dart';
 import '../../services/alarm_wake_scheduler.dart';
 import '../../services/step_source_aggregator.dart';
+import '../../utils/app_logger.dart';
 import '../../utils/hive_lifecycle.dart';
 import '../../widgets/coming_soon_sheet.dart';
 import '../../widgets/battle_invite_toast_host.dart';
@@ -51,8 +58,26 @@ class MainShell extends ConsumerStatefulWidget {
 }
 
 class _MainShellState extends ConsumerState<MainShell>
-    with WidgetsBindingObserver {
+    with WidgetsBindingObserver, TickerProviderStateMixin {
   bool _backfillTriggered = false;
+
+  /// Instagram-style scroll-responsive bottom nav driver.
+  ///
+  /// 1.0 = fully expanded (max width, max icon size). 0.0 = fully
+  /// compressed (min width, min icon size). Driven by
+  /// [_handleScrollNotification]:
+  ///   • user scroll UP (finger swipes down / content descends
+  ///     → `ScrollDirection.forward`)  → `.forward()` (expand)
+  ///   • user scroll DOWN (finger swipes up / content ascends
+  ///     → `ScrollDirection.reverse`)  → `.reverse()` (compress)
+  ///   • idle → hold last state
+  ///
+  /// Cold-start value is 1.0 so the nav is fully visible until the
+  /// first scroll gesture. Duration = 240 ms for that easeOutCubic
+  /// butter feel; the outer container size, corner radius, icon
+  /// size, horizontal padding, and inter-icon gap all interpolate
+  /// off this single controller inside `_BottomNavBar`.
+  late final AnimationController _navExpand;
 
   /// Previously-rendered shell branch index. Used to detect transitions
   /// to Home (tab 0) so animations on the Home screen can re-fire even
@@ -78,6 +103,11 @@ class _MainShellState extends ConsumerState<MainShell>
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    _navExpand = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 240),
+      value: 1.0, // Start fully expanded on cold entry.
+    );
     // Listen for messages from the foreground-service isolate, including
     // notification action-button taps (forwarded as `btn:<id>`).
     FlutterForegroundTask.addTaskDataCallback(_onTaskData);
@@ -93,6 +123,7 @@ class _MainShellState extends ConsumerState<MainShell>
 
   @override
   void dispose() {
+    _navExpand.dispose();
     WidgetsBinding.instance.removeObserver(this);
     FlutterForegroundTask.removeTaskDataCallback(_onTaskData);
     pendingDeepLinkNotifier.removeListener(_consumePendingDeepLink);
@@ -381,6 +412,58 @@ class _MainShellState extends ConsumerState<MainShell>
     return 'native_pedometer';
   }
 
+  /// Drive [_navExpand] toward its expanded (1.0) endpoint. Guarded
+  /// so a redundant call while we're already animating that way is a
+  /// no-op — keeps controller velocity clean AND skips a full-frame
+  /// invalidate on repeated triggers. Shared by scroll-up detection
+  /// AND tab taps (2026-09-14 user request: tap-to-expand mirrors
+  /// scroll-up so the nav grows whenever the user is engaging with
+  /// it either way).
+  void _expandNav() {
+    if (_navExpand.status != AnimationStatus.completed &&
+        _navExpand.status != AnimationStatus.forward) {
+      _navExpand.forward();
+    }
+  }
+
+  /// Drive [_navExpand] toward its compressed (0.0) endpoint. Same
+  /// status-guard as [_expandNav]. Called only from
+  /// [_handleShellScroll] on `ScrollDirection.reverse`.
+  void _compressNav() {
+    if (_navExpand.status != AnimationStatus.dismissed &&
+        _navExpand.status != AnimationStatus.reverse) {
+      _navExpand.reverse();
+    }
+  }
+
+  /// UserScrollNotification handler wired around the shell body.
+  /// Translates scroll direction on ANY Scrollable descendant (Home,
+  /// Battles, Ranks, Track, Clan tabs — plus modal sheets / lists
+  /// inside them) into forward/reverse on [_navExpand] so the bottom
+  /// nav smoothly enlarges when the user scrolls up and compresses
+  /// when they scroll down. Returns `false` so the notification keeps
+  /// bubbling — other listeners (e.g. AppBar collapse) still see it.
+  bool _handleShellScroll(UserScrollNotification n) {
+    switch (n.direction) {
+      case ScrollDirection.forward:
+        // Finger swipes down / content descends → user is scrolling
+        // UP. Expand the nav.
+        _expandNav();
+        break;
+      case ScrollDirection.reverse:
+        // Finger swipes up / content ascends → user is scrolling
+        // DOWN. Compress the nav.
+        _compressNav();
+        break;
+      case ScrollDirection.idle:
+        // Hold whatever state we ended on. Instagram's mechanic —
+        // don't auto-restore on scroll stop; only direction flips
+        // the nav.
+        break;
+    }
+    return false;
+  }
+
   @override
   Widget build(BuildContext context) {
     // Run one-time schema backfill + force initial step sync when auth confirms.
@@ -485,6 +568,102 @@ class _MainShellState extends ConsumerState<MainShell>
       }
     }
 
+    // ── New-user app tour (migration 0062) ─────────────────────────
+    // Two listeners work in tandem:
+    //   • [currentUserProvider] listener: when a fresh profile arrives,
+    //     sync local mirror from server + check the fire gate. Only
+    //     fires the tour when BOTH sources say "not completed" AND we
+    //     currently show the Home tab (so we never surprise the user
+    //     mid-battle).
+    //   • [tourControllerProvider] listener: as the tour advances,
+    //     navigate the shell to the destination for the current step
+    //     (goBranch for tab-switch, push('/profile') for the profile
+    //     branch child) BEFORE the overlay tries to measure the target.
+    ref.listen(currentUserProvider, (prev, next) {
+      final user = next.valueOrNull;
+      if (user == null) return;
+      final tourState = ref.read(tourControllerProvider);
+      if (tourState.active) return;
+      // Server → local mirror sync (fire-and-forget).
+      ref.read(tourServiceProvider).syncFromServer(user.hasCompletedTour);
+      final local = CrossIsolateKV.getTourCompletedLocalSync();
+      final shouldFire = TourService.shouldFire(
+        serverHasCompleted: user.hasCompletedTour,
+        localHasCompleted: local,
+      );
+      if (!shouldFire) return;
+      // Only start on Home so tab-switch chain doesn't interrupt an
+      // in-progress workflow (e.g. mid-battle). The user can also hit
+      // Replay from Settings later.
+      if (widget.navigationShell.currentIndex != 0) return;
+      ref.read(tourControllerProvider.notifier).start();
+    });
+    ref.listen(tourControllerProvider, (prev, next) {
+      AppLogger.tour.i('shellListener:fire', fields: {
+        'prevActive': (prev?.active ?? false).toString(),
+        'nextActive': next.active.toString(),
+        'prevStep': prev?.stepIndex.toString() ?? 'null',
+        'nextStep': next.stepIndex.toString(),
+        'nextTab': next.currentStep?.tab.name ?? 'null',
+        'currentBranchIndex':
+            widget.navigationShell.currentIndex.toString(),
+      });
+      if (prev != null && prev.active && !next.active) {
+        AppLogger.tour.i('shellListener:branch:tourJustEnded');
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (!mounted) return;
+          final location = GoRouterState.of(context).uri.toString();
+          if (location.startsWith('/profile')) {
+            AppLogger.tour.i('shellListener:popProfile');
+            final goRouter = GoRouter.of(context);
+            if (goRouter.canPop()) goRouter.pop();
+          }
+        });
+        return;
+      }
+      if (!next.active) return;
+      final step = next.currentStep;
+      if (step == null) return;
+      final wanted = switch (step.tab) {
+        TourTab.home => 0,
+        TourTab.battles => 1,
+        TourTab.profile => 0, // profile is a child of the Home branch
+      };
+      if (widget.navigationShell.currentIndex != wanted) {
+        AppLogger.tour.i('shellListener:goBranch', fields: {
+          'from': widget.navigationShell.currentIndex.toString(),
+          'to': wanted.toString(),
+          'tab': step.tab.name,
+        });
+        widget.navigationShell.goBranch(wanted);
+      }
+      // Profile step needs an explicit push on top of the Home branch.
+      // Other steps stay on the branch root (/home, /battles). If the
+      // user is already on /profile from a previous step, this push is
+      // a no-op — the router coalesces same-location navigations.
+      if (step.tab == TourTab.profile) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (!mounted) return;
+          final location = GoRouterState.of(context).uri.toString();
+          if (!location.startsWith('/profile')) {
+            context.push('/profile');
+          }
+        });
+      } else {
+        // Non-profile step: if a pushed /profile is still on top from
+        // the previous step, pop it so the target on Home / Battles
+        // becomes reachable + measurable.
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (!mounted) return;
+          final location = GoRouterState.of(context).uri.toString();
+          if (location.startsWith('/profile')) {
+            final goRouter = GoRouter.of(context);
+            if (goRouter.canPop()) goRouter.pop();
+          }
+        });
+      }
+    });
+
     final trackActive = ref.watch(isTrackActiveProvider);
     return PermissionGate(
       child: FriendRequestToastHost(
@@ -493,31 +672,74 @@ class _MainShellState extends ConsumerState<MainShell>
         child: MissionPosterHost(
           child: XPCelebrationHost(
             child: SubscriptionWelcomeGate(
-              child: Scaffold(
-              body: shell,
+              child: Stack(
+                fit: StackFit.expand,
+                children: [
+                  // Scaffold below — the overlay above must cover the
+                  // bottom nav too, otherwise the user can still tap
+                  // Home / Battles / Ranks tabs mid-tour and escape.
+                  Scaffold(
+              body: NotificationListener<UserScrollNotification>(
+                onNotification: _handleShellScroll,
+                child: shell,
+              ),
               extendBody: true,
               // FAB removed: Track now lives in the bottom nav as a
               // dedicated tab. The `trackActive` flag is still surfaced
               // inside the Track tab itself (pulsing icon when a
               // session is live).
-              bottomNavigationBar: _BottomNavBar(
-                trackActive: trackActive,
-                currentIndex: shell.currentIndex,
-                onTap: (index) {
-                  // v1 gate — Clan tab (index 3) is "Coming Soon".
-                  // Show the fade-out toast and DON'T switch tabs so
-                  // the user stays on whichever tab they were viewing.
-                  if (index == 3) {
-                    showComingSoonSheet(context, title: 'Clan');
-                    return;
-                  }
-                  shell.goBranch(
-                    index,
-                    initialLocation: index == shell.currentIndex,
-                  );
-                },
+              //
+              // AnimatedBuilder subscribes to `_navExpand` so the nav
+              // rebuilds each frame while the scroll-responsive
+              // expand/compress animation is running — scoped to the
+              // nav alone, so the rest of the shell tree isn't dirty.
+              // RepaintBoundary isolates the nav-bar's expand/compress
+              // animation to its own compositing layer so the 240 ms
+              // of scroll-driven rebuilds don't invalidate the paint
+              // region of the scrollable Home / Battles / Ranks
+              // content underneath. Direct root cause of the pre-fix
+              // stutter (2026-09-14): without this, every animation
+              // frame marked the bottom slot dirty for paint, which
+              // cascaded into the shell body's raster pipeline while
+              // it was already busy scrolling.
+              bottomNavigationBar: RepaintBoundary(
+                child: AnimatedBuilder(
+                  animation: _navExpand,
+                  builder: (context, _) => _BottomNavBar(
+                    expandT: _navExpand.value,
+                    trackActive: trackActive,
+                    currentIndex: shell.currentIndex,
+                    onTap: (index) {
+                      // 2026-09-14: tap-to-expand mirrors scroll-up
+                      // so the user always sees the nav at full size
+                      // as they're interacting with it. Fires FIRST
+                      // so the expand animation runs concurrently
+                      // with the branch switch — feels like the tapped
+                      // tab pulls the whole bar back up.
+                      _expandNav();
+                      // v1 gate — Clan tab (index 3) is "Coming Soon".
+                      // Show the fade-out toast and DON'T switch tabs so
+                      // the user stays on whichever tab they were viewing.
+                      if (index == 3) {
+                        showComingSoonSheet(context, title: 'Clan');
+                        return;
+                      }
+                      shell.goBranch(
+                        index,
+                        initialLocation: index == shell.currentIndex,
+                      );
+                    },
+                  ),
+                ),
               ),
             ),
+                  // ── Second child of the outer Stack: the tour ────
+                  // Sits above BOTH body and bottomNavigationBar so
+                  // tab taps are blocked while a step is showing.
+                  // No-op SizedBox when the tour isn't active.
+                  const OnboardingTourOverlay(),
+                ],
+              ),
           ),
         ),
       ),
@@ -552,18 +774,24 @@ class _InstagramNavStyle {
   /// Whether to wrap the chip in a [BackdropFilter]. Only true on iOS.
   static bool get useBlur => Platform.isIOS;
 
-  /// Fill colour for the chip surface. Solid opaque on Android, low-
-  /// alpha translucent on iOS so the blur beneath it shows through.
+  /// Fill colour for the chip surface. Two-tier translucence:
+  ///   • iOS     — 0.55 alpha over a real `BackdropFilter` blur.
+  ///     Reads as material (systemUltraThinMaterial equivalent).
+  ///   • Android — 0.92 alpha, NO blur. Reads as a subtle
+  ///     translucent pill without paying `BackdropFilter`'s 3-5 ms
+  ///     per-frame composite cost (which would re-introduce the
+  ///     scroll stutter we just fixed with the RepaintBoundary).
+  ///     92 % is high enough that the underlying content never
+  ///     leaks busy detail through the pill — just a hint of the
+  ///     background tone bleeds in so it doesn't read as a slab.
+  ///     2026-09-14 Option A: user chose translucent-without-blur
+  ///     as the Android glass compromise.
   static Color fill(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     if (Platform.isIOS) {
-      // systemUltraThinMaterial equivalent — very subtle vibrancy.
-      // 55% alpha on top of a 20-sigma blur reads as "material" rather
-      // than "translucent solid" per Apple's iOS 17 vocabulary.
       return scheme.surface.withValues(alpha: 0.55);
     }
-    // Android — Instagram uses solid opaque bar chrome (no material).
-    return scheme.surface;
+    return scheme.surface.withValues(alpha: 0.92);
   }
 
   /// Hairline outline for chip edge. Android gets a subtle border for
@@ -594,97 +822,197 @@ class _InstagramNavStyle {
   static const double iosBlurSigma = 24.0;
 }
 
+/// Unified bottom nav — one pill, 5 items, scroll-responsive size.
+///
+/// 2026-09-14 rewrite: previously a split three-block layout
+/// `[Ranks circle] [Battles·Home·Track pill] [Clan circle]`. Merged
+/// into ONE pill per user request with visual order:
+///
+///   `Ranks · Track · Home · Battles · Clan`
+///
+/// Branch indices are UNCHANGED (routes.dart still hands out
+/// `Home=0, Battles=1, Track=2, Clan=3, Ranks=4`) — only the visual
+/// order shifts. Same Instagram-adaptive chrome as before (Android
+/// solid opaque + hairline border, iOS translucent + BackdropFilter
+/// blur), same active-icon pop animation, same Track live-dot, same
+/// Clan Coming-Soon gate handled at MainShell's `onTap` callback.
+///
+/// [expandT] drives Instagram-style scroll-responsive sizing:
+///   • 1.0 → fully expanded: pill height 62, radius 34, icon 28,
+///     horizontal padding 18, inter-icon gap 10
+///   • 0.0 → fully compressed: pill height 46, radius 26, icon 22,
+///     horizontal padding 10, inter-icon gap 2
+/// MainShell owns the AnimationController that feeds this value;
+/// scroll up on any Scrollable in the shell body expands, scroll
+/// down compresses.
 class _BottomNavBar extends StatelessWidget {
   final int currentIndex;
   final ValueChanged<int> onTap;
 
-  /// When true, the Track tab's icon switches to its "live" variant
-  /// (running figure + accent dot) so the user can see a session is in
-  /// flight from any tab.
+  /// When true, the Track tab's icon shows a green live-dot in its
+  /// top-right corner so the user can see a session is in flight
+  /// from any tab.
   final bool trackActive;
+
+  /// 0 = fully compressed, 1 = fully expanded. Continuous during the
+  /// scroll-responsive animation.
+  final double expandT;
 
   const _BottomNavBar({
     required this.currentIndex,
     required this.onTap,
     required this.trackActive,
+    required this.expandT,
   });
 
   // Branch indices — MUST match the StatefulShellRoute branch order
-  // in routes.dart. Visual order in this bar (Ranks | Battles Home
-  // Track | Clan) is decoupled from these indices; the shell only
-  // cares which branch index we hand it.
+  // in routes.dart. Visual arrangement is separate (see build()).
   static const int _kHome     = 0;
   static const int _kBattles  = 1;
   static const int _kTrack    = 2;
   static const int _kClan     = 3;
   static const int _kRanks    = 4;
 
+  // Fixed pill dimensions — the pill's LAYOUT stays constant across
+  // every frame of the scroll-responsive animation. Only a single
+  // Transform.scale (in build() below) changes per frame — that's
+  // paint work, not layout. Instagram's compressed state is roughly
+  // 78 % of expanded, matched by [_scaleCompressed].
+  //
+  // 2026-09-14 v2 rewrite: the previous version lerp'd height,
+  // radius, padding, gap, cell width, and icon size independently
+  // — each change invalidated LAYOUT (not just paint), cascading
+  // re-measure through the whole subtree every one of ~15 animation
+  // frames per direction change. RepaintBoundary isolates paint but
+  // does NOT stop layout invalidation from bubbling. Swapping the
+  // property lerps for a single Transform.scale drops layout work
+  // to zero during the animation and keeps the visual identical
+  // (everything scales proportionally, same as scaling the endpoint
+  // sizes independently would have looked at each t).
+  static const double _pillHeight = 62;
+  static const double _iconSize = 28;
+  static const double _pillRadius = 34;
+  static const double _pillHorizPad = 18;
+  static const double _pillGap = 10;
+
+  /// Scale factor at fully-compressed state. Chosen so the visually
+  /// scaled pill matches the pre-rewrite compressed endpoints
+  /// (height ≈ 46 → 62 × 0.78 ≈ 48; icon 22 → 28 × 0.78 ≈ 22).
+  static const double _scaleCompressed = 0.78;
+
   @override
   Widget build(BuildContext context) {
-    // Three-block floating layout per the redesigned spec:
-    //   [ Ranks (circle) ] [ Battles · Home · Track (pill) ] [ Clan (circle) ]
-    //
-    // The outer container is a transparent SafeArea insetter — the
-    // actual "chrome" lives on each of the three blocks so they read
-    // as detached, machined controls rather than a monolithic bar.
+    // Single interpolated value — Transform.scale factor for the
+    // outer pill. Everything else uses constants.
+    final scale = _scaleCompressed + (1.0 - _scaleCompressed) * expandT;
+
+    // Visual order: Ranks · Track · Home · Battles · Clan. Home in
+    // the geometric middle so the primary tab is thumb-central.
+    final items = <_PillItem>[
+      const _PillItem(
+        icon: Icons.leaderboard_outlined,
+        activeIcon: Icons.leaderboard,
+        label: 'Ranks',
+        branchIndex: _kRanks,
+      ),
+      _PillItem(
+        icon: Icons.directions_run_outlined,
+        activeIcon: Icons.directions_run,
+        label: 'Track',
+        branchIndex: _kTrack,
+        liveDot: trackActive,
+      ),
+      const _PillItem(
+        icon: Icons.home_outlined,
+        activeIcon: Icons.home,
+        label: 'Home',
+        branchIndex: _kHome,
+      ),
+      _PillItem(
+        icon: MdiIcons.swordCross,
+        activeIcon: MdiIcons.swordCross,
+        label: 'Battles',
+        branchIndex: _kBattles,
+      ),
+      const _PillItem(
+        icon: Icons.shield_outlined,
+        activeIcon: Icons.shield,
+        label: 'Clan',
+        branchIndex: _kClan,
+      ),
+    ];
+
+    Widget pill = Container(
+      height: _pillHeight,
+      padding: const EdgeInsets.symmetric(horizontal: _pillHorizPad),
+      decoration: BoxDecoration(
+        color: _InstagramNavStyle.fill(context),
+        borderRadius: BorderRadius.circular(_pillRadius),
+        border: _InstagramNavStyle.border(context),
+        boxShadow: _InstagramNavStyle.shadows(),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          for (int i = 0; i < items.length; i++) ...[
+            if (i > 0) const SizedBox(width: _pillGap),
+            _NavCell(
+              item: items[i],
+              iconSize: _iconSize,
+              isActive: currentIndex == items[i].branchIndex,
+              onTap: () => onTap(items[i].branchIndex),
+            ),
+          ],
+        ],
+      ),
+    );
+
+    // iOS-only backdrop blur — clipped to the pill's rounded shape so
+    // the blur mask matches the chip edge. Blur sigma AND clip radius
+    // are both constant now (pill's layout no longer animates), so
+    // BackdropFilter re-renders identically each frame — the
+    // Transform.scale below is applied AFTER blur composition, which
+    // scales the already-blurred layer instead of re-blurring at each
+    // size. This is cheaper AND avoids the stepped-blur artifacting
+    // that would come from re-blurring at fractional sizes each frame.
+    if (_InstagramNavStyle.useBlur) {
+      pill = ClipRRect(
+        borderRadius: BorderRadius.circular(_pillRadius),
+        child: BackdropFilter(
+          filter: ImageFilter.blur(
+            sigmaX: _InstagramNavStyle.iosBlurSigma,
+            sigmaY: _InstagramNavStyle.iosBlurSigma,
+          ),
+          child: pill,
+        ),
+      );
+    }
+
+    // The ONLY thing that changes per animation frame is this scale
+    // factor. Transform.scale is a paint-time matrix multiply — no
+    // layout invalidation, no constraint propagation, no re-measure
+    // of any child. The whole widget subtree below has identical
+    // layout every frame. Combined with the outer RepaintBoundary in
+    // MainShell.build(), this animation costs a few microseconds per
+    // frame in raster + a single GPU composite.
     return SafeArea(
       top: false,
       minimum: const EdgeInsets.only(bottom: 8),
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+        // Row + mainAxisAlignment.center (NOT Align.center) — Align
+        // expands to fill both axes of the loosely-constrained bottom
+        // slot, drifting the pill to the middle of the screen. A Row
+        // takes only the pill's intrinsic height, keeping it anchored
+        // at the bottom while still centred horizontally.
         child: Row(
-          crossAxisAlignment: CrossAxisAlignment.center,
+          mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            // LEFT — Ranks single circle.
-            _CircleNavButton(
-              icon: Icons.leaderboard_outlined,
-              activeIcon: Icons.leaderboard,
-              tooltip: 'Ranks',
-              isActive: currentIndex == _kRanks,
-              onTap: () => onTap(_kRanks),
-            ),
-
-            const SizedBox(width: 10),
-
-            // CENTER — Battles | Home | Track pill. Home visually
-            // middle. Expanded so the pill fills the remaining width.
-            Expanded(
-              child: _PillNavGroup(
-                items: [
-                  _PillItem(
-                    icon: MdiIcons.swordCross,
-                    activeIcon: MdiIcons.swordCross,
-                    label: 'Battles',
-                    branchIndex: _kBattles,
-                  ),
-                  const _PillItem(
-                    icon: Icons.home_outlined,
-                    activeIcon: Icons.home,
-                    label: 'Home',
-                    branchIndex: _kHome,
-                  ),
-                  _PillItem(
-                    icon: Icons.directions_run_outlined,
-                    activeIcon: Icons.directions_run,
-                    label: 'Track',
-                    branchIndex: _kTrack,
-                    liveDot: trackActive,
-                  ),
-                ],
-                currentIndex: currentIndex,
-                onTap: onTap,
-              ),
-            ),
-
-            const SizedBox(width: 10),
-
-            // RIGHT — Clan single circle.
-            _CircleNavButton(
-              icon: Icons.shield_outlined,
-              activeIcon: Icons.shield,
-              tooltip: 'Clan',
-              isActive: currentIndex == _kClan,
-              onTap: () => onTap(_kClan),
+            Transform.scale(
+              scale: scale,
+              alignment: Alignment.center,
+              child: pill,
             ),
           ],
         ),
@@ -693,121 +1021,7 @@ class _BottomNavBar extends StatelessWidget {
   }
 }
 
-/// Standalone circular nav button — used for Ranks (left) and Clan
-/// (right). Same glass-tinted surface + soft shadow as the pill so
-/// the three blocks read as a set even when detached.
-class _CircleNavButton extends StatefulWidget {
-  final IconData icon;
-  final IconData activeIcon;
-  final String tooltip;
-  final bool isActive;
-  final VoidCallback onTap;
-
-  const _CircleNavButton({
-    required this.icon,
-    required this.activeIcon,
-    required this.tooltip,
-    required this.isActive,
-    required this.onTap,
-  });
-
-  @override
-  State<_CircleNavButton> createState() => _CircleNavButtonState();
-}
-
-class _CircleNavButtonState extends State<_CircleNavButton>
-    with SingleTickerProviderStateMixin {
-  late final AnimationController _pop;
-
-  @override
-  void initState() {
-    super.initState();
-    _pop = AnimationController(vsync: this, duration: Motion.d.fast);
-  }
-
-  @override
-  void didUpdateWidget(covariant _CircleNavButton old) {
-    super.didUpdateWidget(old);
-    if (!old.isActive && widget.isActive) _pop.forward(from: 0);
-  }
-
-  @override
-  void dispose() {
-    _pop.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    // Circle chrome is IDENTICAL whether active or inactive — only the
-    // icon colour changes. Instagram's per-platform treatment lives in
-    // [_InstagramNavStyle]:
-    //   • Android → solid opaque surface, 1-px hairline border, no
-    //     shadow.
-    //   • iOS     → translucent surface over a real BackdropFilter blur
-    //     (systemUltraThinMaterial equivalent), no border, no shadow.
-    final activeFg = AppColors.primary;
-    final inactiveFg =
-        AppColors.isLight ? Colors.black.withValues(alpha: 0.75) : Colors.white70;
-
-    Widget chip = Container(
-      width: 56,
-      height: 56,
-      decoration: BoxDecoration(
-        color: _InstagramNavStyle.fill(context),
-        shape: BoxShape.circle,
-        border: _InstagramNavStyle.border(context),
-        boxShadow: _InstagramNavStyle.shadows(),
-      ),
-      alignment: Alignment.center,
-      child: AnimatedBuilder(
-        animation: _pop,
-        builder: (_, child) {
-          final t = _pop.value;
-          final pop = t == 0 ? 0.0 : 4 * t * (1 - t) * 0.15;
-          return Transform.scale(scale: 1.0 + pop, child: child);
-        },
-        // Only the icon colour transitions on active-state change.
-        child: AnimatedSwitcher(
-          duration: Motion.d.fast,
-          child: Icon(
-            widget.isActive ? widget.activeIcon : widget.icon,
-            key: ValueKey(widget.isActive),
-            color: widget.isActive ? activeFg : inactiveFg,
-            size: 24,
-          ),
-        ),
-      ),
-    );
-
-    // iOS-only backdrop blur — real material behind the chip so
-    // content underneath softens the way Instagram's UITabBar does.
-    // ClipOval matches the chip's circular shape so the blurred region
-    // doesn't leak past the chip edge.
-    if (_InstagramNavStyle.useBlur) {
-      chip = ClipOval(
-        child: BackdropFilter(
-          filter: ImageFilter.blur(
-            sigmaX: _InstagramNavStyle.iosBlurSigma,
-            sigmaY: _InstagramNavStyle.iosBlurSigma,
-          ),
-          child: chip,
-        ),
-      );
-    }
-
-    return GestureDetector(
-      onTap: widget.onTap,
-      behavior: HitTestBehavior.opaque,
-      child: Tooltip(
-        message: widget.tooltip,
-        child: chip,
-      ),
-    );
-  }
-}
-
-/// Descriptor for a pill entry — Battles / Home / Track.
+/// Descriptor for one item in the unified pill nav.
 class _PillItem {
   final IconData icon;
   final IconData activeIcon;
@@ -823,83 +1037,30 @@ class _PillItem {
   });
 }
 
-/// Centre pill holding 3 tabs. The active tab lights up with a violet
-/// tint chip that morphs smoothly between positions via a shared
-/// AnimatedContainer background inside each cell.
-class _PillNavGroup extends StatelessWidget {
-  final List<_PillItem> items;
-  final int currentIndex;
-  final ValueChanged<int> onTap;
-
-  const _PillNavGroup({
-    required this.items,
-    required this.currentIndex,
-    required this.onTap,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    // Same Instagram-adaptive chrome as [_CircleNavButton]:
-    //   • Android → solid opaque fill, hairline border, no shadow.
-    //   • iOS     → translucent fill over a real BackdropFilter blur,
-    //     no border, no shadow.
-    Widget pill = Container(
-      height: 56,
-      padding: const EdgeInsets.all(4),
-      decoration: BoxDecoration(
-        color: _InstagramNavStyle.fill(context),
-        borderRadius: BorderRadius.circular(32),
-        border: _InstagramNavStyle.border(context),
-        boxShadow: _InstagramNavStyle.shadows(),
-      ),
-      child: Row(
-        children: items.map((item) {
-          return Expanded(
-            child: _PillCell(
-              item: item,
-              isActive: currentIndex == item.branchIndex,
-              onTap: () => onTap(item.branchIndex),
-            ),
-          );
-        }).toList(),
-      ),
-    );
-
-    // iOS-only backdrop blur — clipped to the pill's rounded shape so
-    // the blur mask matches the chip edge.
-    if (_InstagramNavStyle.useBlur) {
-      pill = ClipRRect(
-        borderRadius: BorderRadius.circular(32),
-        child: BackdropFilter(
-          filter: ImageFilter.blur(
-            sigmaX: _InstagramNavStyle.iosBlurSigma,
-            sigmaY: _InstagramNavStyle.iosBlurSigma,
-          ),
-          child: pill,
-        ),
-      );
-    }
-
-    return pill;
-  }
-}
-
-class _PillCell extends StatefulWidget {
+/// One tap cell inside the unified pill. Renders the icon at the
+/// caller-supplied [iconSize] (interpolated by the scroll-responsive
+/// animation in [_BottomNavBar]) and plays a per-cell "pop" scale on
+/// becoming active. Same visual grammar as the pre-merge [_PillCell]
+/// — no filled violet chip, only an icon-colour tint on active — so
+/// the merge is visually invisible apart from the layout change.
+class _NavCell extends StatefulWidget {
   final _PillItem item;
+  final double iconSize;
   final bool isActive;
   final VoidCallback onTap;
 
-  const _PillCell({
+  const _NavCell({
     required this.item,
+    required this.iconSize,
     required this.isActive,
     required this.onTap,
   });
 
   @override
-  State<_PillCell> createState() => _PillCellState();
+  State<_NavCell> createState() => _NavCellState();
 }
 
-class _PillCellState extends State<_PillCell>
+class _NavCellState extends State<_NavCell>
     with SingleTickerProviderStateMixin {
   late final AnimationController _pop;
 
@@ -910,7 +1071,7 @@ class _PillCellState extends State<_PillCell>
   }
 
   @override
-  void didUpdateWidget(covariant _PillCell old) {
+  void didUpdateWidget(covariant _NavCell old) {
     super.didUpdateWidget(old);
     if (!old.isActive && widget.isActive) _pop.forward(from: 0);
   }
@@ -926,53 +1087,67 @@ class _PillCellState extends State<_PillCell>
     final activeFg = AppColors.primary;
     final inactiveFg =
         AppColors.isLight ? Colors.black.withValues(alpha: 0.72) : Colors.white70;
+
+    // Cell hit-target width scales with icon size + tap padding so
+    // the pill's overall width naturally shrinks with the icons
+    // during compress. Minimum tap area stays comfortable even at
+    // the smallest icon (22 dp icon + 22 dp padding = 44 dp cell).
+    final cellWidth = widget.iconSize + 22;
+
     return GestureDetector(
       onTap: widget.onTap,
       behavior: HitTestBehavior.opaque,
-      // No filled violet chip on active — matches the reference nav
-      // (icon-only tint). The parent pill provides the background;
-      // the cell is a transparent tap target.
-      child: Container(
-        alignment: Alignment.center,
-        child: AnimatedBuilder(
-          animation: _pop,
-          builder: (_, child) {
-            final t = _pop.value;
-            final pop = t == 0 ? 0.0 : 4 * t * (1 - t) * 0.15;
-            return Transform.scale(scale: 1.0 + pop, child: child);
-          },
-          child: Stack(
-            clipBehavior: Clip.none,
-            children: [
-              AnimatedSwitcher(
-                duration: Motion.d.fast,
-                child: Icon(
-                  widget.isActive ? widget.item.activeIcon : widget.item.icon,
-                  key: ValueKey(widget.isActive),
-                  color: widget.isActive ? activeFg : inactiveFg,
-                  size: 24,
-                ),
-              ),
-              if (widget.item.liveDot)
-                Positioned(
-                  top: -2,
-                  right: -4,
-                  child: Container(
-                    width: 9,
-                    height: 9,
-                    decoration: BoxDecoration(
-                      color: AppColors.success,
-                      shape: BoxShape.circle,
-                      boxShadow: [
-                        BoxShadow(
-                          color: AppColors.success.withValues(alpha: 0.6),
-                          blurRadius: 6,
-                        ),
-                      ],
-                    ),
+      child: SizedBox(
+        width: cellWidth,
+        child: Center(
+          child: AnimatedBuilder(
+            animation: _pop,
+            builder: (_, child) {
+              final t = _pop.value;
+              // Perf: 99% of the time _pop is at rest (0.0). Only
+              // wrap in Transform.scale during the brief post-tap
+              // bump — avoids a Matrix4 identity allocation on every
+              // scroll-animation frame across 5 cells.
+              if (t == 0) return child!;
+              final pop = 4 * t * (1 - t) * 0.15;
+              return Transform.scale(scale: 1.0 + pop, child: child);
+            },
+            child: Stack(
+              clipBehavior: Clip.none,
+              children: [
+                AnimatedSwitcher(
+                  duration: Motion.d.fast,
+                  // Key on (branchIndex, isActive). Icon SIZE changes
+                  // from the scroll-responsive interpolation must NOT
+                  // trigger a crossfade — only active-state flips do.
+                  child: Icon(
+                    widget.isActive ? widget.item.activeIcon : widget.item.icon,
+                    key: ValueKey('${widget.item.branchIndex}_${widget.isActive}'),
+                    color: widget.isActive ? activeFg : inactiveFg,
+                    size: widget.iconSize,
                   ),
                 ),
-            ],
+                if (widget.item.liveDot)
+                  Positioned(
+                    top: -2,
+                    right: -4,
+                    child: Container(
+                      width: 9,
+                      height: 9,
+                      decoration: BoxDecoration(
+                        color: AppColors.success,
+                        shape: BoxShape.circle,
+                        boxShadow: [
+                          BoxShadow(
+                            color: AppColors.success.withValues(alpha: 0.6),
+                            blurRadius: 6,
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+              ],
+            ),
           ),
         ),
       ),

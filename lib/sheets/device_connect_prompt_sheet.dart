@@ -1,6 +1,9 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:hive/hive.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../config/colors.dart';
 import '../services/native_step_service.dart';
@@ -11,13 +14,15 @@ import '../widgets/bottom_sheet_handle.dart';
 /// smartwatch / fitness band / Health Connect–linked app so steps from
 /// non-phone workouts also count toward battles and streaks.
 ///
-/// **Discoverability, not a requirement.** The sheet fires ONCE ever
-/// (Hive-flagged), after the mandatory permissions primer + first-run
-/// health-setup wizard have both closed. Skip is a first-class action
-/// — swipe-to-dismiss, tap-outside, or the explicit "Skip for now"
-/// text button all mark the sheet as seen and it never re-fires
-/// automatically. Users who dismissed can always re-open it from
-/// Settings → Step tracking → Connect a device.
+/// **Discoverability, not a requirement.** The sheet fires ONCE PER
+/// USER on this device (Hive-flagged per uid — see [_shownKeyFor]),
+/// after the mandatory permissions primer + first-run health-setup
+/// wizard have both closed and the whole new-user signup flow has
+/// finished. Skip is a first-class action — swipe-to-dismiss,
+/// tap-outside, or the explicit "Skip for now" text button all mark
+/// the sheet as seen and it never re-fires automatically. Users who
+/// dismissed can always re-open it from Settings → Step tracking →
+/// Connect a device.
 ///
 /// Trigger predicate (all must hold — enforced by the caller,
 /// currently `_HomeScreenState._maybeShowDeviceConnectPrompt`):
@@ -25,7 +30,9 @@ import '../widgets/bottom_sheet_handle.dart';
 ///   • `PermissionGate.primerOpen == false`     (Almost Ready dismissed)
 ///   • `HealthSetupScreen.shouldShowFirstRunWizard() == false`
 ///   • `NoSourceGate.blockerOpen == false`      (no hard blocker up)
-///   • `shouldShow() == true`                   (Hive flag not set)
+///   • no XP celebration on screen              (signup bonus settled)
+///   • new-user tour neither running nor owed   (signup flow over)
+///   • `shouldShow() == true`                   (not seen by this uid)
 ///
 /// The prompt is deliberately OPTIONAL. If StepBattle can't count steps
 /// AT ALL (phone pedometer denied + no HC feeder + no GFit), the
@@ -35,20 +42,66 @@ import '../widgets/bottom_sheet_handle.dart';
 class DeviceConnectPromptSheet {
   DeviceConnectPromptSheet._();
 
-  /// Hive key: unix-ms timestamp the prompt was last dismissed. Any
-  /// non-null value means "user has seen this — don't auto-fire
-  /// again". Stored in the shared native-step Hive box so it survives
-  /// across app reinstalls only if Android's app-data survives (i.e.
-  /// it doesn't; a full uninstall clears this and the prompt fires
-  /// again on the next install's first Home mount, which is correct).
-  static const String _shownKey = 'device_connect_prompt_shown_at_ms';
+  /// Legacy install-wide Hive key (pre-2026-11-02): a single unix-ms
+  /// timestamp with no user attached. Kept only so [shouldShow] can
+  /// migrate it — never written again. See [_shownKeyFor].
+  static const String _legacyShownKey = 'device_connect_prompt_shown_at_ms';
+
+  /// Per-user Hive key: unix-ms timestamp this uid dismissed the
+  /// prompt. Any non-null value means "this user has seen it — don't
+  /// auto-fire for them again".
+  ///
+  /// **Why per-user (2026-11-02).** This used to be one install-wide
+  /// key, which made the prompt once-per-install. That was wrong once
+  /// the sheet became the tail of the new-user signup flow: the tour
+  /// it now waits behind is keyed per-user (`profiles.has_completed_tour`),
+  /// so on a device where anyone had already dismissed the prompt, a
+  /// newly-created account ran the whole tour and then got nothing.
+  /// Testers creating successive accounts saw it exactly once, ever,
+  /// and so would a real user handing their phone to a family member.
+  ///
+  /// Still Hive-local rather than a server column: the nudge is about
+  /// the DEVICE's capabilities ("connect the watch you're wearing"),
+  /// so it's correct for it to re-ask the same user on a new phone.
+  /// That's the opposite of the tour, which is about the app and
+  /// rightly never repeats.
+  static String _shownKeyFor(String uid) => '$_legacyShownKey::$uid';
+
+  /// Signed-in uid, or null if there's no session. Read live rather
+  /// than passed in so the two call sites below stay parameterless.
+  static String? get _uid => Supabase.instance.client.auth.currentUser?.id;
 
   /// Whether the sheet should auto-fire on the next Home mount.
-  /// Returns false once the user has dismissed it via any path.
+  /// Returns false once THIS user has dismissed it via any path.
   static bool shouldShow() {
+    final uid = _uid;
+    // No session → nothing to attribute a dismissal to. Defer; the
+    // caller re-checks on the next Home mount.
+    if (uid == null) return false;
     try {
       final box = Hive.box(NativeStepService.boxName);
-      return box.get(_shownKey) == null;
+      if (box.get(_shownKeyFor(uid)) != null) return false;
+
+      // One-time migration off the install-wide key. Whoever is signed
+      // in the first time we look after the upgrade inherits it, which
+      // keeps the ~140 existing users who already dismissed the prompt
+      // from being re-prompted. Every OTHER uid on the same install
+      // starts clean — the whole point of the rekey.
+      //
+      // The write is a side effect inside a predicate, which is worth
+      // being explicit about: Hive's `put` updates the in-memory map
+      // synchronously and flushes to disk after, so the very next
+      // `shouldShow()` in this session already reads the new value.
+      // Unawaited for that reason — there is nothing to wait for.
+      final legacy = box.get(_legacyShownKey);
+      if (legacy != null) {
+        AppLogger.permission.i('deviceConnectPrompt:legacyKeyClaimed',
+            fields: {'uid': uid});
+        unawaited(box.put(_shownKeyFor(uid), legacy));
+        unawaited(box.delete(_legacyShownKey));
+        return false;
+      }
+      return true;
     } catch (_) {
       // Defensive — if Hive isn't ready for some reason, don't crash;
       // just skip the prompt. It'll show on a later mount.
@@ -56,14 +109,24 @@ class DeviceConnectPromptSheet {
     }
   }
 
-  /// Marks the sheet as shown. Fires from every dismissal path so a
-  /// swipe-down + a Skip tap + a Set-up tap all have the same "don't
-  /// re-fire" semantic.
+  /// Marks the sheet as shown for the current user. Fires from every
+  /// dismissal path so a swipe-down + a Skip tap + a Set-up tap all
+  /// have the same "don't re-fire" semantic.
   static Future<void> markShown() async {
+    final uid = _uid;
+    if (uid == null) {
+      // Can't attribute the dismissal, so don't record one — the
+      // prompt re-fires on a later mount rather than being silently
+      // burned for whoever signs in next.
+      AppLogger.permission.w('deviceConnectPrompt:mark_skipped_no_uid');
+      return;
+    }
     try {
       final box = Hive.box(NativeStepService.boxName);
-      await box.put(_shownKey, DateTime.now().millisecondsSinceEpoch);
-      AppLogger.permission.i('deviceConnectPrompt:marked_shown');
+      await box.put(
+          _shownKeyFor(uid), DateTime.now().millisecondsSinceEpoch);
+      AppLogger.permission
+          .i('deviceConnectPrompt:marked_shown', fields: {'uid': uid});
     } catch (e) {
       AppLogger.permission.w('deviceConnectPrompt:mark_failed',
           fields: {'err': e.toString()});

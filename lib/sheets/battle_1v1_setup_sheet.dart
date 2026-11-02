@@ -2,6 +2,9 @@
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../config/colors.dart';
+import '../features/onboarding_tour/tour_controller.dart';
+import '../features/onboarding_tour/tour_step.dart';
+import '../features/onboarding_tour/tour_target.dart';
 import '../models/battle_model.dart';
 import '../models/user_model.dart';
 import '../providers/auth_provider.dart';
@@ -10,6 +13,7 @@ import '../providers/user_provider.dart';
 import '../services/battle_service.dart';
 import '../widgets/avatar_circle.dart';
 import '../widgets/battle_duration_picker.dart';
+import '../widgets/battle_name_field.dart';
 import '../widgets/battle_stake_picker.dart';
 import '../widgets/battle_visibility_toggle.dart';
 import '../widgets/bottom_sheet_handle.dart';
@@ -34,7 +38,46 @@ class Battle1v1SetupSheet extends ConsumerStatefulWidget {
   /// challenging" decision is already made, don't ask again.
   final UserModel? initialOpponent;
 
-  const Battle1v1SetupSheet({super.key, this.initialOpponent});
+  /// Extra bottom inset applied to the ListView / CTA container so the
+  /// Send Battle Invite button clears the shell's own bottom nav bar
+  /// during the tour flow. Zero for normal user-initiated opens.
+  final double extraBottomInset;
+
+  const Battle1v1SetupSheet({
+    super.key,
+    this.initialOpponent,
+    this.extraBottomInset = 0,
+  });
+
+  /// Opens the sheet. Tour opens with `useRootNavigator: false` so
+  /// the sheet renders inside the shell (under our overlay), and
+  /// `barrierColor: Colors.transparent` so the sheet's default scrim
+  /// doesn't stack with the tour's dim. Tour also passes
+  /// `useSafeArea: true` so the sheet respects the system nav inset
+  /// — and a nonzero `extraBottomInset` so the Create/Send Invite
+  /// button sits above the shell's OWN bottom nav bar (which
+  /// MediaQuery.viewPadding does NOT count).
+  static Future<void> show(
+    BuildContext context, {
+    bool useRootNavigator = true,
+    Color? barrierColor,
+    bool useSafeArea = false,
+    double extraBottomInset = 0,
+    UserModel? initialOpponent,
+  }) {
+    return showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      useRootNavigator: useRootNavigator,
+      useSafeArea: useSafeArea,
+      backgroundColor: Colors.transparent,
+      barrierColor: barrierColor,
+      builder: (_) => Battle1v1SetupSheet(
+        initialOpponent: initialOpponent,
+        extraBottomInset: extraBottomInset,
+      ),
+    );
+  }
 
   @override
   ConsumerState<Battle1v1SetupSheet> createState() =>
@@ -44,11 +87,89 @@ class Battle1v1SetupSheet extends ConsumerStatefulWidget {
 class _Battle1v1SetupSheetState extends ConsumerState<Battle1v1SetupSheet> {
   UserModel? _selectedOpponent;
 
+  /// Optional user-provided battle name (2026-09-04, migration 0061).
+  /// Controller so we can `.text.trim()` at submit + `.dispose()` on
+  /// unmount. Empty text → no name written (default majority state).
+  final _nameCtl = TextEditingController();
+
+  /// Cached notifier for [tourNextInterceptorProvider]. Populated in
+  /// [didChangeDependencies] so [dispose] can deregister the
+  /// interceptors without touching `ref` (Riverpod disposes its ref
+  /// before `State.dispose` runs).
+  StateController<Map<TourTargetId, Future<void> Function()>>?
+      _interceptorController;
+
   @override
   void initState() {
     super.initState();
     _selectedOpponent = widget.initialOpponent;
+    // Register Next-tap interceptors so tapping Next on the tour card
+    // during 1v1 steps 8 + 12 is equivalent to tapping the underlying
+    // "+ Select Opponent" and "Send Battle Invite" buttons. Deferred
+    // via microtask to keep provider mutations out of the initState
+    // frame.
+    Future.microtask(_registerTourInterceptors);
   }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _interceptorController ??=
+        ref.read(tourNextInterceptorProvider.notifier);
+  }
+
+  void _registerTourInterceptors() {
+    if (!mounted) return;
+    final notifier = ref.read(tourNextInterceptorProvider.notifier);
+    notifier.state = {
+      ...notifier.state,
+      TourTargetId.battle1v1Opponent: _handleTourNextAtChooseOpponent,
+      TourTargetId.battle1v1CreateButton: _handleTourNextAtSendInvite,
+    };
+  }
+
+  void _unregisterTourInterceptors() {
+    final controller = _interceptorController;
+    if (controller == null) return;
+    Future.microtask(() {
+      final current = controller.state;
+      final touchesUs =
+          current.containsKey(TourTargetId.battle1v1Opponent) ||
+              current.containsKey(TourTargetId.battle1v1CreateButton);
+      if (!touchesUs) return;
+      controller.state = {...current}
+        ..remove(TourTargetId.battle1v1Opponent)
+        ..remove(TourTargetId.battle1v1CreateButton);
+    });
+  }
+
+  Future<void> _handleTourNextAtChooseOpponent() async {
+    if (!mounted) return;
+    // Same code path as tapping "+ Select Opponent" — opens the
+    // AddFriendsSheet with the tour_add_friends route + transparent
+    // barrier + advances the tour to step 9. When the picker closes
+    // (via user pick, drag-down, OR another Next tap on the tour
+    // card that flips the target OFF addFriendsSheetRoot), the
+    // battles_screen addFriendsOutbound branch pops the sheet.
+    await _pickOpponent();
+  }
+
+  Future<void> _handleTourNextAtSendInvite() async {
+    if (!mounted) return;
+    // "Irrespective of whether Send Battle Invite is active or not"
+    // (2026-09-22 user request) — just close the sheet. The
+    // battles_screen post-await loop advances the tour past all
+    // 1v1 / Multi / Team sheets and lands on Discover.
+    Navigator.of(context).pop();
+  }
+
+  @override
+  void dispose() {
+    _unregisterTourInterceptors();
+    _nameCtl.dispose();
+    super.dispose();
+  }
+
   bool _creating = false;
   /// In-sheet error banner text. Shown ABOVE the primary button so it
   /// isn't swallowed by the bottom sheet's z-order (a ScaffoldMessenger
@@ -141,22 +262,67 @@ class _Battle1v1SetupSheetState extends ConsumerState<Battle1v1SetupSheet> {
   }
 
   Future<void> _pickOpponent() async {
-    await showModalBottomSheet(
+    // 2026-09-14 tour integration for the "Pick a friend" step
+    // (index 9, targetId addFriendsSheetRoot, sheet addFriends):
+    //
+    //   1. Push AddFriendsSheet FIRST (synchronous push into the nav
+    //      stack). The named route settings let the BattlesScreen
+    //      tour listener identify + pop this specific route later
+    //      via popUntil, without accidentally popping the underlying
+    //      Battle1v1SetupSheet.
+    //   2. Then advance the tour from step 8 → step 9. Order matters:
+    //      the listener's postFrame runs after the frame in which
+    //      the state changed, and by then AddFriendsSheet is already
+    //      the top of the nav — no race where the listener would
+    //      pop the wrong route.
+    //   3. After the sheet closes (via single-select instant confirm,
+    //      manual drag-down, or listener-driven pop from tour skip /
+    //      tour-advance), if we're still on step 9, advance to step
+    //      10 "Set the window".
+    final notifier = ref.read(tourControllerProvider.notifier);
+    final tourBefore = ref.read(tourControllerProvider);
+    final onChooseOpponentStep = tourBefore.active &&
+        tourBefore.currentStep?.targetId == TourTargetId.battle1v1Opponent;
+
+    final sheetFuture = showModalBottomSheet(
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
+      // Transparent barrier during tour so the overlay's spotlight
+      // dim remains the only backdrop — otherwise the two dims stack.
+      barrierColor: tourBefore.active ? Colors.transparent : null,
+      // Named route so the tour listener can popUntil this specific
+      // route without also closing Battle1v1SetupSheet underneath.
+      routeSettings: const RouteSettings(name: 'tour_add_friends'),
       builder: (_) => AddFriendsSheet(
         mode: FriendsSheetMode.picker,
         multiSelect: false,
         confirmLabel: 'Select Opponent',
         // AddFriendsSheet returns the picked list via onConfirm; in
-        // single-select mode it contains exactly one user.
+        // single-select mode it contains exactly one user AND the
+        // sheet auto-pops on tap (see AddFriendsSheet._toggleSelect).
         onConfirm: (selected) {
           if (selected.isEmpty) return;
           setState(() => _selectedOpponent = selected.first);
         },
       ),
     );
+
+    // Advance tour AFTER the sheet has been pushed onto the nav stack
+    // (see step 2 in the docstring above).
+    if (onChooseOpponentStep) {
+      notifier.next();
+    }
+
+    await sheetFuture;
+
+    if (!mounted) return;
+    final tourAfter = ref.read(tourControllerProvider);
+    if (tourAfter.active &&
+        tourAfter.currentStep?.targetId ==
+            TourTargetId.addFriendsSheetRoot) {
+      notifier.next();
+    }
   }
 
   /// Shown when the user taps a disabled control (opponent picker while
@@ -290,6 +456,11 @@ class _Battle1v1SetupSheetState extends ConsumerState<Battle1v1SetupSheet> {
       final service = ref.read(battleServiceProvider);
       final visibility =
           _isPublic ? BattleVisibility.public : BattleVisibility.private;
+      // Optional battle name — passed through as null when the field is
+      // empty so pre-migration DBs still accept the insert. The service
+      // clamps to 30 chars server-side.
+      final battleName =
+          _nameCtl.text.trim().isEmpty ? null : _nameCtl.text.trim();
       final result = window.recurring
           ? await service.createDailySeries(
               type: BattleType.oneVsOne,
@@ -299,6 +470,7 @@ class _Battle1v1SetupSheetState extends ConsumerState<Battle1v1SetupSheet> {
               createdBy: me.userId,
               visibility: visibility,
               stakeXp: _stakeXp,
+              name: battleName,
             )
           : await service.createBattle(
               type: BattleType.oneVsOne,
@@ -308,6 +480,7 @@ class _Battle1v1SetupSheetState extends ConsumerState<Battle1v1SetupSheet> {
               createdBy: me.userId,
               visibility: visibility,
               stakeXp: _stakeXp,
+              name: battleName,
             );
       if (mounted) {
         Navigator.pop(context);
@@ -382,7 +555,16 @@ class _Battle1v1SetupSheetState extends ConsumerState<Battle1v1SetupSheet> {
                   // user's own avatar + friendly name so the sheet
                   // mirrors how the opponent side reads once picked —
                   // no more anonymous "YOU / You" placeholder.
-                  Row(
+                  //
+                  // IntrinsicHeight makes both Expanded children the
+                  // same height (crossAxisAlignment.stretch), so the
+                  // creator (Laxmi) and opponent (+ Select Opponent)
+                  // cards render at identical size. Without it the
+                  // creator card shrank to its content while the
+                  // placeholder side stretched taller.
+                  IntrinsicHeight(
+                    child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
                       Expanded(
                         child: Builder(builder: (_) {
@@ -417,7 +599,11 @@ class _Battle1v1SetupSheetState extends ConsumerState<Battle1v1SetupSheet> {
                       // explaining why so users aren't just clicking
                       // dead pixels.
                       Expanded(
-                        child: GestureDetector(
+                        // TourTarget wraps the opponent picker card
+                        // for tour step 7.
+                        child: TourTarget(
+                          id: TourTargetId.battle1v1Opponent,
+                          child: GestureDetector(
                           // opaque so taps land on the transparent
                           // areas of the placeholder card too — without
                           // this, taps on empty space between the
@@ -444,8 +630,10 @@ class _Battle1v1SetupSheetState extends ConsumerState<Battle1v1SetupSheet> {
                             ),
                           ),
                         ),
+                        ),
                       ),
                     ],
+                  ),
                   ),
                   const SizedBox(height: 24),
 
@@ -487,26 +675,41 @@ class _Battle1v1SetupSheetState extends ConsumerState<Battle1v1SetupSheet> {
 
                   const SizedBox(height: 16),
 
+                  // Optional battle name — one line, 30-char cap. Empty
+                  // → no name saved and every surface falls back to the
+                  // derived "You vs X" title exactly as before this
+                  // feature landed (migration 0061, 2026-09-04).
+                  BattleNameField(controller: _nameCtl),
+
+                  const SizedBox(height: 16),
+
                   // Start + end time + duration chips. When public is
                   // on, minStart forces start >= now+1h so joiners have
-                  // time to discover the battle.
-                  BattleDurationPicker(
-                    minStart: _isPublic
-                        ? DateTime.now().add(const Duration(hours: 1))
-                        : null,
-                    onChanged: (window) {
-                      _window = window;
-                    },
+                  // time to discover the battle. TourTarget for step 8.
+                  TourTarget(
+                    id: TourTargetId.battle1v1Duration,
+                    child: BattleDurationPicker(
+                      minStart: _isPublic
+                          ? DateTime.now().add(const Duration(hours: 1))
+                          : null,
+                      onChanged: (window) {
+                        _window = window;
+                      },
+                    ),
                   ),
 
                   const SizedBox(height: 20),
 
                   // Stake picker — both sides commit this many XP; winner
                   // takes the whole pot. Min 100, no max (v2 economy).
-                  BattleStakePicker(
-                    value: _stakeXp,
-                    participantsCount: 2,
-                    onChanged: (v) => setState(() => _stakeXp = v),
+                  // TourTarget for step 9.
+                  TourTarget(
+                    id: TourTargetId.battle1v1Stake,
+                    child: BattleStakePicker(
+                      value: _stakeXp,
+                      participantsCount: 2,
+                      onChanged: (v) => setState(() => _stakeXp = v),
+                    ),
                   ),
 
                   const SizedBox(height: 20),
@@ -514,9 +717,12 @@ class _Battle1v1SetupSheetState extends ConsumerState<Battle1v1SetupSheet> {
               ),
             ),
 
-            // Bottom CTA
+            // Bottom CTA — extra bottom padding when the tour is
+            // driving the sheet so the Send Invite button clears the
+            // shell's own bottom nav bar (which MediaQuery.viewPadding
+            // doesn't count).
             Container(
-              padding: const EdgeInsets.fromLTRB(24, 16, 24, 32),
+              padding: EdgeInsets.fromLTRB(24, 16, 24, 32 + widget.extraBottomInset),
               decoration: BoxDecoration(
                 gradient: LinearGradient(
                   begin: Alignment.topCenter,
@@ -592,7 +798,11 @@ class _Battle1v1SetupSheetState extends ConsumerState<Battle1v1SetupSheet> {
                       return SizedBox(
                         width: double.infinity,
                         height: 56,
-                        child: FilledButton(
+                        // TourTarget for step 10 — spotlight the Create
+                        // CTA so users know how to send the invite.
+                        child: TourTarget(
+                          id: TourTargetId.battle1v1CreateButton,
+                          child: FilledButton(
                           onPressed: buttonEnabled
                               ? _createBattle
                               : blockedBySubOnly
@@ -618,6 +828,7 @@ class _Battle1v1SetupSheetState extends ConsumerState<Battle1v1SetupSheet> {
                               : Text(blockedBySubOnly
                                   ? 'Upgrade to create'
                                   : 'Send Battle Invite'),
+                        ),
                         ),
                       );
                     },
@@ -697,20 +908,28 @@ class _PlayerCard extends StatelessWidget {
     final card = Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
+        // Fill still branches — glassBackground for a filled slot vs
+        // surfaceContainerLow for an empty one — but only the FILL
+        // differs now, not the frame.
         color: isPlaceholder
             ? AppColors.surfaceContainerLow
             : AppColors.glassBackground,
         borderRadius: BorderRadius.circular(20),
         border: Border.all(
-          // Identical border on active cards (creator + opponent) —
-          // subtle primary tint that reads as "this is a battle slot"
-          // for both sides. Placeholder (empty-slot dashed look) keeps
-          // its own outlineVariant treatment so it visually reads as
-          // "waiting for someone".
-          color: isPlaceholder
-              ? AppColors.outlineVariant.withValues(alpha: 0.3)
-              : AppColors.primary.withValues(alpha: 0.35),
-          width: isPlaceholder ? 2 : 1.25,
+          // 2026-09-13: unified border across ALL three states
+          // (creator, opponent-selected, opponent-placeholder) so the
+          // pair reads as visually matched siblings. User feedback:
+          // "creator card should match the size and shape of the
+          // select opponent card style and size" — previously the
+          // creator shipped a heavier purple 1.25 px border while the
+          // placeholder used a subtler grey 2 px, giving Laxmi's card
+          // more visual weight than the opponent slot. Semantic
+          // differentiation stays in the floating home-icon creator
+          // badge (top-right on Laxmi) and the "+ Select Opponent"
+          // copy on the empty slot — the frame itself no longer
+          // encodes state.
+          color: AppColors.outlineVariant.withValues(alpha: 0.3),
+          width: 2,
           strokeAlign: BorderSide.strokeAlignInside,
         ),
       ),
@@ -736,7 +955,15 @@ class _PlayerCard extends StatelessWidget {
               radius: 28,
               imageUrl: imageUrl,
               initials: initials,
-              borderColor: AppColors.primary,
+              // 2026-09-13: ring matches the placeholder's inner-circle
+              // treatment (outlineVariant @ 30 % alpha, 2 px) so the
+              // paired cards share the same 56×56 outer disc frame
+              // regardless of whether the slot is filled or empty.
+              // Previously this shipped as AppColors.primary (bright
+              // purple), giving Laxmi's inner circle a purple halo
+              // while the opponent's was a subtle grey outline.
+              borderColor: AppColors.outlineVariant.withValues(alpha: 0.3),
+              borderWidth: 2,
             ),
           const SizedBox(height: 8),
           Text(
@@ -762,6 +989,18 @@ class _PlayerCard extends StatelessWidget {
     if (!isReady) return card;
     return Stack(
       clipBehavior: Clip.none,
+      // fit: passthrough forwards this Stack's INCOMING constraints
+      // to `card` (the non-positioned child) instead of loosening
+      // them, which is Stack's default (StackFit.loose). Without this,
+      // when the creator card is placed inside an `Expanded(flex:1)`
+      // in a Row the Stack loosens the tight width down to
+      // min_w = 0, so `card` shrinks to fit its content (avatar +
+      // short "Laxmi" text) — visibly narrower than the opponent card
+      // (which returns `card` directly, no Stack wrap, so it receives
+      // the Expanded's tight width and fills it). User called this
+      // out 2026-09-13 with a side-by-side screenshot. Passthrough
+      // keeps the card at the full flex-1 width so the pair matches.
+      fit: StackFit.passthrough,
       children: [
         card,
         Positioned(

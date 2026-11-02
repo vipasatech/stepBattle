@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io' show Platform;
 
 import 'package:flutter/foundation.dart';
@@ -8,6 +9,7 @@ import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 import 'package:hive_flutter/hive_flutter.dart';
 import 'package:home_widget/home_widget.dart';
 import 'package:intl/intl.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:workmanager/workmanager.dart';
 
@@ -90,6 +92,80 @@ bool _supabaseReadyInThisIsolate = false;
 /// box, NOT the main-isolate `boxName` — that separation is the Level B
 /// fix that eliminates the two-isolates-on-one-file-handle race that
 /// was flooding Diagnostics with `FileSystemException: File closed`.
+/// SharedPreferences key that `supabase_flutter` persists the session
+/// under. MUST stay byte-identical to the SDK's own default, which is
+/// built in `supabase_flutter/lib/src/supabase.dart`:
+///
+///   "sb-${Uri.parse(url).host.split(".").first}-auth-token"
+///
+/// (It is NOT the `supabase.auth.token` constant from gotrue — that's
+/// only the PKCE code-verifier prefix.) If the SDK ever changes this
+/// scheme, background ticks stop finding a session and silently skip
+/// — which is the SAFE failure mode: no sync, but never a sign-out.
+String _persistedSessionKey(String url) =>
+    'sb-${Uri.parse(url).host.split('.').first}-auth-token';
+
+/// Extra head-room on top of [Session.isExpired]'s built-in 10 s margin.
+/// A background tick fires several Supabase calls in sequence; if the
+/// JWT dies partway through, the rest 401. Skipping a tick costs
+/// nothing (the next one is ≤15 min away), so be generous.
+const _bgTokenExpiryMargin = Duration(seconds: 60);
+
+/// Read the main isolate's persisted session and return the raw JSON
+/// **only if it is safe to use in a background isolate right now**.
+///
+/// Returns null when there is no session, the JSON is unparseable, or
+/// the access token is expired / about to expire. Callers MUST treat
+/// null as "skip this tick" and must NOT initialize Supabase auth —
+/// see the sign-out hazard documented in [_ensureBackgroundInitAndUid].
+///
+/// `prefs.reload()` is deliberate: the foreground-service isolate is
+/// long-lived, so its SharedPreferences cache would otherwise keep
+/// serving the token that was current when the service started. The
+/// reload picks up whatever the MAIN isolate last refreshed, which is
+/// what makes per-tick re-hydration work.
+Future<String?> _readUsableSessionJson(String url) async {
+  try {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.reload();
+    final raw = prefs.getString(_persistedSessionKey(url));
+    if (raw == null || raw.isEmpty) {
+      AppLogger.session.i('bgSession:skip', fields: {'reason': 'noPersisted'});
+      return null;
+    }
+    final decoded = json.decode(raw);
+    if (decoded is! Map<String, dynamic>) {
+      AppLogger.session.w('bgSession:skip', fields: {'reason': 'notAMap'});
+      return null;
+    }
+    final session = Session.fromJson(decoded);
+    if (session == null) {
+      AppLogger.session.w('bgSession:skip', fields: {'reason': 'unparseable'});
+      return null;
+    }
+    final expiresAt = session.expiresAt;
+    if (expiresAt == null) {
+      // JWT payload had no `exp` we could read. Can't prove freshness,
+      // so don't risk an authed call — and definitely don't hand this
+      // to recoverSession().
+      AppLogger.session.w('bgSession:skip', fields: {'reason': 'noExp'});
+      return null;
+    }
+    final expiry = DateTime.fromMillisecondsSinceEpoch(expiresAt * 1000);
+    if (DateTime.now().add(_bgTokenExpiryMargin).isAfter(expiry)) {
+      AppLogger.session.i('bgSession:skip', fields: {
+        'reason': 'expired',
+        'expiredForSec': DateTime.now().difference(expiry).inSeconds,
+      });
+      return null;
+    }
+    return raw;
+  } catch (e) {
+    AppLogger.session.w('bgSession:readFailed', fields: {'err': e.toString()});
+    return null;
+  }
+}
+
 Future<String?> _ensureBackgroundInitAndUid() async {
   WidgetsFlutterBinding.ensureInitialized();
   if (!Hive.isBoxOpen(NativeStepService.backgroundBoxName)) {
@@ -105,6 +181,52 @@ Future<String?> _ensureBackgroundInitAndUid() async {
   final url = dotenv.env['SUPABASE_URL'];
   final key = dotenv.env['SUPABASE_ANON_KEY'];
   if (url == null || url.isEmpty || key == null || key.isEmpty) return null;
+
+  // ── FIX 3 (auth-persistence, 2026-09-25) — background isolates must
+  // be structurally incapable of destroying the session. ────────────
+  //
+  // FIX 2 (below, 2026-08-30) set `autoRefreshToken: false` to stop the
+  // multi-isolate refresh race. It did — but it opened a WORSE hole.
+  // `Supabase.initialize()` unconditionally calls `recoverSession()`
+  // (supabase.dart:141 → supabase_auth.dart:132 → gotrue_client.dart:1103),
+  // and gotrue's recoverSession contains:
+  //
+  //     if (session.isExpired) {
+  //       if (_autoRefreshToken && refreshToken != null) { ...refresh... }
+  //       else { await signOut(); }          // ← we land HERE
+  //     }
+  //
+  // `signOut()` fires `notifyAllSubscribers(signedOut)` BEFORE its
+  // server call, and supabase_flutter reacts by calling
+  // `removePersistedSession()` — which wipes the SharedPreferences
+  // entry that the MAIN isolate reads. Access tokens live 1 h and only
+  // the main isolate refreshes them, so any background tick landing
+  // while the app has been closed >1 h silently logged the user out.
+  // With WorkManager at 15 min, the FGS at 5 min, 4 daily alarms and
+  // FCM sync_wake pushes, that's near-certain for anyone who closes
+  // the app for an hour. This is the "signed out without signing out"
+  // report.
+  //
+  // Two independent guards now, either of which alone is sufficient:
+  //
+  //   1. Validate the persisted session OURSELVES first and bail out
+  //      before touching Supabase when it's missing / expired / bad.
+  //      An expired token would have 401'd every call this tick
+  //      anyway, so skipping loses nothing.
+  //   2. Initialize with `EmptyLocalStorage()` so this isolate has NO
+  //      write path to the persisted session. `hasAccessToken()`
+  //      returns false → the SDK's own `recoverSession()` no-ops, and
+  //      `removePersistedSession()` / `persistSession()` are no-ops.
+  //      Even a future code path that calls signOut() in here can no
+  //      longer reach the main isolate's token.
+  //
+  // The session is then loaded into memory by hand via
+  // `auth.recoverSession(json)` — safe because guard 1 has already
+  // proven it is NOT expired, so it takes the `_saveSession` branch
+  // and never the `signOut()` branch.
+  final sessionJson = await _readUsableSessionJson(url);
+  if (sessionJson == null) return null;
+
   if (!_supabaseReadyInThisIsolate) {
     // FIX 2 (auth-persistence, 2026-08-30) — Disable SDK-side auto-refresh
     // in background isolates. Background ticks (WorkManager, FGS,
@@ -113,27 +235,35 @@ Future<String?> _ensureBackgroundInitAndUid() async {
     // of the main isolate, they race on the token: whichever refreshes
     // last invalidates the other's in-memory copy via Supabase's
     // reuse-detection (turned on with refresh-token rotation), and the
-    // entire session family gets nuked server-side. Symptom the user
-    // reported: signed out after 1–2 days of light use, even though the
-    // 30-day refresh_token TTL should have covered them.
+    // entire session family gets nuked server-side.
     //
-    // With autoRefreshToken=false:
-    //   • Background isolates run authed calls with whatever access
-    //     token was persisted at the last main-isolate refresh.
-    //   • If a call 401s (JWT past its 1h TTL), the SDK does NOT retry
-    //     with a refresh — the request fails cleanly, this tick logs
-    //     the miss under `headlessStepSync` and returns. The next tick
-    //     (30 min – 1 h later) re-reads storage; by then the user has
-    //     likely opened the app and the main isolate has refreshed →
-    //     the background tick picks up the fresh token and succeeds.
-    //   • Only the MAIN UI isolate ever calls refreshSession(), so the
-    //     multi-isolate race is eliminated entirely.
+    // `detectSessionInUri: false` — a background isolate has no deep
+    // links to observe; starting the observer is pure waste here.
     await Supabase.initialize(
       url: url,
       anonKey: key,
-      authOptions: const FlutterAuthClientOptions(autoRefreshToken: false),
+      authOptions: const FlutterAuthClientOptions(
+        autoRefreshToken: false,
+        localStorage: EmptyLocalStorage(),
+        detectSessionInUri: false,
+      ),
     );
     _supabaseReadyInThisIsolate = true;
+  }
+
+  // Hydrate (or RE-hydrate) the in-memory session every tick. Matters
+  // for the long-lived foreground-service isolate: without this it
+  // would keep using the token it booted with and start 401-ing an
+  // hour later. Re-running it is cheap — for an unchanged user id
+  // gotrue just reassigns `_currentSession` and emits nothing.
+  try {
+    await Supabase.instance.client.auth.recoverSession(sessionJson);
+  } catch (e) {
+    // Should be unreachable (guard 1 proved the session is live), but
+    // never let an auth hiccup take down the tick.
+    AppLogger.session
+        .w('bgSession:recoverFailed', fields: {'err': e.toString()});
+    return null;
   }
   return Supabase.instance.client.auth.currentUser?.id;
 }
@@ -434,7 +564,10 @@ Future<_BattleNotifContent?> _renderBattle(String uid) async {
     // Find the user's soonest-ending active battle.
     final mine = await client
         .from('battle_participants')
-        .select('battle_id, battles!inner(id, type, end_time, status)')
+        // `name` added 2026-09-04 (migration 0061) so ongoing-battle
+        // pushes can carry the creator-set title instead of the
+        // generic "You vs X" / "Multi-player battle" lead line.
+        .select('battle_id, battles!inner(id, type, end_time, status, name)')
         .eq('user_id', uid)
         .eq('battles.status', 'active')
         .eq('invite_status', 'accepted')
@@ -448,6 +581,16 @@ Future<_BattleNotifContent?> _renderBattle(String uid) async {
     final battleId = battle['id'] as String? ?? '';
     final type = battle['type'] as String? ?? '1v1';
     final endStr = battle['end_time'] as String?;
+    // Optional user-set name — null when the creator left it blank
+    // (majority case), string when set. Read the raw value and trim/
+    // null-out empty strings the same way BattleModel.fromSupabaseRow
+    // does so this branch matches display-surface behaviour exactly.
+    final rawName = battle['name'] as String?;
+    final battleName = () {
+      if (rawName == null) return null;
+      final t = rawName.trim();
+      return t.isEmpty ? null : t;
+    }();
     final remaining = endStr == null
         ? null
         : DateTime.parse(endStr).difference(DateTime.now().toUtc());
@@ -509,7 +652,10 @@ Future<_BattleNotifContent?> _renderBattle(String uid) async {
                   : 'Tied at ${_fmtNumber(mySteps)} — push ahead';
 
       body = '$relationLine$remainingStr';
-      bigText = 'You vs $oppName\n'
+      // Custom name (migration 0061) wins over the derived "You vs X"
+      // lead line; per-participant score rows stay so the push is still
+      // informative at a glance.
+      bigText = '${battleName ?? 'You vs $oppName'}\n'
           '👟 You: ${_fmtNumber(mySteps)}\n'
           '👟 $oppName: ${_fmtNumber(oppSteps)}\n'
           '$relationLine'
@@ -545,7 +691,8 @@ Future<_BattleNotifContent?> _renderBattle(String uid) async {
             'Rank $myRank of ${participants.length} · ${_fmtNumber(gap)} behind leader';
       }
       body = '$rankLine$remainingStr';
-      bigText = 'Multi-player battle\n'
+      // Custom name (migration 0061) wins over "Multi-player battle".
+      bigText = '${battleName ?? 'Multi-player battle'}\n'
           '${participants.take(4).map((p) {
                 final isMe = p['user_id'] == uid;
                 final marker = isMe ? '🟣' : '⚪';
@@ -732,11 +879,16 @@ class _StepSyncTaskHandler extends TaskHandler {
   ///   • Track status   — local notification, posted/cancelled per state.
   Future<void> _refreshAll({bool force = false}) async {
     try {
+      // Track notif is rendered purely from CrossIsolateKV — no
+      // Supabase, no session. Refresh it BEFORE the uid gate so a
+      // temporarily-expired access token (which now makes
+      // _ensureBackgroundInitAndUid bail early, see FIX 3) can't
+      // freeze a live run's notification mid-session.
+      await _refreshTrackNotif(force: force);
       final uid = await _ensureBackgroundInitAndUid();
       if (uid == null) return;
       await _refreshSummary(uid, force: force);
       await _refreshBattleNotif(uid, force: force);
-      await _refreshTrackNotif(force: force);
     } catch (_) {}
   }
 

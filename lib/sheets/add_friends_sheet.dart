@@ -3,6 +3,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../config/colors.dart';
+import '../features/onboarding_tour/tour_controller.dart';
+import '../features/onboarding_tour/tour_target.dart';
+import '../features/onboarding_tour/tour_step.dart';
 import '../models/user_model.dart';
 import '../providers/auth_provider.dart';
 import '../providers/friend_provider.dart';
@@ -35,6 +38,24 @@ class AddFriendsSheet extends ConsumerStatefulWidget {
   final int initialTab;
   final void Function(List<UserModel> selected)? onConfirm;
 
+  /// Extra bottom padding on the confirm bar. Non-zero when the sheet
+  /// is opened during the tour — the shell's own floating nav bar
+  /// doesn't reflect in `MediaQuery.viewPadding`, so without this the
+  /// "Add to Battle" CTA lands behind the nav bar (user feedback
+  /// 2026-09-21). Also mirrors the same fix on the 1v1 setup sheet's
+  /// Send button + the Multi setup sheet's Send Battle Invites.
+  final double extraBottomInset;
+
+  /// User ids that should already be marked selected when the sheet
+  /// opens. Multi-select picker mode only. Lets the Multi setup
+  /// sheet reopen this picker on tour Back with the previously
+  /// added players pre-highlighted so the user sees what's already
+  /// invited (2026-09-21). Toggling those rows off unselects them —
+  /// the confirm callback receives the final selected list, and the
+  /// Multi setup sheet's onConfirm REPLACES its invited list from
+  /// it so both add-more and remove work in one round trip.
+  final Set<String> initialSelectedIds;
+
   /// Instant-invite mode. When set, tapping the `+` chip on a friend
   /// row fires this callback IMMEDIATELY (no selection queue, no
   /// bottom confirm button). The row transitions to a loading spinner
@@ -52,6 +73,8 @@ class AddFriendsSheet extends ConsumerStatefulWidget {
     this.initialTab = 0,
     this.onConfirm,
     this.onInviteImmediately,
+    this.extraBottomInset = 0,
+    this.initialSelectedIds = const {},
   });
 
   /// Whether selection UI should be visible (picker mode + not Requests tab).
@@ -103,6 +126,46 @@ class _AddFriendsSheetState extends ConsumerState<AddFriendsSheet> {
   void initState() {
     super.initState();
     _tabIndex = widget.initialTab.clamp(0, 2);
+    // Seed selection state from caller. Non-tour openings pass an
+    // empty set (the default) so the sheet still opens fresh; the
+    // tour's Multi picker seeds this with the current _invited list
+    // so a Back navigation into Pick friends shows the previously
+    // added players as still-selected.
+    _selectedIds.addAll(widget.initialSelectedIds);
+    // Tour-Next parity for the "Pick friends" step (2026-09-21):
+    // when the user is inside this sheet with pending selections and
+    // taps NEXT on the tour card (instead of the confirm CTA at the
+    // bottom), the tour advances forward and the main tour listener
+    // pops the sheet — but without firing onConfirm the selections
+    // are lost. This listener detects the forward-only "target
+    // leaves addFriendsSheetRoot" transition and fires onConfirm
+    // FIRST, so the same friends the user selected reach the
+    // parent's callback whether they tap Confirm or tour Next.
+    // Backward navigation and skip/dismiss don't trigger this — only
+    // a Next-driven forward advance.
+    ref.listenManual(tourControllerProvider, (prev, next) {
+      if (!mounted) return;
+      if (prev == null || !prev.active || !next.active) return;
+      final prevTarget = prev.currentStep?.targetId;
+      final nextTarget = next.currentStep?.targetId;
+      if (prevTarget != TourTargetId.addFriendsSheetRoot) return;
+      if (nextTarget == TourTargetId.addFriendsSheetRoot) return;
+      if (next.stepIndex <= prev.stepIndex) return; // only forward
+      if (!widget._allowSelect || !widget.multiSelect) return;
+      // Empty selection is a VALID outcome (user deselected all and
+      // wants to clear the invited list). Parent's onConfirm handles
+      // the empty list by clearing _invited. Do NOT short-circuit
+      // here — that would strand old selections on the parent.
+      final friends = ref.read(friendsListProvider);
+      final allUsers = <UserModel>[
+        ...(friends.valueOrNull ?? <UserModel>[]),
+        ..._searchResults,
+      ];
+      final selected = allUsers
+          .where((u) => _selectedIds.contains(u.userId))
+          .toList();
+      widget.onConfirm?.call(selected);
+    });
   }
 
   @override
@@ -112,17 +175,30 @@ class _AddFriendsSheetState extends ConsumerState<AddFriendsSheet> {
   }
 
   void _toggleSelect(UserModel user) {
-    setState(() {
-      if (widget.multiSelect) {
-        if (_selectedIds.contains(user.userId)) {
-          _selectedIds.remove(user.userId);
-        } else {
-          _selectedIds.add(user.userId);
-        }
-      } else {
+    // 2026-09-14: in single-select picker mode, tap-to-pick both
+    // SELECTS and CONFIRMS + closes the sheet in one action —
+    // there's no meaningful "consider first, then confirm" step
+    // when only one choice can be made. Removes the redundant
+    // second tap on "Select Opponent" for the Battle 1v1 flow AND
+    // fixes the mid-tour bug where the tour advanced to the next
+    // step but the sheet stayed open on top (user feedback:
+    // "not closing the buttomsheet and continuing with the set
+    // the window step on the add friends buttomsheet itself").
+    if (!widget.multiSelect) {
+      setState(() {
         _selectedIds
           ..clear()
           ..add(user.userId);
+      });
+      widget.onConfirm?.call([user]);
+      Navigator.pop(context);
+      return;
+    }
+    setState(() {
+      if (_selectedIds.contains(user.userId)) {
+        _selectedIds.remove(user.userId);
+      } else {
+        _selectedIds.add(user.userId);
       }
     });
   }
@@ -220,13 +296,19 @@ class _AddFriendsSheetState extends ConsumerState<AddFriendsSheet> {
       minChildSize: 0.5,
       maxChildSize: 0.95,
       expand: false,
-      builder: (context, scrollController) => Container(
-        decoration: BoxDecoration(
-          color: AppColors.surfaceContainer,
-          borderRadius: const BorderRadius.vertical(top: Radius.circular(28)),
-        ),
-        child: Column(
-          children: [
+      builder: (context, scrollController) => TourTarget(
+        // Wraps the ENTIRE sheet body so the "Pick a friend" tour
+        // step (index 9) can spotlight the whole picker — tabs, list,
+        // search bar — instead of one cell. See addFriendsSheetRoot
+        // in tour_step.dart for design context.
+        id: TourTargetId.addFriendsSheetRoot,
+        child: Container(
+          decoration: BoxDecoration(
+            color: AppColors.surfaceContainer,
+            borderRadius: const BorderRadius.vertical(top: Radius.circular(28)),
+          ),
+          child: Column(
+            children: [
             const BottomSheetHandle(),
 
             // Title — copy adapts to mode
@@ -325,7 +407,8 @@ class _AddFriendsSheetState extends ConsumerState<AddFriendsSheet> {
             // row is its own send action.
             if (widget._allowSelect && _tabIndex != 2 && !_instantMode)
               Container(
-                padding: const EdgeInsets.fromLTRB(24, 12, 24, 32),
+                padding: EdgeInsets.fromLTRB(
+                    24, 12, 24, 32 + widget.extraBottomInset),
                 decoration: BoxDecoration(
                   gradient: LinearGradient(
                     begin: Alignment.topCenter,
@@ -357,7 +440,8 @@ class _AddFriendsSheetState extends ConsumerState<AddFriendsSheet> {
                   ),
                 ),
               ),
-          ],
+            ],
+          ),
         ),
       ),
     );
