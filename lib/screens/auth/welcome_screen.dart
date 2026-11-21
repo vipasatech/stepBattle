@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -139,6 +141,17 @@ class _WelcomeScreenState extends ConsumerState<WelcomeScreen> {
         await ref.read(authServiceProvider).signInWithGoogle();
         // On success the router listens to auth state and moves to
         // /home (or /onboarding). No manual navigation needed here.
+      } else if (method == 'apple' && Platform.isIOS) {
+        // Added 2026-11-17 alongside Sign in with Apple. The platform
+        // guard matters for more than tidiness: if a user picked Apple's
+        // "Hide My Email", their Supabase identity is keyed to a relay
+        // address that no other provider can match, so re-authenticating
+        // through Apple is the ONLY route back to that same account.
+        // Falling through to /login would quietly offer them Google and
+        // mint a second, empty account. On a non-iOS device the method
+        // can't be honoured at all, so the `else` below sends them to
+        // /login with the email prefilled rather than throwing.
+        await ref.read(authServiceProvider).signInWithApple();
       } else if (method == 'email') {
         await ref.read(authServiceProvider).sendEmailOtp(email);
         await CrossIsolateKV.savePendingOtp(email: email, mode: 'login');

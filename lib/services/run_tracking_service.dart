@@ -247,6 +247,57 @@ class RunTrackingService {
   /// page (note text and any uploaded photo URLs). Both are persisted
   /// into the row payload so the local Hive copy carries them too —
   /// `syncPending()` doesn't strip them on retry.
+  /// End the live session and keep NOTHING.
+  ///
+  /// Mirrors [end]'s teardown — GPS subscription, periodic tick, the
+  /// CrossIsolateKV keys that keep the Track notification alive, and the
+  /// in-memory state — but writes to neither Hive nor Supabase.
+  ///
+  /// This exists because until now a started session had exactly one
+  /// terminal action: Save. `Resume` and the system back button both
+  /// leave it running (see SaveActivityScreen's header), so an
+  /// accidental Start had no exit that did not either create a junk row
+  /// or abandon GPS running in the background.
+  ///
+  /// Doing the teardown properly is the whole point. A discard that only
+  /// popped the screen would leave the location stream, the periodic
+  /// tick and the lock-screen notification attached to a session the
+  /// user believes they threw away.
+  Future<void> discard() async {
+    if (_startedAt == null) return;
+    final startedAt = _startedAt!;
+    final steps = _currentSteps;
+    final meters = _verifiedMeters + _estimatedMeters;
+
+    _gpsSub?.cancel();
+    _gpsSub = null;
+    _periodic?.cancel();
+    _periodic = null;
+
+    // The background isolate's render helper treats any missing key as
+    // "session inactive" and cancels the notification. Skipping this
+    // would pin a Track notification to a session that no longer exists.
+    try {
+      await CrossIsolateKV.remove(CrossIsolateKV.activeTrackStartedAt);
+      await CrossIsolateKV.remove(CrossIsolateKV.activeTrackSteps);
+      await CrossIsolateKV.remove(CrossIsolateKV.activeTrackDistanceM);
+      await CrossIsolateKV.remove(CrossIsolateKV.activeTrackPaceSecKm);
+      await CrossIsolateKV.remove(CrossIsolateKV.activeTrackCalories);
+    } catch (_) {}
+
+    _userId = null;
+    _name = null;
+    _startedAt = null;
+    _latest = null;
+    if (!_stateController.isClosed) _stateController.add(null);
+
+    AppLogger.track.i('runTracking:discarded', fields: {
+      'durationSec': DateTime.now().difference(startedAt).inSeconds,
+      'steps': steps,
+      'distanceM': meters.round(),
+    });
+  }
+
   Future<EndResult?> end({
     String? description,
     List<String> mediaUrls = const [],

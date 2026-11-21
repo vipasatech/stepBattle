@@ -3,6 +3,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:permission_handler/permission_handler.dart';
+import '../../services/capability_service.dart';
+import '../../utils/step_permission.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../config/colors.dart';
@@ -20,7 +22,7 @@ import '../../services/observability_service.dart';
 ///   • `currentUserProvider` → seeds display name, DOB, gender,
 ///     fitness level, and daily goal from the profile row (Google /
 ///     Apple sign-in often lands the display name pre-filled).
-///   • `Permission.activityRecognition.status` and
+///   • `stepPermission.status` and
 ///     `Permission.locationWhenInUse.status` — if already granted on
 ///     the device, the corresponding step is marked satisfied and
 ///     skipped during forward navigation.
@@ -186,7 +188,7 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
 
     // --- permission grants ---------------------------------------
     try {
-      final actGranted = await Permission.activityRecognition.isGranted;
+      final actGranted = await stepPermission.isGranted;
       final locGranted = await Permission.locationWhenInUse.isGranted;
       // Marking `prompted` alongside `granted` lets the existing
       // `_canContinue` gating treat the step as satisfied, and the
@@ -247,8 +249,17 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
       case 4:
         return _fitnessLevel != null;
       case 5:
+        // Motion / activity recognition. Under the lock model nothing is
+        // asked during signup — the user lands in a working app and taps
+        // a padlock when they want the number behind it. Reporting these
+        // as satisfied makes _nextRelevantStep walk straight past them
+        // without disturbing any index.
+        if (CapabilityLocks.enabled) return true;
         return _activityRecognitionGranted;
       case 6:
+        // Location. Same reasoning — asked on the Track tab instead,
+        // which is the only place it does anything.
+        if (CapabilityLocks.enabled) return true;
         return _locationGranted;
       case 7:
         return false; // info page — always show in normal walk
@@ -591,7 +602,7 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
                     prompted: _activityRecognitionPrompted,
                     onRequest: () async {
                       final status =
-                          await Permission.activityRecognition.request();
+                          await stepPermission.request();
                       setState(() {
                         _activityRecognitionPrompted = true;
                         _activityRecognitionGranted = status.isGranted;

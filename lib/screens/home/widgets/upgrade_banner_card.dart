@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../config/colors.dart';
+import '../../../config/purchases.dart';
 import '../../../models/subscription_model.dart';
 import '../../../providers/subscription_provider.dart';
 import '../../../sheets/upgrade_cta_sheet.dart';
@@ -16,6 +17,9 @@ class UpgradeBannerCard extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    // Pure upsell surface — it exists only to lead somewhere that does
+    // not exist on iOS, so it renders nothing there. See [Purchases].
+    if (!Purchases.enabled) return const SizedBox.shrink();
     final sub = ref.watch(subscriptionProvider);
     if (sub.tier != SubscriptionTier.basic) return const SizedBox.shrink();
 

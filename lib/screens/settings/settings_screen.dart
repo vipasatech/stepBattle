@@ -301,19 +301,29 @@ class SettingsScreen extends ConsumerWidget {
                 subtitle: 'Required for step counting',
                 onTap: () async => openAppSettings(),
               ),
-              _SettingsRow(
-                icon: Icons.contacts_outlined,
-                title: 'Contacts access',
-                subtitle: 'Find friends who already use StepBattle',
-                onTap: () async {
-                  final status = await Permission.contacts.status;
-                  if (status.isPermanentlyDenied) {
-                    await openAppSettings();
-                    return;
-                  }
-                  await Permission.contacts.request();
-                },
-              ),
+              // Android-only (2026-11-18). This row asks for contacts
+              // permission for a "find friends from your contacts"
+              // feature that does not exist yet — nothing in the app
+              // reads the address book, and no contacts package is
+              // installed. On Android that is merely a dead end; on iOS
+              // App Review guideline 5.1.1 forbids requesting data the
+              // app has no functional use for, and a reviewer tapping
+              // this would get a system prompt leading nowhere. Delete
+              // the guard once the feature actually lands.
+              if (!Platform.isIOS)
+                _SettingsRow(
+                  icon: Icons.contacts_outlined,
+                  title: 'Contacts access',
+                  subtitle: 'Find friends who already use StepBattle',
+                  onTap: () async {
+                    final status = await Permission.contacts.status;
+                    if (status.isPermanentlyDenied) {
+                      await openAppSettings();
+                      return;
+                    }
+                    await Permission.contacts.request();
+                  },
+                ),
               _SettingsRow(
                 icon: Icons.location_on_outlined,
                 title: 'Location',

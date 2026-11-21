@@ -6,10 +6,14 @@
 #
 # Design decisions in this file:
 #
-#   • iOS 14.0 minimum (`platform :ios, '14.0'`) — matches what most Flutter
-#     packages require (health, flutter_stripe, flutter_local_notifications
-#     all baseline iOS 13-14). Lower would shrink coverage; higher would
-#     lock out too many users. iOS 14 = ~99% of active iPhones in 2026.
+#   • iOS 15.0 minimum (`platform :ios, '15.0'`) — raised from 14.0 on
+#     2026-11-19 because Xcode 27.2 refuses anything below 15.0 ("the
+#     range of supported deployment target versions is 15.0 to 27.2.x").
+#     This costs no devices: iOS 15 runs on iPhone 6s and newer, the same
+#     hardware list as iOS 14. Only users who stopped updating are
+#     excluded. Raise again when a future Xcode moves the floor; do NOT
+#     lower it to satisfy a package, since the toolchain, not the
+#     packages, sets this minimum.
 #
 #   • use_frameworks! :linkage => :static — required by Firebase iOS SDK
 #     (they ship XCFrameworks). Static linkage avoids the "flutter run"
@@ -28,7 +32,7 @@
 # =============================================================================
 
 # Uncomment this line to define a global platform for your project.
-platform :ios, '14.0'
+platform :ios, '15.0'
 
 # CocoaPods analytics sends network stats synchronously affecting flutter build
 # latency.
@@ -77,11 +81,15 @@ post_install do |installer|
 
     target.build_configurations.each do |config|
       # -----------------------------------------------------------------------
-      # Deployment target — force all pods to iOS 14 minimum to match our app.
-      # Pods that default to iOS 11 emit noisy warnings; setting this silences
-      # them AND prevents subtle runtime issues on newer iOS.
+      # Deployment target — force all pods to iOS 15 minimum to match our
+      # app. Pods that default lower emit noisy warnings; setting this
+      # silences them AND prevents subtle runtime issues on newer iOS.
+      # This value must stay in lockstep with `platform :ios` above and
+      # with IPHONEOS_DEPLOYMENT_TARGET in Runner.xcodeproj — they drifted
+      # apart once (app 12.0 / pods 14.0) and the app would not have
+      # linked against its own pods.
       # -----------------------------------------------------------------------
-      config.build_settings['IPHONEOS_DEPLOYMENT_TARGET'] = '14.0'
+      config.build_settings['IPHONEOS_DEPLOYMENT_TARGET'] = '15.0'
 
       # -----------------------------------------------------------------------
       # Bitcode — deprecated since Xcode 14; Flutter doesn't need it.

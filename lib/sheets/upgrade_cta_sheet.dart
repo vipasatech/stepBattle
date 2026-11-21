@@ -5,6 +5,7 @@ import 'package:intl/intl.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../config/colors.dart';
+import '../config/purchases.dart';
 import '../models/subscription_model.dart';
 import '../providers/auth_provider.dart';
 import '../providers/subscription_provider.dart';
@@ -37,6 +38,26 @@ Future<void> showUpgradeCtaSheet(
   String? contextTitle,
   String? contextDescription,
 }) {
+  // iOS ships with no purchase path (see [Purchases]). The branch lives
+  // HERE rather than at the call sites deliberately: this function has
+  // around ten callers spread across battles, discover, the usage pill,
+  // the home banner, public profiles, the profile subscription section
+  // and both battle-setup sheets. Gating each one would mean ten chances
+  // to miss one, and a single missed Razorpay checkout is a guideline
+  // 3.1.1 rejection. Branching at the single entry point means every
+  // caller stays byte-identical and none of them can leak.
+  if (!Purchases.enabled) {
+    return showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      useRootNavigator: true,
+      builder: (_) => _FreePlanLimitSheet(
+        title: contextTitle,
+        description: contextDescription,
+      ),
+    );
+  }
   return showModalBottomSheet<void>(
     context: context,
     isScrollControlled: true,
@@ -48,6 +69,90 @@ Future<void> showUpgradeCtaSheet(
       contextDescription: contextDescription,
     ),
   );
+}
+
+/// Neutral, purchase-free counterpart to [_UpgradeCtaSheet], shown
+/// wherever [Purchases.enabled] is false.
+///
+/// Deliberately says nothing about price, plans, or where a plan could
+/// be bought. The blocking callers — the battle-limit gates in
+/// battles_screen, discover_battles and both setup sheets — still need
+/// to tell the user WHY they were stopped, otherwise the button simply
+/// appears broken. This does that and stops there: no plan cards, no
+/// pricing, no checkout, and no hint that a purchase exists elsewhere
+/// (see [Purchases] for why that last part is not optional).
+class _FreePlanLimitSheet extends StatelessWidget {
+  final String? title;
+  final String? description;
+
+  const _FreePlanLimitSheet({this.title, this.description});
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return SafeArea(
+      top: false,
+      child: Container(
+        decoration: const BoxDecoration(
+          color: Color(0xFF14141A),
+          borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+        ),
+        padding: const EdgeInsets.fromLTRB(24, 12, 24, 24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Center(
+              child: Container(
+                width: 40,
+                height: 4,
+                decoration: BoxDecoration(
+                  color: Colors.white.withValues(alpha: 0.25),
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+            ),
+            const SizedBox(height: 18),
+            Text(
+              // Callers that pass a contextTitle already phrase this
+              // better than a generic header can — they know which
+              // limit was hit.
+              title ?? "You've hit your free limit",
+              style: theme.textTheme.titleMedium?.copyWith(
+                color: Colors.white,
+                fontWeight: FontWeight.w800,
+              ),
+            ),
+            const SizedBox(height: 10),
+            Text(
+              description ??
+                  'This is as far as the free plan goes right now. Your '
+                      'battle limits reset at the start of each month.',
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: Colors.white.withValues(alpha: 0.7),
+                height: 1.55,
+              ),
+            ),
+            const SizedBox(height: 20),
+            SizedBox(
+              width: double.infinity,
+              child: FilledButton(
+                onPressed: () => Navigator.of(context).pop(),
+                style: FilledButton.styleFrom(
+                  backgroundColor: AppColors.primary,
+                  padding: const EdgeInsets.symmetric(vertical: 13),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                ),
+                child: const Text('Got it'),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 }
 
 class _UpgradeCtaSheet extends ConsumerStatefulWidget {

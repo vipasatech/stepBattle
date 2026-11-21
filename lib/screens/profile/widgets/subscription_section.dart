@@ -5,6 +5,7 @@ import 'package:intl/intl.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../../config/colors.dart';
+import '../../../config/purchases.dart';
 import '../../../models/subscription_model.dart';
 import '../../../providers/auth_provider.dart';
 import '../../../providers/family_provider.dart';
@@ -257,6 +258,13 @@ class _SubscriptionSectionState
       );
     }
     // Free or Pro (non-family): show CTA sheet.
+    // Both variants of this button lead to the purchase sheet — the Pro
+    // one to manage billing, which is just as much a purchase flow. The
+    // section above still shows the user their current plan; an existing
+    // Pro subscriber who bought on Android keeps every entitlement here
+    // and manages the subscription from the platform they bought it on.
+    // See [Purchases].
+    if (!Purchases.enabled) return const SizedBox.shrink();
     return SizedBox(
       width: double.infinity,
       child: FilledButton.icon(

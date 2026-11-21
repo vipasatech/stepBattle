@@ -41,6 +41,20 @@ import UserNotifications
 @main
 @objc class AppDelegate: FlutterAppDelegate {
 
+  // ---------------------------------------------------------------------------
+  // Explicit Flutter engine, created and run here rather than implicitly by a
+  // FlutterViewController loaded from Main.storyboard.
+  //
+  // Why: adopting the UIScene lifecycle (below) moves window creation out of
+  // UIApplicationMain and into `SceneDelegate.scene(_:willConnectTo:)`, which
+  // runs AFTER didFinishLaunching. Plugin registration happens in
+  // didFinishLaunching, so if we left the engine implicit there would be no
+  // engine to register against at that moment. Owning the engine makes the
+  // ordering explicit: create it, run it, register plugins, and hand the same
+  // instance to the view controller when the scene connects.
+  // ---------------------------------------------------------------------------
+  let flutterEngine = FlutterEngine(name: "stepbattle_main")
+
   override func application(
     _ application: UIApplication,
     didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?
@@ -81,9 +95,12 @@ import UserNotifications
     Messaging.messaging().delegate = self
 
     // -------------------------------------------------------------------------
-    // 3. Flutter plugin registration — MUST call this before returning.
+    // 3. Flutter engine + plugin registration — MUST call this before
+    // returning. Registering against `flutterEngine` rather than `self` is
+    // what the UIScene migration requires; see the property's header.
     // -------------------------------------------------------------------------
-    GeneratedPluginRegistrant.register(with: self)
+    flutterEngine.run()
+    GeneratedPluginRegistrant.register(with: flutterEngine)
 
     return super.application(application, didFinishLaunchingWithOptions: launchOptions)
   }
@@ -131,6 +148,96 @@ import UserNotifications
     options: [UIApplication.OpenURLOptionsKey: Any] = [:]
   ) -> Bool {
     return super.application(app, open: url, options: options)
+  }
+}
+
+// =============================================================================
+// UIScene lifecycle
+// =============================================================================
+//
+// Required as of the iOS 26 SDK. An app built against that SDK (or newer) which
+// does NOT adopt UIScene is killed by UIKit at launch — the crash surfaces as
+// EXC_BREAKPOINT inside
+// `___UIApplicationEvaluateRuntimeIssueForNoSceneLifecycleAdoption_block_invoke`,
+// roughly 150ms in, with no Dart ever executing. Note the trigger is the SDK
+// the binary was BUILT with, not the iOS version it runs on: the same source
+// built with Xcode 26 launches fine on iOS 27. This Mac updated to Xcode 27.2,
+// which is what surfaced it (2026-11-19).
+//
+// Flutter ships a `FlutterSceneDelegate` in later releases; 3.27.1 predates it,
+// so the adoption below is hand-rolled. Three pieces are required and Apple
+// checks for all of them: the `UIApplicationSceneManifest` key in Info.plist,
+// at least one scene configuration in it, and the
+// `configurationForConnecting` method here.
+// =============================================================================
+extension AppDelegate {
+  override func application(
+    _ application: UIApplication,
+    configurationForConnecting connectingSceneSession: UISceneSession,
+    options: UIScene.ConnectionOptions
+  ) -> UISceneConfiguration {
+    // Name must match UISceneConfigurationName in Info.plist exactly.
+    return UISceneConfiguration(
+      name: "Default Configuration",
+      sessionRole: connectingSceneSession.role
+    )
+  }
+}
+
+/// Owns the single window. Declared in this file rather than its own so the
+/// Xcode project's Sources build phase needs no edit — `project.pbxproj`
+/// surgery is a poor trade for one class.
+class SceneDelegate: UIResponder, UIWindowSceneDelegate {
+  var window: UIWindow?
+
+  func scene(
+    _ scene: UIScene,
+    willConnectTo session: UISceneSession,
+    options connectionOptions: UIScene.ConnectionOptions
+  ) {
+    guard let windowScene = scene as? UIWindowScene,
+          let appDelegate = UIApplication.shared.delegate as? AppDelegate
+    else { return }
+
+    // Build the window around the engine AppDelegate already started, rather
+    // than instantiating Main.storyboard. The storyboard's FlutterViewController
+    // would spin up a SECOND, pluginless engine.
+    let window = UIWindow(windowScene: windowScene)
+    window.rootViewController = FlutterViewController(
+      engine: appDelegate.flutterEngine,
+      nibName: nil,
+      bundle: nil
+    )
+    self.window = window
+    window.makeKeyAndVisible()
+
+    // Compatibility shim. Plenty of plugins still reach for
+    // `UIApplication.shared.delegate.window` to present view controllers from
+    // — image pickers, OAuth sheets, payment flows. Under the scene lifecycle
+    // that property is nil unless we set it, and the failure mode is a plugin
+    // silently doing nothing rather than throwing.
+    appDelegate.window = window
+
+    // A URL that launched the app cold arrives here, not via
+    // scene(_:openURLContexts:).
+    if let url = connectionOptions.urlContexts.first?.url {
+      forward(url)
+    }
+  }
+
+  // Under the scene lifecycle UIKit stops calling
+  // `application(_:open:options:)` on the app delegate and calls this instead.
+  // Google Sign-In and Supabase auth both come back through a URL scheme, so
+  // without this forward the user completes sign-in in Safari and returns to
+  // an app that never hears about it.
+  func scene(_ scene: UIScene, openURLContexts URLContexts: Set<UIOpenURLContext>) {
+    guard let url = URLContexts.first?.url else { return }
+    forward(url)
+  }
+
+  private func forward(_ url: URL) {
+    guard let appDelegate = UIApplication.shared.delegate as? AppDelegate else { return }
+    _ = appDelegate.application(UIApplication.shared, open: url, options: [:])
   }
 }
 

@@ -13,6 +13,11 @@ import 'dart:async';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:permission_handler/permission_handler.dart';
+
+import '../../providers/capability_provider.dart';
+import '../../services/capability_service.dart';
+import '../../sheets/permission_help_sheet.dart';
 
 import '../../utils/app_logger.dart';
 import 'tour_controller.dart';
@@ -45,6 +50,38 @@ class OnboardingTourOverlay extends ConsumerStatefulWidget {
 }
 
 class _OnboardingTourOverlayState extends ConsumerState<OnboardingTourOverlay> {
+  /// True while a permission ask started from the card is in flight —
+  /// the OS alert is up, or we are re-probing after it closed.
+  bool _allowBusy = false;
+
+  /// Runs the ask behind a step's "Allow" button.
+  ///
+  /// Deliberately does NOT advance the tour on success. The spotlight is
+  /// sitting on the very widget this unlocks, so staying put lets the
+  /// user watch the padlock become a number — and when the OS refuses to
+  /// prompt and we have to send them to Settings, the flow is still here
+  /// when they come back. The button re-reads the capability on every
+  /// build, so it turns into "Next" by itself once granted.
+  Future<void> _resolveStepPermission(AppCapability capability) async {
+    if (_allowBusy) return;
+    setState(() => _allowBusy = true);
+    try {
+      final outcome =
+          await ref.read(capabilityServiceProvider).resolve(capability);
+      if (outcome == LockOutcome.sentToSettings && mounted) {
+        // Name the toggle before throwing them into Settings — the card
+        // is still on screen behind the sheet, so the context holds.
+        final go = await showPermissionHelpSheet(context, capability);
+        if (go) await openAppSettings();
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _allowBusy = false);
+        ref.read(capabilityRefreshProvider.notifier).state++;
+      }
+    }
+  }
+
   Rect? _targetRect;
   int? _measuredStepIndex;
   bool _scrolling = false;
@@ -642,6 +679,16 @@ class _OnboardingTourOverlayState extends ConsumerState<OnboardingTourOverlay> {
     // frame as the title). Falls back to live index on the very
     // first paint before any swap has been scheduled.
     final displayedIdx = _displayedStepIndex ?? state.stepIndex;
+    // A step that offers a permission shows Allow / Not now instead of
+    // Next, but only while that capability is actually locked AND only
+    // where the lock model is live (iOS today — Android still asks
+    // during onboarding, so offering again here would double up).
+    final capability = contentStep.permission;
+    final offersPermission = capability != null &&
+        CapabilityLocks.enabled &&
+        ref.watch(capabilityUnlockedProvider(capability)).valueOrNull ==
+            false;
+
     return TourTooltip(
       title: contentStep.title,
       description: contentStep.description,
@@ -650,6 +697,10 @@ class _OnboardingTourOverlayState extends ConsumerState<OnboardingTourOverlay> {
       onClose: notifier.skip,
       onBack: hasBack ? notifier.back : null,
       onNext: notifier.next,
+      onAllow: offersPermission
+          ? () => _resolveStepPermission(capability)
+          : null,
+      allowBusy: _allowBusy,
       isLast: state.stepIndex >= kTourSteps.length - 1,
       notchSide: notchSide,
       notchFraction: notchFraction,

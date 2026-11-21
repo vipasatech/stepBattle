@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../config/colors.dart';
+import '../config/purchases.dart';
 import '../sheets/buy_xp_sheet.dart';
 
 /// Modal shown when the user tries to CREATE or ACCEPT a stake battle
@@ -108,16 +109,22 @@ Future<bool> showInsufficientXpDialog(
           style: TextButton.styleFrom(
             foregroundColor: AppColors.onSurfaceVariant,
           ),
-          child: const Text('Later'),
+          // Without a Buy-XP action beside it, "Later" implies an offer
+          // that isn't there; the dialog becomes purely informational.
+          child: Text(Purchases.enabled ? 'Later' : 'OK'),
         ),
-        FilledButton(
-          onPressed: () => Navigator.of(ctx).pop(true),
-          style: FilledButton.styleFrom(
-            backgroundColor: AppColors.primary,
-            foregroundColor: Colors.white,
+        // The only purchase affordance in this dialog. Absent on iOS,
+        // which makes the returned `tappedBuy` always false there — the
+        // callers already treat that as "user declined". See [Purchases].
+        if (Purchases.enabled)
+          FilledButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            style: FilledButton.styleFrom(
+              backgroundColor: AppColors.primary,
+              foregroundColor: Colors.white,
+            ),
+            child: const Text('Buy XP'),
           ),
-          child: const Text('Buy XP'),
-        ),
       ],
     ),
   );

@@ -41,8 +41,37 @@
 	<true/>
 	<key>UILaunchStoryboardName</key>
 	<string>LaunchScreen</string>
-	<key>UIMainStoryboardFile</key>
-	<string>Main</string>
+	<!--
+	  UIMainStoryboardFile was REMOVED 2026-11-19 in favour of the scene
+	  manifest below. Under the UIScene lifecycle the window is built in
+	  SceneDelegate (AppDelegate.swift); leaving this key as well would make
+	  UIKit instantiate Main.storyboard too, producing a second
+	  FlutterViewController with its own engine and no plugins registered.
+	-->
+	<key>UIApplicationSceneManifest</key>
+	<dict>
+		<!-- Single window. The app has no iPad multi-window or Stage Manager
+		     support, and claiming otherwise would invite UIKit to create scenes
+		     we do not handle. -->
+		<key>UIApplicationSupportsMultipleScenes</key>
+		<false/>
+		<key>UISceneConfigurations</key>
+		<dict>
+			<key>UIWindowSceneSessionRoleApplication</key>
+			<array>
+				<dict>
+					<!-- Must match the name returned by
+					     configurationForConnecting in AppDelegate.swift. -->
+					<key>UISceneConfigurationName</key>
+					<string>Default Configuration</string>
+					<!-- $(PRODUCT_MODULE_NAME) resolves to Runner at build time;
+					     Swift classes are addressed as Module.Class here. -->
+					<key>UISceneDelegateClassName</key>
+					<string>$(PRODUCT_MODULE_NAME).SceneDelegate</string>
+				</dict>
+			</array>
+		</dict>
+	</dict>
 
 	<!-- Orientation support — mirrors Android (portrait primary, landscape allowed) -->
 	<key>UISupportedInterfaceOrientations</key>
@@ -177,9 +206,28 @@
 		<string>fetch</string>
 		<!-- remote-notification: silent pushes wake the app for sync + battle wake pings -->
 		<string>remote-notification</string>
-		<!-- processing: BGProcessingTask — heavier background work (rare) -->
-		<string>processing</string>
+		<!-- processing: REMOVED 2026-11-19. Declaring this mode obliges us to
+		     list BGTaskSchedulerPermittedIdentifiers, and App Store upload
+		     rejects the build without it (error 90771). We have no identifiers
+		     to list: BackgroundSync is gated behind Platform.isAndroid
+		     (background_sync.dart), AppDelegate registers nothing with
+		     BGTaskScheduler, and no plugin schedules a BGProcessingTask on
+		     iOS. Re-add this mode AND the identifiers together if iOS ever
+		     grows real background processing. -->
 	</array>
+
+	<!--
+	  Export compliance. StepBattle uses only HTTPS/TLS through the OS
+	  networking stack — no custom or proprietary cryptography — which is
+	  the standard exemption under US export regulations. Declaring it here
+	  answers the question once, at build time. Without this key every
+	  upload prompts for an export-compliance answer in App Store Connect,
+	  and a TestFlight build sits unusable at "Missing Compliance" until
+	  someone answers it by hand. Set to true ONLY if we ever ship our own
+	  crypto implementation, which would also require an ERN from BIS.
+	-->
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
 
 	<!--
 	  ═══════════════════════════════════════════════════════════════════

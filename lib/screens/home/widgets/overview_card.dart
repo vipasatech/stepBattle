@@ -6,8 +6,10 @@ import '../../../config/motion.dart';
 import '../../../features/onboarding_tour/tour_step.dart';
 import '../../../features/onboarding_tour/tour_target.dart';
 import '../../../providers/step_provider.dart';
+import '../../../services/capability_service.dart';
 import '../../../providers/user_provider.dart';
 import '../../../sheets/level_info_sheet.dart';
+import '../../../widgets/metric_lock.dart';
 import '../../../widgets/premium_card.dart';
 import '../../../widgets/progress_bar.dart';
 import '../../../widgets/shimmer_loader.dart';
@@ -85,8 +87,15 @@ class OverviewCard extends ConsumerWidget {
           // card overall feels more compact and gives more breathing
           // room to surrounding sections. Wrapped in _StepsHero for
           // count-up + subtle scale pulse whenever the value changes.
+          // The headline number, or a padlock when no step source can
+          // supply it. Sized to the display glyph so unlocking doesn't
+          // shift the card's layout.
           Center(
-            child: todayStepsAsync.when(
+            child: MetricLock(
+              requires: const [AppCapability.steps],
+              iconSize: 44,
+              semanticLabel: 'Step count locked. Tap to allow access.',
+              child: todayStepsAsync.when(
               data: (steps) => _StepsHero(
                 steps: steps,
                 style: theme.textTheme.displayLarge?.copyWith(
@@ -108,6 +117,7 @@ class OverviewCard extends ConsumerWidget {
                   height: 1.0,
                 ),
               ),
+            ),
             ),
           ),
           const SizedBox(height: 2),

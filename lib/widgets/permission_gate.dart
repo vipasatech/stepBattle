@@ -5,6 +5,7 @@ import 'package:hive/hive.dart';
 import '../config/colors.dart';
 import '../providers/step_provider.dart';
 import '../screens/onboarding/health_setup_screen.dart';
+import '../services/capability_service.dart';
 import '../services/native_step_service.dart';
 import '../services/permission_service.dart';
 
@@ -69,6 +70,15 @@ class _PermissionGateState extends ConsumerState<PermissionGate>
   }
 
   Future<void> _checkPermissions() async {
+    // Under the lock model this primer must not run. It is a modal that
+    // interrupts Home to ask for permissions — the precise behaviour the
+    // locks replace with an in-context padlock on the metric each one
+    // unlocks. Running both means a user grants from a dialog they were
+    // given no reason for, or dismisses it and still meets padlocks.
+    //
+    // It was never platform-gated, so it kept firing on iOS from
+    // 1.1.7+44 onward even as the locks shipped around it.
+    if (CapabilityLocks.enabled) return;
     if (_dialogShown) return;
     final service = ref.read(permissionServiceProvider);
     final status = await service.checkAll();

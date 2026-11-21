@@ -15,6 +15,7 @@ import '../../models/battle_model.dart';
 import '../../providers/auth_provider.dart';
 import '../../providers/battle_provider.dart';
 import '../../utils/app_logger.dart';
+import '../../services/capability_service.dart';
 // [3D-DISABLED-2026-08-21] media_warmup import was only used for
 // primeWebViewEngine, commented below.
 // import '../../services/media_warmup.dart';
@@ -24,6 +25,7 @@ import '../../sheets/battle_group_setup_sheet.dart';
 import '../../sheets/new_battle_selection_sheet.dart';
 import '../../sheets/pending_battle_actions_sheet.dart';
 import '../../sheets/team_battle_confirm_dialog.dart';
+import '../../widgets/metric_lock.dart';
 import '../../widgets/avatar_circle.dart';
 import '../../widgets/glass_card.dart';
 import '../../widgets/insufficient_xp_dialog.dart';
@@ -736,7 +738,28 @@ class _BattlesScreenState extends ConsumerState<BattlesScreen> {
           ),
         ),
       ),
-      body: const _BattlesBody(),
+      body: MetricLock(
+        requires: const [
+          AppCapability.steps,
+          AppCapability.notifications,
+        ],
+        lockedBuilder: (context, resolve) => Column(
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+              child: LockedCardBody(
+                title: 'Battles are locked',
+                body: 'Scoring a battle needs your step count, and '
+                    'notifications tell you when someone challenges you '
+                    'or overtakes you.',
+                onTap: resolve,
+              ),
+            ),
+            const Expanded(child: _BattlesBody()),
+          ],
+        ),
+        child: const _BattlesBody(),
+      ),
     );
   }
 

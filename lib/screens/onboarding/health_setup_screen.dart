@@ -1,8 +1,11 @@
-﻿import 'package:flutter/material.dart';
+﻿import 'dart:io' show Platform;
+
+import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:hive/hive.dart';
 import 'package:permission_handler/permission_handler.dart';
+import '../../utils/step_permission.dart';
 import 'package:url_launcher/url_launcher.dart';
 import '../../config/colors.dart';
 import '../../providers/step_provider.dart';
@@ -98,7 +101,7 @@ class _HealthSetupScreenState extends ConsumerState<HealthSetupScreen>
   }
 
   Future<void> _refreshActivityStatus() async {
-    final status = await Permission.activityRecognition.status;
+    final status = await stepPermission.status;
     if (!mounted) return;
     setState(() => _activityStatus = status);
   }
@@ -115,7 +118,7 @@ class _HealthSetupScreenState extends ConsumerState<HealthSetupScreen>
     if (_requestingActivity) return;
     setState(() => _requestingActivity = true);
     try {
-      final current = await Permission.activityRecognition.status;
+      final current = await stepPermission.status;
       if (current.isPermanentlyDenied || current.isRestricted) {
         await openAppSettings();
         // Status is re-read in didChangeDependencies-equivalent fashion
@@ -123,20 +126,28 @@ class _HealthSetupScreenState extends ConsumerState<HealthSetupScreen>
         // from the lifecycle hook below.
         return;
       }
-      final result = await Permission.activityRecognition.request();
+      final result = await stepPermission.request();
       if (!mounted) return;
       setState(() => _activityStatus = result);
       if (result.isPermanentlyDenied && mounted) {
         // The request itself flipped it to permanently-denied (user hit
         // "Don't allow" again). Tell them plainly rather than leaving a
         // button that silently does nothing next tap.
+        // Platform-split: iOS has no "Physical activity" permission and
+        // the settings path differs, so naming Android's sends an iPhone
+        // user hunting for a toggle that does not exist. Missed in the
+        // first pass at this screen (2026-11-20) because it lives in a
+        // snackbar rather than the banner.
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
+          SnackBar(
             content: Text(
-              'Android won\'t show the prompt again. '
-              'Use Open Settings to allow Physical activity.',
+              Platform.isIOS
+                  ? 'iOS won\'t ask again. Use Open Settings to allow '
+                      'Motion & Fitness.'
+                  : 'Android won\'t show the prompt again. '
+                      'Use Open Settings to allow Physical activity.',
             ),
-            duration: Duration(seconds: 5),
+            duration: const Duration(seconds: 5),
           ),
         );
       }
@@ -630,7 +641,13 @@ class _ActivityPermissionCard extends StatelessWidget {
               const SizedBox(width: 10),
               Expanded(
                 child: Text(
-                  'Physical activity is blocked',
+                  // iOS calls this permission "Motion & Fitness"; there is
+                  // no "Physical activity" toggle anywhere on an iPhone, so
+                  // naming it that sent users hunting for a setting that
+                  // does not exist.
+                  Platform.isIOS
+                      ? 'Motion & Fitness is blocked'
+                      : 'Physical activity is blocked',
                   style: theme.textTheme.titleMedium?.copyWith(
                     fontWeight: FontWeight.w800,
                     color: AppColors.onSurface,
@@ -642,13 +659,22 @@ class _ActivityPermissionCard extends StatelessWidget {
           const SizedBox(height: 10),
           Text(
             needsSettings
-                ? 'Android won\'t show the permission prompt again because '
-                    'it was declined. Open Settings → Permissions → '
-                    'Physical activity and set it to Allow. Nothing below '
-                    'can count steps until you do.'
-                : 'StepBattle needs the Physical activity permission to read '
-                    'your phone\'s step counter. Nothing below can count '
-                    'steps until this is allowed.',
+                ? (Platform.isIOS
+                    ? 'iOS won\'t ask again because the permission was '
+                        'declined. Open Settings → StepBattle → Motion & '
+                        'Fitness and turn it on. Nothing below can count '
+                        'steps until you do.'
+                    : 'Android won\'t show the permission prompt again '
+                        'because it was declined. Open Settings → '
+                        'Permissions → Physical activity and set it to '
+                        'Allow. Nothing below can count steps until you do.')
+                : (Platform.isIOS
+                    ? 'StepBattle needs Motion & Fitness access to read your '
+                        'iPhone\'s step counter. Nothing below can count '
+                        'steps until this is allowed.'
+                    : 'StepBattle needs the Physical activity permission to '
+                        'read your phone\'s step counter. Nothing below can '
+                        'count steps until this is allowed.'),
             style: theme.textTheme.bodyMedium?.copyWith(
               color: AppColors.onSurfaceVariant,
               height: 1.45,

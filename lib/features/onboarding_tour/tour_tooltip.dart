@@ -25,6 +25,16 @@ class TourTooltip extends StatelessWidget {
   /// Bottom-right primary — advances or finishes.
   final VoidCallback onNext;
 
+  /// Non-null when this step is offering a permission: the primary
+  /// button becomes "Allow" and runs this instead of advancing, and a
+  /// "Not now" appears beside it wired to [onNext]. Goes null once the
+  /// capability is granted, so the card reverts to a plain Next.
+  final VoidCallback? onAllow;
+
+  /// True while [onAllow] is in flight — the OS prompt is on screen, or
+  /// we are re-probing after it closed.
+  final bool allowBusy;
+
   /// True on the last step → primary label becomes "Finish".
   final bool isLast;
 
@@ -46,6 +56,8 @@ class TourTooltip extends StatelessWidget {
     required this.totalSteps,
     required this.onClose,
     required this.onNext,
+    this.onAllow,
+    this.allowBusy = false,
     required this.isLast,
     this.onBack,
     this.notchSide = TooltipNotchSide.none,
@@ -188,9 +200,21 @@ class TourTooltip extends StatelessWidget {
                 ),
                 const SizedBox(width: 8),
               ],
+              if (onAllow != null) ...[
+                _CardButton(
+                  label: 'Not now',
+                  onPressed: onNext,
+                  filled: false,
+                  textColor: textColor,
+                  borderColor: borderColor,
+                ),
+                const SizedBox(width: 8),
+              ],
               _CardButton(
-                label: isLast ? 'Finish' : 'Next',
-                onPressed: onNext,
+                label: onAllow != null
+                    ? (allowBusy ? 'Waiting…' : 'Allow')
+                    : (isLast ? 'Finish' : 'Next'),
+                onPressed: allowBusy ? () {} : (onAllow ?? onNext),
                 filled: true,
                 // Solid white pill with deep-violet text — high
                 // contrast against the purple gradient card body.

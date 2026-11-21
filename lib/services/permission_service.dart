@@ -1,5 +1,8 @@
 import 'package:health/health.dart';
+import 'dart:io' show Platform;
+
 import 'package:permission_handler/permission_handler.dart';
+import '../utils/step_permission.dart';
 import '../utils/app_logger.dart';
 import '../utils/permission_coordinator.dart';
 
@@ -27,7 +30,7 @@ class PermissionService {
     final healthAvailable = await _healthConnectAvailable();
     final health = healthAvailable ? await _checkHealth() : false;
     final notifications = await Permission.notification.isGranted;
-    final activity = await Permission.activityRecognition.isGranted;
+    final activity = await stepPermission.isGranted;
 
     final summary = PermissionSummary(
       health: health,
@@ -77,11 +80,11 @@ class PermissionService {
   Future<PermissionSummary> requestAll() async {
     AppLogger.permission.i('requestAll:start');
     // 1. Activity recognition (Android 10+) — required for steps
-    if (!await Permission.activityRecognition.isGranted) {
+    if (!await stepPermission.isGranted) {
       final status = await PermissionCoordinator.instance.enqueue(
         tag: 'activityRecognition',
         priority: PermissionPriority.activityRecognition,
-        action: () => Permission.activityRecognition.request(),
+        action: () => stepPermission.request(),
       );
       AppLogger.permission
           .i('activityRecognition:request', fields: {'status': status.name});
@@ -168,6 +171,24 @@ class PermissionService {
       return fine.isPermanentlyDenied
           ? RunLocationStatus.permanentlyDenied
           : RunLocationStatus.denied;
+    }
+
+    // iOS stops here. Always-location cannot be requested at all without
+    // NSLocationAlwaysAndWhenInUseUsageDescription, which this app does
+    // not declare — and should not, because Track has no `location`
+    // background mode and stops recording when the screen locks
+    // (run_tracking_service.dart:38). Asking for a capability we cannot
+    // use fails silently AND is a guideline 5.1.1 rejection risk.
+    //
+    // Foreground is therefore the complete, correct answer on iOS: report
+    // `granted` rather than `foregroundOnly`, so the user is not warned
+    // about losing a background behaviour that was never on offer.
+    if (Platform.isIOS) {
+      AppLogger.permission.i('requestRunPermissions:done', fields: {
+        'fine': fine.name,
+        'background': 'skipped-ios',
+      });
+      return RunLocationStatus.granted;
     }
 
     final background = await Permission.locationAlways.request();

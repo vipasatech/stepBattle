@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../config/colors.dart';
+import '../../../config/purchases.dart';
 import '../../../config/motion.dart';
 import '../../../models/user_model.dart';
 import '../../../providers/battle_provider.dart';
@@ -63,7 +64,11 @@ class ProfileStatsStrip extends ConsumerWidget {
             label: 'XP',
             value: _abbreviateXp(user.totalXP),
             valueColor: AppColors.primary,
-            onTap: () => _openBuyXp(context),
+            // Null onTap leaves the stat rendering identically and
+            // simply stops it opening the purchase sheet — there is
+            // no `+` or ripple here to give the tap away. See
+            // [Purchases].
+            onTap: Purchases.enabled ? () => _openBuyXp(context) : null,
           ),
           const _StatGap(),
           _StreakStat(

@@ -71,6 +71,31 @@ class HealthSetupAdvice {
     final needsHcInstall = api > 0 && api < 34; // pre-Android-14
 
     return switch (manufacturer) {
+      // iOS. DeviceInfoService sets manufacturer to 'apple' on iPhone, and
+      // without this case the `_` fallback handed iPhone users Android
+      // instructions — Health Connect, Google Fit, "Open Settings →
+      // Permissions → Physical activity" — none of which exist on iOS
+      // (fixed 2026-11-20 after it shipped to TestFlight that way).
+      //
+      // iOS also needs far less of the user: the iPhone's motion
+      // coprocessor records steps into Apple Health on its own, so there
+      // is no step-source app to install or bridge to connect. The only
+      // thing standing between us and the data is the read permission.
+      'apple' => HealthSetupAdvice(
+          oemName: 'iPhone',
+          oemAppName: 'Apple Health',
+          recommendGoogleFitFallback: false,
+          needsHealthConnectInstall: false,
+          quality: HealthSourceQuality.excellent,
+          headline: 'Allow StepBattle to read your steps from Apple Health.',
+          steps: [
+            'Open the Health app and tap your profile picture (top right).',
+            'Tap Privacy, then Apps, and choose StepBattle.',
+            'Turn on Steps and Walking + Running Distance.',
+            'Your iPhone counts steps on its own — no extra app or '
+                'wearable needed.',
+          ],
+        ),
       'samsung' => HealthSetupAdvice(
           oemName: 'Samsung',
           oemAppName: 'Samsung Health',

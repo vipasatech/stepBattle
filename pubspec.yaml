@@ -1,7 +1,7 @@
 name: stepbattle
 description: "StepBattle — Fitness gamification app"
 publish_to: 'none'
-version: 1.1.7+40
+version: 1.1.7+48
 
 environment:
   sdk: ^3.6.0
@@ -183,6 +183,8 @@ dependencies:
   # # Version pin matches what the fork resolves.
   # flutter_inappwebview: ^6.1.5
   android_alarm_manager_plus: 4.0.7
+  sign_in_with_apple: ^7.0.1
+  crypto: ^3.0.8
 
 dependency_overrides:
   # [3D-DISABLED-2026-08-21] — vendored fork override commented out. The

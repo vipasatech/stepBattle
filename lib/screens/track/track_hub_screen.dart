@@ -1,3 +1,5 @@
+import 'dart:io' show Platform;
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -7,13 +9,16 @@ import '../../config/colors.dart';
 import '../../models/run_session_model.dart';
 import '../../providers/auth_provider.dart';
 import '../../providers/run_session_provider.dart';
+import '../../services/capability_service.dart';
 import '../../services/permission_service.dart';
 import '../../services/run_tracking_service.dart';
 import '../../sheets/background_location_disclosure_dialog.dart';
 import '../../sheets/logs_viewer_sheet.dart';
+import '../../sheets/permission_help_sheet.dart';
 import '../../utils/app_logger.dart';
 import '../../utils/friendly_date.dart';
 import '../../widgets/empty_state.dart';
+import '../../widgets/metric_lock.dart';
 import '../../widgets/mount_stagger.dart';
 import '../../widgets/premium_card.dart';
 import '../../widgets/pressable.dart';
@@ -82,7 +87,16 @@ class _TrackHubScreenState extends ConsumerState<TrackHubScreen> {
       // fire ahead of the actual OS permission prompt; if the OS won't
       // prompt because it's already granted, we've got nothing to
       // disclose.
-      final alreadyGranted = await Permission.locationAlways.isGranted;
+      // The disclosure below exists to satisfy GOOGLE PLAY's
+      // background-location declaration, and its copy says as much
+      // ("Android's location permission screen"). iOS neither needs it
+      // nor has anything to disclose — Track is foreground-only there —
+      // and `locationAlways.isGranted` is permanently false on iOS
+      // because the Always usage string is absent, so without this guard
+      // the dialog appeared on EVERY Start tap and its Continue button
+      // did nothing visible.
+      final alreadyGranted =
+          Platform.isIOS || await Permission.locationAlways.isGranted;
       if (!mounted) return;
       if (!alreadyGranted) {
         final consented =
@@ -111,7 +125,15 @@ class _TrackHubScreenState extends ConsumerState<TrackHubScreen> {
           break;
         case RunLocationStatus.permanentlyDenied:
         case RunLocationStatus.foregroundOnlyPermanent:
-          await PermissionService().openAppSettingsPage();
+          // Previously this jumped straight to Settings, so tapping
+          // "Start run" bounced the user out of the app with no statement
+          // of what was wrong or what to change. Name the toggle first.
+          if (!mounted) return;
+          final go = await showPermissionHelpSheet(
+            context,
+            AppCapability.location,
+          );
+          if (go) await PermissionService().openAppSettingsPage();
           return;
         case RunLocationStatus.denied:
           ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
@@ -177,6 +199,25 @@ class _TrackHubScreenState extends ConsumerState<TrackHubScreen> {
       body: ListView(
         padding: const EdgeInsets.fromLTRB(20, 16, 20, 120),
         children: [
+          // Track needs location to draw a route and steps to count one.
+          // Shown above the hero card rather than replacing the tab —
+          // history stays readable either way.
+          MetricLock(
+            requires: const [
+              AppCapability.location,
+              AppCapability.steps,
+            ],
+            lockedBuilder: (context, resolve) => Padding(
+              padding: const EdgeInsets.only(bottom: 20),
+              child: LockedCardBody(
+                title: 'Track is locked',
+                body: 'Recording a walk needs location for the route and '
+                    'your step count for the distance.',
+                onTap: resolve,
+              ),
+            ),
+            child: const SizedBox.shrink(),
+          ),
           // MountStagger reveals hero card + history section with a
           // fade+slide on first mount. Two blocks total; both animate.
           MountStagger(

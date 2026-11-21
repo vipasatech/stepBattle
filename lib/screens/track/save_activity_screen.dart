@@ -188,6 +188,47 @@ class _SaveActivityScreenState extends ConsumerState<SaveActivityScreen> {
     }
   }
 
+  /// Throw the session away without saving it anywhere.
+  ///
+  /// Confirms only when there is something to lose. A run with real
+  /// distance or steps gets "this can't be undone"; a session that
+  /// recorded nothing does not, because asking someone to confirm the
+  /// deletion of zero is pure friction — and an accidental Start is
+  /// exactly the case this button exists for.
+  Future<void> _discard() async {
+    final session = ref.read(activeRunSessionProvider).valueOrNull;
+    final recordedSomething =
+        (session?.steps ?? 0) > 0 || (session?.distanceMeters ?? 0) >= 10;
+
+    if (recordedSomething) {
+      final confirmed = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          backgroundColor: AppColors.surfaceContainerHigh,
+          title: const Text('Discard this activity?'),
+          content: const Text(
+            "This recording won't be saved and can't be recovered.",
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(false),
+              child: const Text('Keep'),
+            ),
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(true),
+              style: TextButton.styleFrom(foregroundColor: AppColors.error),
+              child: const Text('Discard'),
+            ),
+          ],
+        ),
+      );
+      if (confirmed != true) return;
+    }
+
+    await ref.read(runTrackingServiceProvider).discard();
+    if (mounted) context.go('/track');
+  }
+
   /// Ask the user whether to save the session without the photos when
   /// the upload timed out or errored. Returning `null` counts as a
   /// cancel — the caller stays on the Save Activity page.
@@ -251,6 +292,28 @@ class _SaveActivityScreenState extends ConsumerState<SaveActivityScreen> {
           ),
         ),
         centerTitle: true,
+        // Discard sits opposite Resume, bracketing the title: two quiet
+        // text actions for "not finished" and "don't keep this", with
+        // the violet Save pill at the bottom as the single prominent
+        // action. Deliberately NOT placed under that pill — that is
+        // where the thumb already rests, and a mis-tap there destroys a
+        // recording.
+        actions: [
+          Padding(
+            padding: const EdgeInsets.only(right: 8),
+            child: TextButton(
+              onPressed: _saving ? null : _discard,
+              style: TextButton.styleFrom(
+                foregroundColor: AppColors.error,
+                textStyle: const TextStyle(
+                  fontWeight: FontWeight.w700,
+                  fontSize: 14,
+                ),
+              ),
+              child: const Text('Discard'),
+            ),
+          ),
+        ],
         title: Text(
           'Save Activity',
           style: theme.textTheme.titleMedium

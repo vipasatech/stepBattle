@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io' show Platform;
 
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -91,6 +92,29 @@ class NotificationService {
     // Diagnostics on Xiaomi devices. Retry with backoff (250ms →
     // 1s → 3s) and swallow the final failure: FCM push is a nice-
     // to-have here and shouldn't crash the shell init.
+    // iOS ONLY: Firebase cannot mint an FCM token until APNs has handed
+    // it a device token, and on a cold launch that arrives a beat after
+    // the shell initialises. Until it does, getToken() throws
+    // `firebase_messaging/apns-token-not-set` — which is exactly what the
+    // retry loop below was burning its three attempts on (2026-11-20
+    // TestFlight logs: two retries then saveToken:unavailable, so push
+    // never worked on iOS at all).
+    //
+    // Waiting on the APNs token first fixes the ordering. Capped at ~3s:
+    // if the user denied push permission the token never arrives, and we
+    // fall through to the loop below which fails gracefully rather than
+    // hanging the caller. Android has no such dependency and skips this.
+    if (Platform.isIOS) {
+      for (int i = 0; i < 6; i++) {
+        try {
+          if (await _messaging.getAPNSToken() != null) break;
+        } catch (_) {
+          // Treat a throwing probe as "not ready yet" and keep waiting.
+        }
+        await Future<void>.delayed(const Duration(milliseconds: 500));
+      }
+    }
+
     String? token;
     Object? lastError;
     for (int attempt = 0; attempt < 3; attempt++) {

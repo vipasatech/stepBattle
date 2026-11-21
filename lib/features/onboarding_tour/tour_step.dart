@@ -5,6 +5,8 @@
 // changes, target additions, and re-ordering all happen here — the
 // overlay, controller, and TourTarget wrappers stay untouched.
 
+import '../../services/capability_service.dart';
+
 /// Named handle for every element the tour can spotlight. Each id
 /// matches exactly one [TourTarget] widget in the app tree; the
 /// controller resolves the id → GlobalKey lookup through the
@@ -212,6 +214,22 @@ class TourStep {
   /// (a destructive action to unwind). Added 2026-09-22.
   final bool hidesBackButton;
 
+  /// A capability this step should offer to unlock.
+  ///
+  /// When set AND the capability is currently locked, the card's primary
+  /// button becomes "Allow" and the secondary becomes "Not now".
+  /// Granting advances; declining also advances — asking twice inside
+  /// one flow is nagging, and the padlock left on the spotlighted widget
+  /// is the second chance.
+  ///
+  /// Attached to EXISTING steps rather than added as new ones on
+  /// purpose. Steps 0 and 1 already spotlight the step counter and the
+  /// streak flame, which are precisely the widgets these permissions
+  /// unlock — so the ask lands on the thing it affects, and no index
+  /// moves. [TourStepRanges] and the info-icon replays are index-keyed,
+  /// so prepending steps would have silently repointed both.
+  final AppCapability? permission;
+
   const TourStep({
     required this.targetId,
     required this.tab,
@@ -224,6 +242,7 @@ class TourStep {
     this.cardOffsetPastTarget = 0,
     this.notchFractionOverride,
     this.hidesBackButton = false,
+    this.permission,
   });
 }
 
@@ -283,15 +302,20 @@ const List<TourStep> kTourSteps = [
     targetId: TourTargetId.homeStepCounter,
     tab: TourTab.home,
     title: "Today's goal",
-    description: 'Walk to earn XP. Hit the number to complete today.',
+    description: 'Walk to earn XP. Hit the number to complete today. '
+        'StepBattle reads your step count from your phone and Apple '
+        'Health — without it there is nothing to score.',
     arrowSide: TourArrowSide.fromBelow,
+    permission: AppCapability.steps,
   ),
   TourStep(
     targetId: TourTargetId.homeStreakFlame,
     tab: TourTab.home,
     title: 'Keep the flame alive',
-    description: 'Hit your goal every day to build a streak.',
+    description: 'Hit your goal every day to build a streak. Turn on '
+        'notifications and we will warn you before you lose one.',
     arrowSide: TourArrowSide.fromBelow,
+    permission: AppCapability.notifications,
     // Target rect wraps the WHOLE streak strip (flame + "N Days"
     // caption + weekly dots) so the spotlight highlights the entire
     // strip and the card lands right below the "N Days" row. The

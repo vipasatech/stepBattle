@@ -3,6 +3,7 @@ import 'package:hive/hive.dart';
 import 'package:intl/intl.dart';
 import 'package:pedometer/pedometer.dart';
 import 'package:permission_handler/permission_handler.dart';
+import '../utils/step_permission.dart';
 
 import '../utils/hive_lifecycle.dart';
 
@@ -127,7 +128,7 @@ class NativeStepService {
   Future<void> start() async {
     if (_sub != null) return;
 
-    final granted = await Permission.activityRecognition.status;
+    final granted = await stepPermission.status;
     if (!granted.isGranted) {
       _lastError = 'ACTIVITY_RECOGNITION not granted';
       return;

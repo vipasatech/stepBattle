@@ -1,4 +1,10 @@
+import 'dart:convert';
+import 'dart:io';
+import 'dart:math';
+
+import 'package:crypto/crypto.dart';
 import 'package:google_sign_in/google_sign_in.dart';
+import 'package:sign_in_with_apple/sign_in_with_apple.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../models/user_model.dart';
@@ -138,14 +144,165 @@ class SupabaseAuthService {
     }
   }
 
-  /// Apple sign-in stub. The current Phase-1 cut hasn't wired Sign-In With
-  /// Apple to Supabase yet (it needs Apple Developer team config + a
-  /// Services ID + a per-project private key uploaded to Supabase). The UI
-  /// button only appears on iOS; throw a clear error if it's pressed.
+  /// Sign in with Apple -> Supabase. Mirrors [signInWithGoogle].
+  ///
+  /// Mandatory, not optional: App Store Review guideline 4.8 requires an
+  /// Apple sign-in option the moment an app offers any third-party one,
+  /// and we offer Google. Wired 2026-11-17.
+  ///
+  /// Needs NO Services ID and NO private key uploaded to Supabase — that
+  /// combination is only for the *web* `signInWithOAuth` flow. The native
+  /// path below authenticates on the bundle ID alone, which just has to be
+  /// listed under Supabase -> Auth -> Providers -> Apple -> Client IDs.
+  ///
+  /// The one way this genuinely differs from Google is the NONCE. Apple
+  /// signs the ID token over a hash we supply, and Supabase re-derives that
+  /// hash from the raw value to prove the token was minted for this request
+  /// and not replayed:
+  ///
+  ///   1. generate a random `rawNonce`
+  ///   2. send `sha256(rawNonce)` to Apple
+  ///   3. send the returned ID token **plus the RAW nonce** to Supabase
+  ///
+  /// Swap steps 2 and 3 and you get an opaque "Invalid nonce" at runtime
+  /// with nothing failing at compile time — hence spelling it out here.
+  ///
+  /// Two Apple behaviours the Google path has no equivalent for:
+  ///
+  ///   * **The name arrives exactly once.** `givenName`/`familyName` are
+  ///     populated on the user's FIRST ever authorization for this App ID
+  ///     and null on every one after — including after a delete-account
+  ///     round trip. So we capture it into the profile row on the spot;
+  ///     there is no second chance to ask Apple for it.
+  ///   * **The email may be a private relay.** If the user picks "Hide My
+  ///     Email", the address is `<random>@privaterelay.appleid.com`. That
+  ///     matches no existing Supabase identity, so someone who originally
+  ///     signed up with Google gets a NEW uid — fresh profile, no XP, no
+  ///     streak — rather than their existing account. Apple mandates
+  ///     offering Hide My Email, so this cannot be prevented. The
+  ///     mitigation is the last-sign-in-method hint stored below: once
+  ///     'apple' is recorded, /welcome re-authenticates them through Apple
+  ///     on the next launch, which lands them back on the SAME account.
   Future<AuthResponse> signInWithApple() async {
-    AppLogger.auth.w('signInWithApple:notImplemented');
-    throw UnimplementedError(
-        'Apple sign-in is not configured for Supabase yet.');
+    AppLogger.auth.i('signInWithApple:start');
+    // Defensive only. login_screen.dart renders the Apple button under
+    // `if (Platform.isIOS)`, so this is unreachable on Android today. It
+    // exists so that un-gating that button later fails loudly right here
+    // instead of silently falling back to a browser redirect flow.
+    if (!Platform.isIOS && !Platform.isMacOS) {
+      throw UnsupportedError('Apple sign-in is iOS-only in this app.');
+    }
+    try {
+      final rawNonce = _generateNonce();
+      final hashedNonce = sha256.convert(utf8.encode(rawNonce)).toString();
+
+      final credential = await SignInWithApple.getAppleIDCredential(
+        scopes: const [
+          AppleIDAuthorizationScopes.email,
+          AppleIDAuthorizationScopes.fullName,
+        ],
+        nonce: hashedNonce,
+      );
+
+      final idToken = credential.identityToken;
+      if (idToken == null) {
+        AppLogger.auth.e('signInWithApple:noIdToken');
+        throw StateError('Apple returned no identity token');
+      }
+
+      final res = await _supabase.auth.signInWithIdToken(
+        provider: OAuthProvider.apple,
+        idToken: idToken,
+        nonce: rawNonce,
+      );
+
+      // Fold Apple's one-shot name into the metadata map under the same
+      // keys [_ensureProfileRow] already reads for the Google path, so
+      // that method stays untouched.
+      final appleName = [credential.givenName, credential.familyName]
+          .whereType<String>()
+          .map((p) => p.trim())
+          .where((p) => p.isNotEmpty)
+          .join(' ');
+      final email = res.user?.email;
+      final resolvedName =
+          appleName.isNotEmpty ? appleName : _displayNameFromEmail(email);
+
+      final signedInUid = res.user?.id;
+      if (signedInUid != null && signedInUid.isNotEmpty) {
+        // Same profile-row reconciliation as the Google path — see the
+        // comment there for why the `on_auth_user_created` trigger can't
+        // be relied on after a delete-account round trip.
+        await _ensureProfileRow(
+          userId: signedInUid,
+          email: email,
+          userMetadata: {
+            ...?res.user?.userMetadata,
+            if (resolvedName.isNotEmpty) 'full_name': resolvedName,
+          },
+        );
+      }
+
+      AppLogger.auth.i('signInWithApple:done', fields: {
+        'uid': signedInUid,
+        'hasName': appleName.isNotEmpty,
+        'relayEmail': _isPrivateRelay(email),
+      });
+
+      // Persist the email + method hint. 'apple' is a THIRD value beyond
+      // 'google'/'email' — welcome_screen.dart branches on it; anything it
+      // doesn't recognise falls back to /login with the email prefilled,
+      // so an un-handled method degrades rather than breaks.
+      await CrossIsolateKV.saveLastSignedInEmail(email, method: 'apple');
+
+      if (signedInUid != null && signedInUid.isNotEmpty) {
+        await ObservabilityService.identify(signedInUid);
+        ObservabilityService.trackEvent('sign_in',
+            properties: {'provider': 'apple'});
+      }
+      return res;
+    } on SignInWithAppleAuthorizationException catch (e, s) {
+      // Swiping the system sheet away is a cancel, not a failure. Same
+      // treatment as a dismissed Google account picker.
+      if (e.code == AuthorizationErrorCode.canceled) {
+        AppLogger.auth.w('signInWithApple:cancelled');
+        throw const _AuthCancelled('Apple sign-in cancelled');
+      }
+      AppLogger.auth
+          .e('signInWithApple:authorizationFailed', error: e, stack: s);
+      rethrow;
+    } catch (e, s) {
+      if (e is! _AuthCancelled) {
+        AppLogger.auth.e('signInWithApple:failed', error: e, stack: s);
+      }
+      rethrow;
+    }
+  }
+
+  /// Cryptographically-random nonce for the Apple ID-token exchange.
+  /// 32 characters is Apple's own sample length; the charset is URL-safe
+  /// so the value survives the round trip without escaping.
+  String _generateNonce([int length = 32]) {
+    const charset =
+        '0123456789ABCDEFGHIJKLMNOPQRSTUVXYZabcdefghijklmnopqrstuvwxyz-._';
+    final random = Random.secure();
+    return List.generate(
+      length,
+      (_) => charset[random.nextInt(charset.length)],
+    ).join();
+  }
+
+  static bool _isPrivateRelay(String? email) =>
+      email != null && email.endsWith('@privaterelay.appleid.com');
+
+  /// Best-effort display name from an email's local part, used only when
+  /// Apple withheld the real name. Returns '' for private-relay addresses,
+  /// whose local part is a random hex blob that would read as gibberish on
+  /// the profile — those users name themselves during onboarding instead.
+  String _displayNameFromEmail(String? email) {
+    if (email == null || email.isEmpty) return '';
+    if (_isPrivateRelay(email)) return '';
+    return email.split('@').first.trim();
   }
 
   // Password-based email signIn/signUp were removed when we moved to

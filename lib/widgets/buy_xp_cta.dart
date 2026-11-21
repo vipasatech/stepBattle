@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../config/colors.dart';
+import '../config/purchases.dart';
 import '../providers/auth_provider.dart';
 import '../providers/tab_focus_provider.dart';
 import '../sheets/buy_xp_sheet.dart';
@@ -50,6 +51,10 @@ class _BuyXpCtaState extends ConsumerState<BuyXpCta>
     super.initState();
     _controller =
         AnimationController(vsync: this, duration: _totalDuration);
+    // No sweep where there is nothing to buy — the whole point of the
+    // animation is to draw the eye to a CTA that doesn't render on iOS.
+    // Returning early also skips the tab-focus listener below.
+    if (!Purchases.enabled) return;
     // First run on mount (cold app launch OR entering a screen that
     // hosts this widget).
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -73,6 +78,11 @@ class _BuyXpCtaState extends ConsumerState<BuyXpCta>
 
   @override
   Widget build(BuildContext context) {
+    // iOS has no Buy-XP path (see [Purchases]). This pill is also how
+    // the Home app bar shows the XP balance, so it stays — minus the
+    // `+` glyph, the tap target and the attention sweep. What's left
+    // reads as a readout, not an offer.
+    if (!Purchases.enabled) return _pill(showAdd: false);
     return GestureDetector(
       onTap: () => showModalBottomSheet(
         context: context,
@@ -94,8 +104,16 @@ class _BuyXpCtaState extends ConsumerState<BuyXpCta>
             child: child,
           );
         },
-        child: Consumer(
-          builder: (context, ref, _) {
+        child: _pill(showAdd: true),
+      ),
+    );
+  }
+
+  /// The stadium pill itself. [showAdd] controls the trailing `+`
+  /// glyph — the only element here that advertises a purchase.
+  Widget _pill({required bool showAdd}) {
+    return Consumer(
+      builder: (context, ref, _) {
             final balance =
                 ref.watch(currentUserProvider).valueOrNull?.totalXP ?? 0;
             return Container(
@@ -129,16 +147,16 @@ class _BuyXpCtaState extends ConsumerState<BuyXpCta>
                       color: AppColors.primary,
                     ),
                   ),
-                  const SizedBox(width: 6),
-                  Icon(Icons.add_circle,
-                      color: AppColors.primary.withValues(alpha: 0.85),
-                      size: 16),
+                  if (showAdd) ...[
+                    const SizedBox(width: 6),
+                    Icon(Icons.add_circle,
+                        color: AppColors.primary.withValues(alpha: 0.85),
+                        size: 16),
+                  ],
                 ],
               ),
             );
           },
-        ),
-      ),
     );
   }
 

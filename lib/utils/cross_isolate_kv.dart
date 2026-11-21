@@ -69,7 +69,8 @@ class CrossIsolateKV {
   // 2026-08-30 — see main.dart `_refreshSessionIfStale` header.
   static const String lastSignedInEmail = 'ci_last_signed_in_email';
 
-  // Last-sign-in METHOD — one of 'google' or 'email'. Paired with
+  // Last-sign-in METHOD — one of 'google', 'apple' or 'email'.
+  // Paired with
   // [lastSignedInEmail] so /welcome's "Continue as <email>" button
   // fires the RIGHT re-auth flow directly instead of dropping the
   // user on the generic /login screen. Google users → open Google
@@ -243,7 +244,8 @@ class CrossIsolateKV {
   /// same device sees their most-recent email as the re-auth hint AND
   /// the correct method fires when they tap "Continue as".
   ///
-  /// [method] must be `'google'` or `'email'`. Null-safe on either —
+  /// [method] must be `'google'`, `'apple'` or `'email'`. Null-safe
+  /// on any of them —
   /// unset method just means `/welcome` falls back to opening `/login`
   /// with the email pre-filled (pre-2026-09-04 behaviour).
   static Future<void> saveLastSignedInEmail(String? email,
@@ -267,7 +269,8 @@ class CrossIsolateKV {
   static String? getLastSignedInEmailSync() =>
       getStringSync(lastSignedInEmail);
 
-  /// Read the last-sign-in method (`'google'` or `'email'`), or null
+  /// Read the last-sign-in method (`'google'`, `'apple'` or
+  /// `'email'`), or null
   /// if none is stored. Sync — safe for use from a widget build().
   static String? getLastSignInMethodSync() =>
       getStringSync(lastSignInMethod);

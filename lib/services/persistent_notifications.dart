@@ -67,7 +67,26 @@ class PersistentNotifications {
     try {
       const androidInit =
           AndroidInitializationSettings('@drawable/ic_stat_logo');
-      const initSettings = InitializationSettings(android: androidInit);
+      // Darwin settings are MANDATORY when the binary targets iOS — the
+      // plugin throws "iOS settings must be set when targeting iOS
+      // platform" from initialize() without them. That threw inside this
+      // try/except on every iOS launch (2026-11-20), so init() never
+      // completed and NO local notification — battle or track — could
+      // ever fire on iPhone. It was invisible because the catch below
+      // logs and swallows.
+      //
+      // All three permission requests are false on purpose: AppDelegate
+      // already asks via UNUserNotificationCenter at launch, and asking
+      // twice shows the user a second prompt that looks like a bug.
+      const darwinInit = DarwinInitializationSettings(
+        requestAlertPermission: false,
+        requestBadgePermission: false,
+        requestSoundPermission: false,
+      );
+      const initSettings = InitializationSettings(
+        android: androidInit,
+        iOS: darwinInit,
+      );
       await _plugin.initialize(
         initSettings,
         onDidReceiveNotificationResponse: (response) {

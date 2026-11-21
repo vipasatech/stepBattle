@@ -1,19 +1,14 @@
-import 'dart:async';
-import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:latlong2/latlong.dart';
 
 import '../../../config/colors.dart';
 import '../../../models/user_model.dart';
 import '../../../providers/user_provider.dart';
 import '../../../sheets/set_home_sheet.dart';
-import '../../../utils/home_map_snapshot.dart';
 import '../../../widgets/coming_soon_sheet.dart';
 import '../../../widgets/glass_card.dart';
-import '../../../widgets/map_tile_layer.dart';
 
 /// Map preview on Home — "Who's Leading Near You".
 ///
@@ -318,236 +313,141 @@ class _FallbackGradient extends StatelessWidget {
   }
 }
 
-/// Map preview background for the "Who's Leading Near You" card.
+/// Decorative backdrop for the "Who's Leading Near You" card.
 ///
-/// Flow:
-///   1. On mount, check [HomeMapSnapshot] for a cached PNG at the
-///      given lat/lng bucket.
-///   2. If a cached file exists → render it via `Image.file`. Zero
-///      tile downloads, zero FlutterMap widget cost. This is the
-///      steady-state after the first successful capture.
-///   3. If nothing is cached → render a live [FlutterMap] wrapped in
-///      a `RepaintBoundary`, then after a delay long enough for OSM
-///      tiles to land, capture the boundary and persist it. The
-///      widget then swaps itself over to `Image.file` for the rest
-///      of its lifetime.
+/// This was a live [FlutterMap] behind a PNG snapshot cache: fetch tiles,
+/// screenshot the boundary once they had landed, then serve that image for
+/// the rest of the widget's life. All of it existed to make a real map
+/// cheap enough to sit on Home permanently.
 ///
-/// Dependencies on `widget.lat`/`widget.lng` are re-evaluated in
-/// [didUpdateWidget] so a user updating their home location kicks
-/// off a fresh capture instead of continuing to serve the previous
-/// location's PNG.
-class _HomeMapBackground extends StatefulWidget {
+/// Replaced 2026-11-21 by a drawn texture. The card never needed a real
+/// map — it is a pin over your home city beside a leaderboard, and nobody
+/// reads a street off it. Meanwhile the tile dependency had started to
+/// cost: CARTO now requires an API key for raster basemaps and stamps
+/// unkeyed tiles with "API KEY REQUIRED", which is what shipped in
+/// 1.1.7+44. Drawing it removes the network request, the API key, the
+/// monthly tile quota, the attribution obligation and the snapshot cache
+/// in one move.
+///
+/// `HomeMapSnapshot` had no other caller and is now unused — safe to
+/// delete whenever someone is tidying.
+class _HomeMapBackground extends StatelessWidget {
   final double lat;
   final double lng;
 
   const _HomeMapBackground({required this.lat, required this.lng});
 
   @override
-  State<_HomeMapBackground> createState() => _HomeMapBackgroundState();
-}
-
-class _HomeMapBackgroundState extends State<_HomeMapBackground> {
-  /// Anchors the [RepaintBoundary] we capture pixels from. Recreated
-  /// whenever we drop back to the live-map path (which shouldn't
-  /// normally happen twice per widget lifetime, but keeping the key
-  /// stable across state resets is what makes the capture reliable).
-  final GlobalKey _boundaryKey = GlobalKey();
-
-  /// The captured PNG on disk. Non-null → we render `Image.file`.
-  File? _cached;
-
-  /// True once the async cache-existence check has completed. Before
-  /// that we render the same fallback gradient the "no home" branch
-  /// uses, so the card doesn't flash blank on very first mount before
-  /// the cache resolves.
-  bool _checkedCache = false;
-
-  /// Scheduled capture timer. Cancelled on dispose and on lat/lng
-  /// change so we never capture a boundary the user has moved past.
-  Timer? _captureTimer;
-
-  /// Brightness we last resolved a cache for. Kept in state so a
-  /// theme toggle can be detected in [didChangeDependencies] and the
-  /// snapshot swapped over without waiting for a lat/lng change. `null`
-  /// before the first `didChangeDependencies` fires.
-  Brightness? _lastBrightness;
-
-  /// Delay before capturing. Bumped from 2.5 s → 3.5 s because the
-  /// earlier value sometimes fired while OSM tiles were still landing,
-  /// resulting in PNGs with white gutters where the tile grid hadn't
-  /// covered yet. The user sees the live FlutterMap during this
-  /// window, so a longer wait is a UX no-op — the map is already on
-  /// screen the whole time.
-  static const Duration _captureDelay = Duration(milliseconds: 3500);
-
-  /// If a capture fails (network was slow, boundary hadn't painted),
-  /// retry once after this longer delay. If it fails again we give
-  /// up and re-attempt on the next Home mount — the widget is small
-  /// enough that we shouldn't spin here.
-  static const Duration _captureRetryDelay = Duration(seconds: 3);
-
-  Brightness get _brightness => Theme.of(context).brightness;
-
-  @override
-  void didChangeDependencies() {
-    super.didChangeDependencies();
-    final now = _brightness;
-    if (_lastBrightness == now) return;
-    _lastBrightness = now;
-    // First run (transitions null → light|dark) OR a theme toggle at
-    // runtime. Either way, invalidate whatever we had loaded and
-    // resolve fresh for the new brightness.
-    _captureTimer?.cancel();
-    _captureTimer = null;
-    _cached = null;
-    _checkedCache = false;
-    _loadCacheThenMaybeSchedule();
-  }
-
-  @override
-  void didUpdateWidget(covariant _HomeMapBackground old) {
-    super.didUpdateWidget(old);
-    // Meaningful move? Cache is keyed by rounded lat/lng, so tiny
-    // GPS jitter reuses the existing snapshot; a real home move
-    // produces a different filename and needs a fresh capture.
-    if (old.lat != widget.lat || old.lng != widget.lng) {
-      _captureTimer?.cancel();
-      _captureTimer = null;
-      setState(() {
-        _cached = null;
-        _checkedCache = false;
-      });
-      _loadCacheThenMaybeSchedule();
-    }
-  }
-
-  Future<void> _loadCacheThenMaybeSchedule() async {
-    final b = _lastBrightness ?? _brightness;
-    final f = await HomeMapSnapshot.readCached(widget.lat, widget.lng, b);
-    if (!mounted) return;
-    setState(() {
-      _cached = f;
-      _checkedCache = true;
-    });
-    if (f == null) {
-      _captureTimer = Timer(_captureDelay, _capture);
-    }
-  }
-
-  Future<void> _capture() async {
-    if (!mounted) return;
-    final pixelRatio = MediaQuery.of(context).devicePixelRatio;
-    final brightness = _brightness;
-    final saved = await HomeMapSnapshot.capture(
-      boundaryKey: _boundaryKey,
-      lat: widget.lat,
-      lng: widget.lng,
-      brightness: brightness,
-      pixelRatio: pixelRatio,
-    );
-    if (!mounted) return;
-    if (saved != null) {
-      // Only accept the capture if the brightness we started with
-      // still matches what's on screen — a mid-capture theme toggle
-      // would otherwise overwrite the new theme's slot with the old
-      // theme's pixels.
-      if (brightness == _brightness) {
-        setState(() => _cached = saved);
-      }
-    } else {
-      // One retry with a longer delay in case tiles hadn't arrived
-      // by the first attempt. After that we give up until next mount.
-      _captureTimer = Timer(_captureRetryDelay, () async {
-        if (!mounted) return;
-        final retryBrightness = _brightness;
-        final retry = await HomeMapSnapshot.capture(
-          boundaryKey: _boundaryKey,
-          lat: widget.lat,
-          lng: widget.lng,
-          brightness: retryBrightness,
-          pixelRatio: pixelRatio,
-        );
-        if (mounted &&
-            retry != null &&
-            retryBrightness == _brightness) {
-          setState(() => _cached = retry);
-        }
-      });
-    }
-  }
-
-  @override
-  void dispose() {
-    _captureTimer?.cancel();
-    super.dispose();
-  }
-
-  @override
   Widget build(BuildContext context) {
-    if (!_checkedCache) return const _FallbackGradient();
-
-    final cached = _cached;
-    if (cached != null) {
-      // Backing `Container` with an opaque theme background so any
-      // rounding artefacts or aspect-ratio delta between the PNG and
-      // the current layout size resolve against a colour that
-      // matches the ambient card — never a white flash.
-      // `gaplessPlayback` keeps the previous frame visible during a
-      // hot-restart-triggered rebuild instead of flashing empty.
-      return ClipRRect(
-        borderRadius: BorderRadius.circular(20),
-        child: Container(
-          color: AppColors.background,
-          child: Image.file(
-            cached,
-            fit: BoxFit.cover,
-            gaplessPlayback: true,
-          ),
-        ),
-      );
-    }
-
-    // First-time render for this brightness/location: live
-    // FlutterMap, wrapped so we can screenshot it. The
-    // RepaintBoundary is what `boundary.toImage()` reads pixels from
-    // in the capture step. The Container behind the ClipRRect gives
-    // the FlutterMap an OPAQUE theme-coloured backdrop so any pixel
-    // the OSM tile grid hasn't covered at capture time (edges of the
-    // rounded rect, tile-load gaps) is baked as background, not
-    // white — the source of the "white gutters" in the earlier
-    // snapshots.
-    return RepaintBoundary(
-      key: _boundaryKey,
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(20),
       child: Container(
         color: AppColors.background,
-        child: IgnorePointer(
-          child: ClipRRect(
-            borderRadius: BorderRadius.circular(20),
-            child: FlutterMap(
-              options: MapOptions(
-                initialCenter: LatLng(widget.lat, widget.lng),
-                initialZoom: 12,
-                interactionOptions: const InteractionOptions(
-                flags: InteractiveFlag.none,
-              ),
-            ),
-            children: [
-              osmTileLayer(context),
-              MarkerLayer(
-                markers: [
-                  Marker(
-                    point: LatLng(widget.lat, widget.lng),
-                    width: 22,
-                    height: 22,
-                    child: const _HomePin(),
-                  ),
-                ],
-              ),
-            ],
-          ),
-        ),
-        ),
+        child: _DrawnMapBackdrop(lat: lat, lng: lng),
       ),
     );
   }
+}
+
+
+/// Abstract city-like texture standing in for a map.
+///
+/// Deterministic: the street layout is seeded from latitude and longitude,
+/// so one home location always draws the same thing (no shimmer between
+/// rebuilds) while two different cities look different from each other.
+class _DrawnMapBackdrop extends StatelessWidget {
+  const _DrawnMapBackdrop({required this.lat, required this.lng});
+
+  final double lat;
+  final double lng;
+
+  @override
+  Widget build(BuildContext context) {
+    return CustomPaint(
+      painter: _MapTexturePainter(
+        seed: ((lat * 1000).round() * 31 + (lng * 1000).round()) & 0x7fffffff,
+        isDark: Theme.of(context).brightness == Brightness.dark,
+      ),
+      child: const Center(child: _HomePin()),
+    );
+  }
+}
+
+class _MapTexturePainter extends CustomPainter {
+  _MapTexturePainter({required this.seed, required this.isDark});
+
+  final int seed;
+  final bool isDark;
+
+  /// Tiny LCG. `dart:math`'s Random would do, but an explicit one makes
+  /// it obvious the output is a pure function of [seed] — the whole point
+  /// of this painter is that it never changes between frames.
+  static int _next(int s) => (s * 1103515245 + 12345) & 0x7fffffff;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final base = isDark
+        ? AppColors.surfaceContainerHigh
+        : AppColors.surfaceContainerHigh;
+    canvas.drawRect(Offset.zero & size, Paint()..color = base);
+
+    final line = Paint()
+      ..style = PaintingStyle.stroke
+      ..color = AppColors.onSurfaceVariant.withValues(alpha: 0.10)
+      ..strokeWidth = 1;
+
+    // Minor grid — the suggestion of a street network.
+    const gap = 26.0;
+    for (double x = gap; x < size.width; x += gap) {
+      canvas.drawLine(Offset(x, 0), Offset(x, size.height), line);
+    }
+    for (double y = gap; y < size.height; y += gap) {
+      canvas.drawLine(Offset(0, y), Offset(size.width, y), line);
+    }
+
+    // A few arterial roads, angled off the grid so it doesn't read as
+    // graph paper. Positions come from the seed.
+    final road = Paint()
+      ..style = PaintingStyle.stroke
+      ..color = AppColors.onSurfaceVariant.withValues(alpha: 0.18)
+      ..strokeWidth = 2.5
+      ..strokeCap = StrokeCap.round;
+
+    var s = _next(seed);
+    for (var i = 0; i < 3; i++) {
+      final startY = (s % 1000) / 1000 * size.height;
+      s = _next(s);
+      final endY = (s % 1000) / 1000 * size.height;
+      s = _next(s);
+      canvas.drawLine(Offset(-10, startY), Offset(size.width + 10, endY), road);
+    }
+
+    // One soft blob, reading as a park or water.
+    final blobX = (s % 1000) / 1000 * size.width;
+    s = _next(s);
+    final blobY = (s % 1000) / 1000 * size.height;
+    canvas.drawCircle(
+      Offset(blobX, blobY),
+      size.shortestSide * 0.22,
+      Paint()..color = AppColors.primary.withValues(alpha: 0.07),
+    );
+
+    // Vignette so the pin sits on a slightly darker centre and the edges
+    // fall away into the card.
+    canvas.drawRect(
+      Offset.zero & size,
+      Paint()
+        ..shader = RadialGradient(
+          colors: [
+            Colors.transparent,
+            AppColors.background.withValues(alpha: 0.55),
+          ],
+          stops: const [0.55, 1.0],
+        ).createShader(Offset.zero & size),
+    );
+  }
+
+  @override
+  bool shouldRepaint(covariant _MapTexturePainter old) =>
+      old.seed != seed || old.isDark != isDark;
 }

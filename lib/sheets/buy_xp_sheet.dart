@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../config/colors.dart';
 import '../config/pricing.dart';
+import '../config/purchases.dart';
 import '../providers/auth_provider.dart';
 import '../providers/currency_provider.dart';
 import '../providers/payment_provider_provider.dart';
@@ -242,6 +243,17 @@ class _BuyXpSheetState extends ConsumerState<BuyXpSheet> {
 
   @override
   Widget build(BuildContext context) {
+    // Backstop, not a gate. All three callers of this sheet already
+    // check [Purchases.enabled]; this fires in debug if a fourth is
+    // ever added without one. It compiles away entirely in release, so
+    // it can never show a user anything — the cost of missing it is an
+    // App Store rejection under guideline 3.1.1, which is a slow and
+    // expensive way to find out.
+    assert(
+      Purchases.enabled,
+      'BuyXpSheet opened where purchases are disabled — the caller is '
+      'missing a Purchases.enabled check.',
+    );
     final theme = Theme.of(context);
     // `select` — only rebuild when the XP balance actually changes.
     // The full profile row updates constantly (steps, streak, missions).

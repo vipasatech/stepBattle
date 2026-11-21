@@ -7,6 +7,7 @@ import 'package:go_router/go_router.dart';
 import '../config/colors.dart';
 import '../providers/step_provider.dart';
 import '../screens/onboarding/health_setup_screen.dart';
+import '../services/capability_service.dart';
 import '../utils/app_logger.dart';
 import 'permission_gate.dart';
 
@@ -194,6 +195,19 @@ class _NoSourceGateState extends ConsumerState<NoSourceGate>
   }
 
   Future<void> _showBlocker() async {
+    // Under the lock model this dialog does not exist. Home renders with
+    // padlocks over the metrics that have no source, which is strictly
+    // better than what this did: barrierDismissible:false + canPop:false
+    // meant a user who declined the step permission could not reach
+    // Settings, could not sign out, and could not delete their account.
+    // App Review guideline 5.1.1 expects an app to stay usable when a
+    // permission is declined, and a reviewer is exactly the person most
+    // likely to decline one and then try to look around.
+    //
+    // Leaving `blockerOpen` false also keeps the Home coordination intact
+    // — the device-connect prompt and XP celebration defer to it, and
+    // with no blocker there is nothing for them to wait behind.
+    if (CapabilityLocks.enabled) return;
     if (!mounted || _dialogOpen) return;
     _dialogOpen = true;
     // Publish "blocker visible" so post-onboarding sheets defer.

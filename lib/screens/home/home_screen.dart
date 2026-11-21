@@ -15,6 +15,7 @@ import '../../providers/battle_provider.dart';
 import '../../providers/mission_provider.dart';
 import '../../providers/notification_provider.dart';
 import '../../providers/user_provider.dart';
+import '../../services/capability_service.dart';
 import '../../services/media_warmup.dart';
 import '../../services/tour_service.dart';
 import '../../services/xp_celebration_bus.dart';
@@ -27,6 +28,7 @@ import '../../widgets/avatar_circle.dart';
 import '../../widgets/buy_xp_cta.dart';
 import '../../widgets/friends_app_bar_button.dart';
 import '../../widgets/mount_stagger.dart';
+import '../../widgets/metric_lock.dart';
 import '../../widgets/no_source_gate.dart';
 import '../../widgets/no_steps_banner.dart';
 import '../../widgets/permission_gate.dart';
@@ -533,7 +535,10 @@ class _HomeBody extends ConsumerWidget {
       // means the entire card stack is warm before the user starts
       // scrolling — no mid-scroll widget-inflate hitches.
       cacheExtent: 800,
-      children: const [
+      // Not const: the streak strip is wrapped in a MetricLock whose
+            // locked state takes a callback, which cannot be const. The
+            // individual children below keep their own const where valid.
+            children: [
         // MountStagger reveals each top-level card with a fade + tiny
         // slide-up on FIRST MOUNT ONLY (flutter_animate's `Animate`
         // widget preserves completion state; Riverpod ticks and
@@ -566,10 +571,28 @@ class _HomeBody extends ConsumerWidget {
             // notch to point at the LEFT of the strip where the
             // flame lives.
             Padding(
-              padding: EdgeInsets.only(bottom: 28),
+              padding: const EdgeInsets.only(bottom: 28),
               child: TourTarget(
                 id: TourTargetId.homeStreakFlame,
-                child: RepaintBoundary(child: StreakStrip()),
+                // Streak needs steps to exist at all, and notifications to
+                // be worth anything — a streak you are never warned about
+                // losing is just a number that disappears overnight. So
+                // the lock covers both, and tapping it asks for whichever
+                // is still missing.
+                child: MetricLock(
+                  requires: const [
+                    AppCapability.steps,
+                    AppCapability.notifications,
+                  ],
+                  lockedBuilder: (context, resolve) => LockedCardBody(
+                    title: 'Streaks are locked',
+                    body: 'StepBattle needs your step count to track a '
+                        'streak, and notifications to warn you before you '
+                        'lose one.',
+                    onTap: resolve,
+                  ),
+                  child: const RepaintBoundary(child: StreakStrip()),
+                ),
               ),
             ),
             Padding(padding: EdgeInsets.only(bottom: 0),  child: RepaintBoundary(child: UpgradeBannerCard())),
