@@ -6,6 +6,7 @@ import 'package:go_router/go_router.dart';
 import 'package:image_picker/image_picker.dart';
 
 import '../../config/colors.dart';
+import '../../models/run_session_model.dart';
 import '../../providers/auth_provider.dart';
 import '../../providers/run_session_provider.dart';
 import '../../utils/app_logger.dart';
@@ -61,6 +62,40 @@ class _SaveActivityScreenState extends ConsumerState<SaveActivityScreen> {
 
   bool _saving = false;
   bool _nameSeeded = false;
+
+  /// The instant the runner stopped.
+  ///
+  /// This screen opening IS the stop — it is pushed straight from the
+  /// live screen's End run button. Capturing it here rather than
+  /// mutating the service keeps the invariant documented above: Resume
+  /// and system-back change nothing, so the session survives them.
+  final DateTime _stoppedAt = DateTime.now();
+
+  /// The session as it stood at [_stoppedAt].
+  ///
+  /// The service keeps recording while this screen is up (that is what
+  /// makes Resume possible), so every live figure — steps, distance,
+  /// calories — carries on climbing behind the form. Seeded on first
+  /// build rather than in initState because the provider may not have
+  /// emitted yet, mirroring how [_nameSeeded] is handled below.
+  RunSession? _frozen;
+
+  /// Duration as of [_stoppedAt], computed rather than read.
+  ///
+  /// The frozen snapshot's own `durationSeconds` was written by the 2s
+  /// data tick and can be up to two seconds stale; this is exact.
+  int get _frozenDuration => _frozen == null
+      ? 0
+      : _stoppedAt.difference(_frozen!.startedAt).inSeconds;
+
+  /// Pace recomputed against the frozen distance and duration, for the
+  /// same reason — the snapshot's own value was derived from a live
+  /// duration. Mirrors the >100 m floor the service applies.
+  double? get _frozenPace {
+    final f = _frozen;
+    if (f == null || f.distanceMeters <= 100) return null;
+    return _frozenDuration / (f.distanceMeters / 1000.0);
+  }
 
   @override
   void dispose() {
@@ -153,6 +188,8 @@ class _SaveActivityScreenState extends ConsumerState<SaveActivityScreen> {
       final result = await svc.end(
         description: _descController.text,
         mediaUrls: urls,
+        frozen: _frozen,
+        stoppedAt: _stoppedAt,
       );
 
       if (!mounted) return;
@@ -270,6 +307,9 @@ class _SaveActivityScreenState extends ConsumerState<SaveActivityScreen> {
       final initial = session.name ?? session.displayName;
       _nameController.text = initial;
     }
+    // Freeze on the first build that has a session, then never again —
+    // later emissions are the run still accruing behind this screen.
+    _frozen ??= session;
 
     return Scaffold(
       backgroundColor: AppColors.background,
@@ -332,12 +372,15 @@ class _SaveActivityScreenState extends ConsumerState<SaveActivityScreen> {
                   const SizedBox(height: 12),
                   _DescriptionField(controller: _descController),
                   const SizedBox(height: 20),
+                  // Every figure here is the freeze, not the live
+                  // session — what the runner is about to save is what
+                  // they actually ran.
                   _StatsCard(
-                    distanceMeters: session?.distanceMeters ?? 0,
-                    paceSecPerKm: session?.avgPaceSecPerKm,
-                    durationSeconds: session?.durationSeconds ?? 0,
-                    steps: session?.steps ?? 0,
-                    calories: session?.calories ?? 0,
+                    distanceMeters: _frozen?.distanceMeters ?? 0,
+                    paceSecPerKm: _frozenPace,
+                    durationSeconds: _frozenDuration,
+                    steps: _frozen?.steps ?? 0,
+                    calories: _frozen?.calories ?? 0,
                   ),
                   const SizedBox(height: 24),
                   _MediaSection(

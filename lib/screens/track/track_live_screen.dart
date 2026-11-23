@@ -1,4 +1,5 @@
-﻿import 'dart:math' as math;
+﻿import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
@@ -31,6 +32,33 @@ class _TrackLiveScreenState extends ConsumerState<TrackLiveScreen> {
   static const int _caloriesTarget = 500;
 
   final MapController _map = MapController();
+
+  /// Repaints the clock once a second.
+  ///
+  /// [RunTrackingService] ticks every 2 s on purpose — each tick reads
+  /// native step counts, evaluates the GPS-loss threshold and flushes
+  /// step deltas, and doing that twice as often costs battery for a
+  /// whole run. But the screen only repainted on those emissions, so
+  /// the big DURATION readout advanced in 2 s jumps.
+  ///
+  /// Elapsed time is derived from `startedAt`, not accumulated here, so
+  /// this timer only forces a repaint — drift is impossible and the
+  /// data cadence is untouched.
+  Timer? _clock;
+
+  @override
+  void initState() {
+    super.initState();
+    _clock = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (mounted) setState(() {});
+    });
+  }
+
+  @override
+  void dispose() {
+    _clock?.cancel();
+    super.dispose();
+  }
 
   /// Open a small dialog to set/clear the in-flight session name. Blank
   /// trim → resets to "no name set" (will auto-default to "Run · MMM d,
@@ -89,7 +117,13 @@ class _TrackLiveScreenState extends ConsumerState<TrackLiveScreen> {
       return const Scaffold(body: SizedBox.shrink());
     }
 
-    final duration = session?.durationSeconds ?? 0;
+    // Recomputed from startedAt on every repaint — including the 1 Hz
+    // ones from [_clock] that land between the service's 2 s emissions.
+    // Falls back to the snapshot's own value if the session has ended
+    // and startedAt is gone.
+    final duration = session == null
+        ? 0
+        : DateTime.now().difference(session.startedAt).inSeconds;
     final distance = session?.distanceMeters ?? 0;
     final steps = session?.steps ?? 0;
     final kcal = session?.calories ?? 0;

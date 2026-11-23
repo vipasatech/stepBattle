@@ -29,6 +29,16 @@
 	<key>com.apple.developer.healthkit.access</key>
 	<array/>
 
+	<!-- Background delivery — lets iOS wake the app when new step samples
+	     are written to HealthKit, which is the ONLY way step data stays
+	     current while StepBattle is closed (BackgroundSync is Android-only).
+	     In Xcode this is the "Background Delivery" checkbox under the
+	     HealthKit capability. If signing complains the provisioning profile
+	     does not include this entitlement, regenerate the profile after
+	     confirming HealthKit is enabled on the App ID. -->
+	<key>com.apple.developer.healthkit.background-delivery</key>
+	<true/>
+
 	<!-- Sign in with Apple — REQUIRED by App Review if the app offers any
 	     3rd-party sign-in (Google, Facebook, etc.). StepBattle has Google
 	     Sign-In → must also offer Apple. Package needed: sign_in_with_apple

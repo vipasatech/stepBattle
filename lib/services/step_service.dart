@@ -6,6 +6,7 @@ import '../models/mission_model.dart';
 import '../models/step_log_model.dart';
 import '../utils/app_logger.dart';
 import 'google_fit_service.dart';
+import 'health_service.dart';
 import 'mission_service.dart';
 import 'native_step_service.dart';
 import 'perfect_month_service.dart';
@@ -653,6 +654,130 @@ class StepService {
   /// sync that only ran once and wrote a partial 3pm value would still
   /// exceed 100, so we don't overwrite it.
   static const int _plausibleStepFloor = 100;
+
+  /// Number of days back the health-store sweep reconciles.
+  ///
+  /// Seven covers the "closed the app for a week" case while keeping the
+  /// query count small — [HealthService.getStepsForDate] is one platform
+  /// round-trip per day, and HealthKit/Health Connect are not free.
+  static const int _healthReconcileDays = 7;
+
+  /// Minimum shortfall before a stored day is rewritten.
+  ///
+  /// Small disagreements between the health store and what we logged are
+  /// normal — different sample windows, a late-arriving write, rounding
+  /// in the aggregator. Rewriting on a 12-step difference would mean a
+  /// network round-trip on nearly every launch for no visible gain.
+  static const int _healthReconcileMinDelta = 50;
+
+  /// Correct recent days against the platform health store.
+  ///
+  /// This exists because every other step path only advances while the
+  /// app is running. On iOS there is no background sync at all
+  /// (`BackgroundSync` is Android-only), so a day the user walked with
+  /// the app closed is logged as whatever had been synced before they
+  /// closed it, and nothing ever revisits it — one observed day read
+  /// 1,032 in `step_logs` against 2,529 in HealthKit.
+  ///
+  /// [backfillMissedDays] cannot fix that: a day holding 1,032 steps
+  /// clears its plausibility floor, so it is skipped as "already has
+  /// data". The floor is right for an estimated source and wrong for an
+  /// authoritative one, which is why this is a separate sweep.
+  ///
+  /// Only ever revises a day UPWARDS. The health store can legitimately
+  /// hold less than we logged — a user with no step-source app feeding
+  /// Health Connect, or HealthKit permission granted only recently —
+  /// and trusting it downwards would delete real history.
+  ///
+  /// Does not touch today: the live aggregator already prefers the
+  /// health store for the current day, and today's total is still
+  /// climbing.
+  Future<void> reconcileRecentDaysFromHealth({
+    required String userId,
+    required HealthService health,
+  }) async {
+    if (!health.isAuthorized) return;
+    try {
+      final fmt = DateFormat('yyyy-MM-dd');
+      final now = DateTime.now();
+      final today = DateTime(now.year, now.month, now.day);
+
+      // Yesterday backwards. Today is deliberately excluded (above).
+      final dates = <DateTime>[
+        for (var i = 1; i <= _healthReconcileDays; i++)
+          today.subtract(Duration(days: i)),
+      ];
+
+      // One round-trip for every day we are about to consider, so the
+      // common case — nothing to correct — costs a single query and no
+      // writes at all.
+      final existingRows = await _supabase
+          .from('step_logs')
+          .select('date, step_count')
+          .eq('user_id', userId)
+          .inFilter('date', dates.map(fmt.format).toList());
+      final existingByDate = <String, int>{
+        for (final r in existingRows as List)
+          (r as Map)['date'] as String:
+              (r['step_count'] as num?)?.toInt() ?? 0,
+      };
+
+      var corrected = 0;
+      var checked = 0;
+
+      for (final date in dates) {
+        final dateStr = fmt.format(date);
+        final existing = existingByDate[dateStr] ?? 0;
+
+        // Returns 0 on any read error, which is indistinguishable from
+        // a genuine zero-step day. Either way there is nothing to
+        // raise, so both fall through the guard below.
+        final healthSteps = await health.getStepsForDate(date);
+        checked++;
+        if (healthSteps <= 0) continue;
+        if (healthSteps - existing < _healthReconcileMinDelta) continue;
+
+        try {
+          await _supabase.from('step_logs').upsert(
+            {
+              'user_id': userId,
+              'date': dateStr,
+              'step_count': healthSteps,
+              'calories':
+                  (healthSteps * AppConstants.caloriesPerStep).round(),
+              'source': '${health.sourceName}_reconcile',
+              // Distance deliberately left alone, matching
+              // backfillMissedDays: stride length is a guess, and a
+              // corrected step count should not drag a fabricated
+              // distance along with it.
+            },
+            onConflict: 'user_id,date',
+          );
+          corrected++;
+          AppLogger.step.i('healthReconcile:corrected', fields: {
+            'date': dateStr,
+            'was': existing,
+            'now': healthSteps,
+            'source': health.sourceName,
+          });
+        } catch (e) {
+          AppLogger.step.w('healthReconcile:upsertFailed', fields: {
+            'date': dateStr,
+            'err': e.toString(),
+          });
+        }
+      }
+
+      AppLogger.step.i('healthReconcile:done', fields: {
+        'checked': checked,
+        'corrected': corrected,
+        'source': health.sourceName,
+      });
+    } catch (e, s) {
+      // Never let historical repair take down the launch path.
+      AppLogger.step.e('healthReconcile:failed', error: e, stack: s);
+    }
+  }
 
   Future<void> backfillMissedDays({
     required String userId,

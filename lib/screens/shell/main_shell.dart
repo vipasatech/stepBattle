@@ -61,6 +61,24 @@ class _MainShellState extends ConsumerState<MainShell>
     with WidgetsBindingObserver, TickerProviderStateMixin {
   bool _backfillTriggered = false;
 
+  /// Push-tap subscription, kept so `dispose` can cancel it.
+  ///
+  /// Typed loosely on purpose: the FCM `RemoteMessage` type stays behind
+  /// [NotificationService], as everywhere else in this file. Dart generics
+  /// are covariant, so the concrete `StreamSubscription<RemoteMessage>`
+  /// assigns here cleanly.
+  StreamSubscription<Object?>? _pushTapSub;
+
+  /// A route from a notification tap that could not be applied yet.
+  ///
+  /// Held rather than dropped because the tap can land while the app is
+  /// still deciding where the user belongs — profile row in flight, the
+  /// onboarding gate about to fire, or the new-user tour on screen. Going
+  /// to /battles in any of those windows either loses to the router's own
+  /// redirect or yanks the user out of the tour. We park the route and
+  /// flush it once the gates clear (see [_flushPendingPushRoute]).
+  String? _pendingPushRoute;
+
   /// Instagram-style scroll-responsive bottom nav driver.
   ///
   /// 1.0 = fully expanded (max width, max icon size). 0.0 = fully
@@ -119,6 +137,13 @@ class _MainShellState extends ConsumerState<MainShell>
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _consumePendingDeepLink();
     });
+    // FCM taps. Wired here — NOT from build() behind an auth check, which
+    // is where it lived until 2026-11-22. `onMessageOpenedApp` is a plain
+    // broadcast stream and buffers nothing, so every event emitted before
+    // the subscription existed was lost for good. On a cold launch that
+    // window spans splash + Supabase session restore + the first build
+    // with a non-null uid, which is precisely when a launch-by-tap fires.
+    _setupPushNavigation();
   }
 
   @override
@@ -127,6 +152,7 @@ class _MainShellState extends ConsumerState<MainShell>
     WidgetsBinding.instance.removeObserver(this);
     FlutterForegroundTask.removeTaskDataCallback(_onTaskData);
     pendingDeepLinkNotifier.removeListener(_consumePendingDeepLink);
+    _pushTapSub?.cancel();
     // We deliberately do NOT stop the foreground service here. The shell can
     // unmount for benign reasons (navigating to a root-level route like
     // /track or /profile re-creates the shell on the way back), and stopping
@@ -293,20 +319,71 @@ class _MainShellState extends ConsumerState<MainShell>
   void _setupPushNavigation() {
     final svc = ref.read(notificationServiceProvider);
 
-    svc.setupBackgroundTapHandler(onMessageOpenedApp: (message) {
-      final route = NotificationService.extractRoute(message.data);
-      if (route != null && mounted) context.go(route);
-    });
+    // Warm app (background or foreground) — the OS showed the alert and
+    // the user tapped it.
+    _pushTapSub = svc.setupBackgroundTapHandler(
+      onMessageOpenedApp: (message) => _handlePushTap(message.data, 'opened'),
+    );
 
-    // App opened from a terminated state by tapping a push.
+    // App opened from a terminated state by tapping a push. Unlike the
+    // stream above this one is latched by the plugin, so calling it late
+    // is safe — but we still call it as early as possible.
     svc.getInitialMessage().then((message) {
-      if (message == null || !mounted) return;
-      final route = NotificationService.extractRoute(message.data);
-      if (route == null) return;
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted) context.go(route);
-      });
+      if (message == null) return;
+      _handlePushTap(message.data, 'initial');
     });
+  }
+
+  /// Turn a tapped notification's payload into a pending route.
+  ///
+  /// Logging every outcome is deliberate. Until now both tap paths were
+  /// silent, so a tap that opened Home instead of Battles was
+  /// indistinguishable from a tap that never reached Dart at all — the
+  /// payload, the route table and the native delegate chain all had to be
+  /// ruled out by inspection. These three lines make the next report
+  /// self-diagnosing.
+  void _handlePushTap(Map<String, dynamic> data, String source) {
+    final route = NotificationService.extractRoute(data);
+    AppLogger.notification.i('pushTap:received', fields: {
+      'source': source,
+      'type': data['type'],
+      'route': route,
+    });
+    if (route == null) return;
+    _pendingPushRoute = route;
+    WidgetsBinding.instance
+        .addPostFrameCallback((_) => _flushPendingPushRoute());
+  }
+
+  /// Apply a held push route once it is safe to navigate.
+  ///
+  /// Safe means: the shell is mounted, onboarding is finished, and the
+  /// new-user tour is not on screen. Anything else and the route stays
+  /// parked — the `ref.listen` pair in [build] calls back in when the
+  /// blocking condition clears.
+  void _flushPendingPushRoute() {
+    final route = _pendingPushRoute;
+    if (route == null || !mounted) return;
+
+    final onboarded = ref.read(hasCompletedOnboardingProvider).valueOrNull;
+    if (onboarded != true) {
+      AppLogger.notification.i('pushTap:held', fields: {
+        'route': route,
+        'reason': 'onboarding',
+      });
+      return;
+    }
+    if (ref.read(tourControllerProvider).active) {
+      AppLogger.notification.i('pushTap:held', fields: {
+        'route': route,
+        'reason': 'tour',
+      });
+      return;
+    }
+
+    _pendingPushRoute = null;
+    AppLogger.notification.i('pushTap:navigated', fields: {'route': route});
+    context.go(route);
   }
 
   Future<void> _runInitialSync(String uid) async {
@@ -352,6 +429,18 @@ class _MainShellState extends ConsumerState<MainShell>
             userId: uid,
             native: ref.read(nativeStepServiceProvider),
             googleFit: ref.read(googleFitServiceProvider),
+          ));
+    }
+
+    // 1b. Health-store reconciliation. Covers what 1a structurally
+    //     cannot: days that DID get a row, but a short one, because
+    //     the app was closed for the rest of them. On iOS that is
+    //     every day the user does not open the app, since there is no
+    //     background sync there at all. Also fire-and-forget.
+    if (mounted) {
+      unawaited(ref.read(stepServiceProvider).reconcileRecentDaysFromHealth(
+            userId: uid,
+            health: ref.read(healthServiceProvider),
           ));
     }
 
@@ -472,8 +561,13 @@ class _MainShellState extends ConsumerState<MainShell>
     if (uid != null && !_backfillTriggered) {
       _backfillTriggered = true;
       _runInitialSync(uid);
-      _setupPushNavigation();
     }
+
+    // Re-attempt a held push route whenever one of the gates that can hold
+    // it moves. Both callbacks are no-ops unless something is pending.
+    ref.listen(tourControllerProvider, (_, __) => _flushPendingPushRoute());
+    ref.listen(
+        hasCompletedOnboardingProvider, (_, __) => _flushPendingPushRoute());
 
     // (Battle-gated service control removed — the foreground service is now
     // always-on per user session, with its notification adapting to the active

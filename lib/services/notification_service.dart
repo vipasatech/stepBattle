@@ -211,10 +211,11 @@ class NotificationService {
   }
 
   /// Handle notification tap when app was in background/terminated.
-  void setupBackgroundTapHandler({
+  /// Returns the subscription so the caller can cancel it in `dispose`.
+  StreamSubscription<RemoteMessage> setupBackgroundTapHandler({
     required void Function(RemoteMessage message) onMessageOpenedApp,
   }) {
-    FirebaseMessaging.onMessageOpenedApp.listen(onMessageOpenedApp);
+    return FirebaseMessaging.onMessageOpenedApp.listen(onMessageOpenedApp);
   }
 
   /// Check if app was opened from a terminated state via notification.

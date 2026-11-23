@@ -247,6 +247,13 @@ void main() async {
   // started/stopped based on active battles.
   await BackgroundSync.initEarly();
 
+  // iOS counterpart to the Android background plumbing above. Registers
+  // the channel handler HealthKit calls when it wakes us with new step
+  // samples; the native observer itself is started by AppDelegate. No-op
+  // off iOS. Must run on every launch, including the background-only
+  // launches iOS makes to deliver those updates.
+  initIosHealthBackgroundSync();
+
   // Cold-start native pedometer warmup. Fire-and-forget subscription
   // to the OS step-counter sensor. Purpose: on OEM Androids where
   // the first TYPE_STEP_COUNTER event can take 2-3 seconds to

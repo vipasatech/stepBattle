@@ -298,9 +298,25 @@ class RunTrackingService {
     });
   }
 
+  /// Persist the session and tear it down.
+  ///
+  /// [frozen] and [stoppedAt] together let the caller save the run as it
+  /// was when the runner stopped, rather than as it is when they finally
+  /// hit Save. SaveActivityScreen captures both the moment it opens.
+  ///
+  /// This matters because the session stays live while that screen is
+  /// up — Resume depends on it. Before the freeze, naming an activity
+  /// and attaching five photos added every one of those minutes to the
+  /// recorded duration, inflated `avgPaceSecPerKm` derived from it, and
+  /// folded any steps taken meanwhile into the total.
+  ///
+  /// Both are optional and fall back to live state, so any other caller
+  /// keeps the original behaviour.
   Future<EndResult?> end({
     String? description,
     List<String> mediaUrls = const [],
+    RunSession? frozen,
+    DateTime? stoppedAt,
   }) async {
     if (_startedAt == null) return null;
     _gpsSub?.cancel();
@@ -308,27 +324,38 @@ class RunTrackingService {
     _periodic?.cancel();
     _periodic = null;
 
-    // One last reconciliation tick.
-    _onTick();
+    // One last reconciliation tick — but only when saving live values.
+    // With a freeze in hand this would do the opposite of what it is
+    // for, pulling post-stop steps back into the activity.
+    if (frozen == null) _onTick();
 
     final userId = _userId!;
     final startedAt = _startedAt!;
-    final endedAt = DateTime.now();
+    final endedAt = stoppedAt ?? DateTime.now();
     final duration = endedAt.difference(startedAt).inSeconds;
-    final totalDistance = _verifiedMeters + _estimatedMeters;
+
+    final steps = frozen?.steps ?? _currentSteps;
+    final verifiedMeters = frozen?.distanceMetersVerified ?? _verifiedMeters;
+    final estimatedMeters =
+        frozen?.distanceMetersEstimated ?? _estimatedMeters;
+    final unverifiedSteps = frozen?.unverifiedSteps ?? _unverifiedSteps;
+    final path = frozen?.path ?? _path;
+    final calories = (steps * _kcalPerStep).round();
+
+    final totalDistance = verifiedMeters + estimatedMeters;
     final pace = totalDistance > 100
         ? duration / (totalDistance / 1000.0)
         : null;
     final source = _computeSource();
 
-    final pathGeoJson = _path.length >= 2
+    final pathGeoJson = path.length >= 2
         ? {
             'type': 'LineString',
             'coordinates':
-                _path.map((p) => [p.lng, p.lat]).toList(growable: false),
+                path.map((p) => [p.lng, p.lat]).toList(growable: false),
           }
         : null;
-    final pointMeta = _path
+    final pointMeta = path
         .map((p) => {
               'ts': p.ts.millisecondsSinceEpoch,
               'accuracy': p.accuracyMeters,
@@ -346,12 +373,12 @@ class RunTrackingService {
       'started_at': startedAt.toUtc().toIso8601String(),
       'ended_at': endedAt.toUtc().toIso8601String(),
       'duration_seconds': duration,
-      'steps': _currentSteps,
+      'steps': steps,
       'distance_meters': totalDistance,
-      'distance_meters_verified': _verifiedMeters,
-      'distance_meters_estimated': _estimatedMeters,
-      'unverified_steps': _unverifiedSteps,
-      'calories': (_currentSteps * _kcalPerStep).round(),
+      'distance_meters_verified': verifiedMeters,
+      'distance_meters_estimated': estimatedMeters,
+      'unverified_steps': unverifiedSteps,
+      'calories': calories,
       'avg_pace_sec_per_km': pace,
       'path': pathGeoJson,
       'point_meta': pointMeta.isEmpty ? null : pointMeta,
@@ -417,15 +444,15 @@ class RunTrackingService {
       startedAt: startedAt,
       endedAt: endedAt,
       durationSeconds: duration,
-      steps: _currentSteps,
+      steps: steps,
       distanceMeters: totalDistance,
-      calories: (_currentSteps * _kcalPerStep).round(),
+      calories: calories,
       avgPaceSecPerKm: pace,
       source: source,
-      distanceMetersVerified: _verifiedMeters,
-      distanceMetersEstimated: _estimatedMeters,
-      unverifiedSteps: _unverifiedSteps,
-      path: List.unmodifiable(_path),
+      distanceMetersVerified: verifiedMeters,
+      distanceMetersEstimated: estimatedMeters,
+      unverifiedSteps: unverifiedSteps,
+      path: List.unmodifiable(path),
     );
 
     _userId = null;
@@ -437,9 +464,9 @@ class RunTrackingService {
     AppLogger.track.i('runTracking:ended', fields: {
       'durationSec': duration,
       'distanceM': totalDistance.round(),
-      'verifiedM': _verifiedMeters.round(),
-      'estimatedM': _estimatedMeters.round(),
-      'steps': _currentSteps,
+      'verifiedM': verifiedMeters.round(),
+      'estimatedM': estimatedMeters.round(),
+      'steps': steps,
       'unverifiedSteps': _unverifiedSteps,
       'source': source,
       'synced': synced,

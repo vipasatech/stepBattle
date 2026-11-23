@@ -131,11 +131,22 @@ class _AvatarWithEdit extends ConsumerWidget {
                 ? user.friendlyName[0].toUpperCase()
                 : '?',
           ),
+          // Bottom-right corner is shared: the pencil says "tappable",
+          // the chip explains why Home and the leaderboard still show
+          // the old photo. Only ever one of them, so they cannot
+          // overlap, and the chip wins because it is the more urgent
+          // message.
           if (pendingUpload)
             const Positioned(
               right: -2,
               bottom: -2,
               child: _SyncingChip(),
+            )
+          else
+            const Positioned(
+              right: -2,
+              bottom: -2,
+              child: _EditBadge(),
             ),
         ],
       ),
@@ -157,6 +168,39 @@ class _AvatarWithEdit extends ConsumerWidget {
         localPath: localPath,
         remoteUrl: remoteUrl,
         hasAnyPhoto: hasAnyPhoto,
+      ),
+    );
+  }
+}
+
+/// Pencil badge marking the avatar as tappable.
+///
+/// Without it the circle is a dead-looking image — nothing said the
+/// photo could be changed, and the picker sheet was reachable only by
+/// guessing. Sized and offset to match [_SyncingChip], which occupies
+/// the same corner while an upload is in flight.
+class _EditBadge extends StatelessWidget {
+  const _EditBadge();
+
+  @override
+  Widget build(BuildContext context) {
+    // Theme.of forces a rebuild on the light/dark toggle; AppColors
+    // alone is read once and would strand the badge on stale colours.
+    final scheme = Theme.of(context).colorScheme;
+    return Container(
+      width: 26,
+      height: 26,
+      decoration: BoxDecoration(
+        color: AppColors.primary,
+        shape: BoxShape.circle,
+        // Ring in the page background so the badge reads as sitting on
+        // top of the avatar rather than cut into it.
+        border: Border.all(color: scheme.surface, width: 2),
+      ),
+      child: const Icon(
+        Icons.edit,
+        size: 13,
+        color: Colors.white,
       ),
     );
   }

@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:io' show Platform;
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:flutter_foreground_task/flutter_foreground_task.dart';
@@ -400,6 +401,124 @@ Future<void> _pushHomeWidget({required String uid, required int steps}) async {
     AppLogger.step.w('homeWidget:pushFailed', fields: {'error': e.toString()});
     // Swallow — widget freshness is non-critical.
     if (kDebugMode) AppLogger.step.e('homeWidget:pushFailed', error: e, stack: s);
+  }
+}
+
+// =============================================================================
+// HealthKit background delivery (iOS) — terminated-state sync.
+// =============================================================================
+
+/// Bridge for the iOS-only HealthKit observer. Mirrors the channel name in
+/// `ios/Runner/HealthKitBackgroundDelivery.swift`.
+const MethodChannel _healthBgChannel =
+    MethodChannel('com.vipasa.stepbattle/health_background');
+
+/// True while a HealthKit-triggered sync is in flight.
+///
+/// iOS can deliver several observer callbacks in quick succession when a
+/// batch of samples lands. Running two syncs concurrently would have them
+/// race on the same `step_logs` row and on `total_steps_all_time`.
+bool _healthBgSyncInFlight = false;
+
+/// Wire up the handler iOS calls when HealthKit has new step samples.
+///
+/// Why this exists: [BackgroundSync] is Android-only (`_supported`), so
+/// until now nothing advanced a user's step count on iPhone while the app
+/// was closed. Battle scoring is
+/// `total_steps_all_time - start_steps_baseline`, and that counter only
+/// moves on a sync — so a user who walked with the app shut recorded
+/// almost nothing, and the score froze permanently at battle end. One
+/// observed battle logged 318 steps against 2,529 in HealthKit.
+///
+/// Unlike Android there is no periodic task here. HealthKit itself wakes
+/// the app when new samples are written, which is both more accurate and
+/// cheaper than polling — and is the only mechanism iOS offers that
+/// survives termination.
+///
+/// Must be called from `main()` so the handler is registered on EVERY
+/// launch, including the background launches iOS makes purely to deliver
+/// these updates.
+void initIosHealthBackgroundSync() {
+  if (kIsWeb || !Platform.isIOS) return;
+  _healthBgChannel.setMethodCallHandler((call) async {
+    if (call.method != 'syncSteps') return null;
+    return _runIosHealthBackgroundSync();
+  });
+}
+
+/// Sync triggered by HealthKit, running on the MAIN isolate.
+///
+/// Deliberately NOT [headlessStepSync]. That function is shaped for a
+/// WorkManager isolate: it calls `Supabase.initialize` behind an
+/// isolate-local flag, which would throw here because `main()` has
+/// already initialized this isolate, and it hand-recovers a session into
+/// `EmptyLocalStorage` to stay incapable of signing the user out.
+///
+/// None of that applies on iOS. Our AppDelegate runs the Flutter engine
+/// in `didFinishLaunchingWithOptions`, which executes on a background
+/// launch too, so `main()` has already brought up Supabase with real
+/// storage, a live session and token auto-refresh. Reusing the isolate
+/// path here would mean re-entering the most dangerous code in the app
+/// (see the auth-persistence notes above) for no benefit.
+///
+/// Returns true when steps were pushed, so Swift can log the outcome.
+Future<bool> _runIosHealthBackgroundSync() async {
+  if (_healthBgSyncInFlight) return false;
+  _healthBgSyncInFlight = true;
+  final stopwatch = Stopwatch()..start();
+  try {
+    final uid = Supabase.instance.client.auth.currentUser?.id;
+    if (uid == null) {
+      AppLogger.step.i('iosHealthSync:skip', fields: {'reason': 'noSession'});
+      return false;
+    }
+
+    // Main-isolate services, so the DEFAULT Hive box — not the
+    // background-scoped one. Two isolates are not in play here, which is
+    // the whole reason that split exists.
+    final native = NativeStepService();
+    final health = HealthService();
+    final fit = GoogleFitService();
+    final aggregator = StepSourceAggregator(
+      native: native,
+      healthService: health,
+      googleFit: fit,
+    );
+
+    // No pedometer warm-up delay. HealthKit is both the trigger and the
+    // authoritative source on iOS, and the aggregator already prefers it
+    // over the pedometer — waiting 2s for a sensor we are not going to
+    // use would just burn part of the short window iOS grants us.
+    final reading = await aggregator.readWithDebug();
+    if (reading.aggregate <= 0) {
+      AppLogger.step.i('iosHealthSync:noSteps',
+          fields: {'ms': stopwatch.elapsedMilliseconds});
+      return false;
+    }
+
+    // Fans out to step_logs, total_steps_all_time, XP, missions and any
+    // active battle — the same call the Android headless path makes, so
+    // battle scoring converges identically on both platforms.
+    await StepService(
+      missionService: MissionService(),
+      xpService: XPService(),
+    ).syncSteps(
+      userId: uid,
+      steps: reading.aggregate,
+      source: health.sourceName,
+    );
+
+    AppLogger.step.i('iosHealthSync:done', fields: {
+      'steps': reading.aggregate,
+      'ms': stopwatch.elapsedMilliseconds,
+    });
+    return true;
+  } catch (e, s) {
+    AppLogger.step.e('iosHealthSync:failed',
+        fields: {'ms': stopwatch.elapsedMilliseconds}, error: e, stack: s);
+    return false;
+  } finally {
+    _healthBgSyncInFlight = false;
   }
 }
 

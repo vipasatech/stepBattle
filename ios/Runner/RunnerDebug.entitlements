@@ -24,6 +24,13 @@
 	<key>com.apple.developer.healthkit.access</key>
 	<array/>
 
+	<!-- Must mirror Runner.entitlements. A debug build without this key
+	     still compiles and runs, but HealthKit background delivery is
+	     silently inert — which would read as "the fix doesn't work" when
+	     testing from Xcode. -->
+	<key>com.apple.developer.healthkit.background-delivery</key>
+	<true/>
+
 	<key>com.apple.developer.applesignin</key>
 	<array>
 		<string>Default</string>

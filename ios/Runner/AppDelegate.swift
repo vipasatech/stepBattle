@@ -36,6 +36,7 @@ import Flutter
 import UIKit
 import Firebase
 import FirebaseMessaging
+import HealthKit
 import UserNotifications
 
 @main
@@ -101,6 +102,20 @@ import UserNotifications
     // -------------------------------------------------------------------------
     flutterEngine.run()
     GeneratedPluginRegistrant.register(with: flutterEngine)
+
+    // -------------------------------------------------------------------------
+    // 4. HealthKit background delivery — the iOS answer to Android's
+    // WorkManager + foreground service, neither of which exists here.
+    //
+    // Started AFTER plugin registration so the Dart side has a running
+    // engine to receive the channel call on, and unconditionally on every
+    // launch because iOS re-launches the app in the background purely to
+    // deliver these updates — the observer must be re-registered each time
+    // or that launch does nothing.
+    // -------------------------------------------------------------------------
+    HealthKitBackgroundDelivery.shared.start(
+      binaryMessenger: flutterEngine.binaryMessenger
+    )
 
     return super.application(application, didFinishLaunchingWithOptions: launchOptions)
   }
@@ -238,6 +253,138 @@ class SceneDelegate: UIResponder, UIWindowSceneDelegate {
   private func forward(_ url: URL) {
     guard let appDelegate = UIApplication.shared.delegate as? AppDelegate else { return }
     _ = appDelegate.application(UIApplication.shared, open: url, options: [:])
+  }
+}
+
+// =============================================================================
+// HealthKit background delivery
+// =============================================================================
+//
+// Keeps a user's step count moving while StepBattle is closed.
+//
+// Why this is necessary: `BackgroundSync` on the Dart side is
+// Android-only. Battle scoring is
+// `total_steps_all_time - start_steps_baseline`, and that counter only
+// advances when the app syncs — so on iPhone a user who walked with the
+// app shut scored almost nothing, and `end_steps_baseline` froze the
+// result permanently when the battle closed. One observed battle
+// recorded 318 steps against 2,529 sitting in HealthKit.
+//
+// `HKObserverQuery` combined with `enableBackgroundDelivery` is the only
+// mechanism iOS offers that survives app termination: the system wakes
+// the app when new samples are written. It is also strictly better than
+// polling, since it fires on real data rather than on a timer.
+//
+// Lives in this file rather than its own because only AppDelegate.swift
+// is listed in the Xcode target's Sources build phase — a new .swift
+// file would sit there looking correct and never be compiled.
+//
+// REQUIRES the `com.apple.developer.healthkit.background-delivery`
+// entitlement (see Runner.entitlements). Without it the
+// enableBackgroundDelivery call fails at runtime with a "missing
+// entitlement" error and the observer simply never fires in the
+// background.
+// =============================================================================
+final class HealthKitBackgroundDelivery {
+  static let shared = HealthKitBackgroundDelivery()
+  private init() {}
+
+  /// Must match `_healthBgChannel` in lib/services/background_sync.dart.
+  private static let channelName = "com.vipasa.stepbattle/health_background"
+
+  /// How long to wait for Dart before releasing HealthKit's completion
+  /// handler anyway.
+  ///
+  /// iOS gives a background wake only a few seconds of runtime and
+  /// penalises apps that do not call the handler promptly. Dart may also
+  /// never answer at all — the engine is still booting on a cold
+  /// background launch, and the handler is not registered until `main()`
+  /// reaches `initIosHealthBackgroundSync()`. Either way we must settle.
+  private static let dartTimeout: TimeInterval = 20
+
+  private let store = HKHealthStore()
+  private var channel: FlutterMethodChannel?
+  private var observerQuery: HKObserverQuery?
+
+  func start(binaryMessenger: FlutterBinaryMessenger) {
+    guard HKHealthStore.isHealthDataAvailable() else {
+      NSLog("StepBattle: HealthKit unavailable on this device")
+      return
+    }
+    guard let stepType = HKObjectType.quantityType(forIdentifier: .stepCount)
+    else { return }
+
+    channel = FlutterMethodChannel(
+      name: Self.channelName,
+      binaryMessenger: binaryMessenger
+    )
+
+    // Registering an observer does NOT require authorisation to have been
+    // granted yet — if the user has not allowed step reads the query
+    // simply never fires, and starts working the moment they do without
+    // needing another launch.
+    let query = HKObserverQuery(
+      sampleType: stepType,
+      predicate: nil
+    ) { [weak self] _, completionHandler, error in
+      if let error = error {
+        NSLog("StepBattle: HK observer error: \(error.localizedDescription)")
+        completionHandler()
+        return
+      }
+      guard let self = self else {
+        completionHandler()
+        return
+      }
+      self.requestDartSync(completionHandler)
+    }
+    store.execute(query)
+    observerQuery = query
+
+    // `.hourly` is the floor HealthKit allows for step count; asking for
+    // anything more frequent is silently clamped.
+    store.enableBackgroundDelivery(for: stepType, frequency: .hourly) {
+      success, error in
+      if let error = error {
+        NSLog(
+          "StepBattle: HK background delivery failed: \(error.localizedDescription)"
+        )
+      } else {
+        NSLog("StepBattle: HK background delivery enabled = \(success)")
+      }
+    }
+  }
+
+  /// Ask Dart to run a sync, then release HealthKit exactly once.
+  ///
+  /// Calling `completionHandler` more than once, or not at all, both
+  /// misbehave: the first is an API violation, the second makes iOS back
+  /// off and eventually stop delivering. The `settled` flag guarantees
+  /// exactly one call whichever of the two paths — Dart replying or the
+  /// watchdog firing — gets there first.
+  private func requestDartSync(
+    _ completionHandler: @escaping HKObserverQueryCompletionHandler
+  ) {
+    // Flutter channels are main-thread only; the observer callback is not.
+    DispatchQueue.main.async { [weak self] in
+      guard let self = self, let channel = self.channel else {
+        completionHandler()
+        return
+      }
+      var settled = false
+      let settle = {
+        guard !settled else { return }
+        settled = true
+        completionHandler()
+      }
+      DispatchQueue.main.asyncAfter(deadline: .now() + Self.dartTimeout) {
+        settle()
+      }
+      channel.invokeMethod("syncSteps", arguments: nil) { result in
+        NSLog("StepBattle: HK sync returned \(String(describing: result))")
+        settle()
+      }
+    }
   }
 }
 
